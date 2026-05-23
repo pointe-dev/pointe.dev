@@ -1,0 +1,13 @@
+{
+  "name": "pointe-dev",
+  "version": "0.1.0",
+  "description": "AI Product Commercialization & Business Process Automation",
+  "scripts": {
+    "dev": "cargo leptos watch",
+    "build": "cargo leptos build --release",
+    "start": "cargo leptos watch"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.0"
+  }
+}

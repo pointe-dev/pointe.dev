@@ -1,0 +1,49 @@
+# Leptos Configuration File
+#
+# Defines how the html!() macro and the leptos CLI will interact.
+
+[lib]
+name = "frontend"
+
+[build]
+# The site root folder is where cargo-leptos start all relative paths as from
+# `$CARGO_MANIFEST_DIR`/{`src-dir`}.
+# The `$CARGO_MANIFEST_DIR` is the directory where the `Cargo.toml` is.
+# By default the client-side app is built to `target/site` and the server is run
+# from `target/debug`, respectively
+# Notice it has to follow the pattern {pkg-name} + */"
+src-dir = "crates/frontend/src"
+# The html file used to template the view function and apply features like automatic reload
+views-dir = "crates/frontend/src"
+# The output dir for your server binary. Defaults to target/debug
+# target-dir = "target"
+# Tildes and subclasses are resolved relative to this dir and must start with `./`
+css-dir = "crates/frontend/src"
+# All other assets generated the dist-dir
+dist-dir = "./target/site"
+# The IP and port (must be different) where the server serves the content. Use it in your server setup fn
+# Defaults to 127.0.0.1 and 3000
+# site-addr = "127.0.0.1:3000"
+# The port to use for automatic reload monitoring
+reload-port = 3001
+# [Optional] Command to use when running end2end tests. It will run in the end2end dir.
+#   [Windows] for example, this could be "npx.cmd playwright test"
+#   This essentially should run all your end2end tests before building your actual site.
+#   Currently the only supported name is `end2end`.
+# end2end-cmd = "npx playwright test"
+# end2end-dir = "e2e"
+# The browserlist query used for optimizing the CSS.
+browserquery = "defaults"
+# Set by cargo-leptos itself, loads all the settings for the server-side env
+env = "DEV"
+# The features to use when compiling the bin target
+#
+# Optional. Can be used to enable extra features for hydration on the client.
+# E.g. ["derive_default"]
+bin-features = ["hydrate"]
+# If this is true .cargo/bin.env and .cargo/bin/env will be loaded
+load-external-middleware = false
+# Build & Shipped with wasm-bindgen's --keep-debug. Debug information kept in release builds.
+# After the build, files are stripped for smaller filesize.
+keep-debug = false
+lib-features = ["hydrate"]

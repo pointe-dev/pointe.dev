@@ -1,0 +1,22 @@
+[package]
+name = "frontend"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+leptos = { workspace = true }
+leptos_meta = { workspace = true }
+leptos_router = { workspace = true }
+leptos_axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+shared = { path = "../shared" }
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.release]
+opt-level = 3
+lto = true
