@@ -4,6 +4,7 @@ export default {
     "./crates/frontend/src/**/*.rs",
     "./crates/frontend/src/**/*.html",
   ],
+  darkMode: "class",
   theme: {
     extend: {
       colors: {

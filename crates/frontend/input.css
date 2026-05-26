@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Golden Ratio Constants */
+/* Golden Ratio Constants & Light/Dark Theme Variables */
 :root {
   /* φ (phi) = 1.618... */
   --phi: 1.618;
@@ -25,23 +25,145 @@
   --text-lg: calc(16px * var(--phi)); /* ~25.888px */
   --text-xl: calc(16px * var(--phi) * var(--phi)); /* ~41.888px */
   --text-2xl: calc(16px * var(--phi) * var(--phi) * var(--phi)); /* ~67.776px */
+  
+  /* Light mode (default) */
+  --bg-primary: #FFFFFF;
+  --bg-secondary: #F5F5F5;
+  --bg-tertiary: #EEEEEE;
+  --text-primary: #0B0B0B;
+  --text-secondary: #4A4A4A;
+  --text-tertiary: #808080;
+  --border-color: #E0E0E0;
+  --accent-primary: #D32F2F;
+  --accent-secondary: #E50914;
+}
+
+/* Dark mode */
+html.dark {
+  --bg-primary: #0B0B0B;
+  --bg-secondary: #1A1A1A;
+  --bg-tertiary: #2A2A2A;
+  --text-primary: #FFFFFF;
+  --text-secondary: #B0B0B0;
+  --text-tertiary: #808080;
+  --border-color: #333333;
+  --accent-primary: #D32F2F;
+  --accent-secondary: #E50914;
 }
 
 /* Custom pointe.dev styles */
 @layer base {
   body {
-    @apply bg-black text-white scroll-smooth;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    @apply scroll-smooth transition-colors duration-300;
   }
   
   /* Clean text selection with golden ratio spacing */
   ::selection {
-    @apply bg-red-600 text-white;
+    background-color: var(--accent-primary);
+    @apply text-white;
   }
   
   h1, h2, h3, h4, h5, h6 {
     line-height: var(--phi);
     letter-spacing: calc(-0.02em * var(--phi-inv));
+    color: var(--text-primary);
   }
+}
+
+/* Blob animation for hero background - graceful ballet movement */
+@keyframes blob {
+  0% {
+    transform: translate(0, 0) scale(1);
+  }
+  20% {
+    transform: translate(20px, -40px) scale(1.08);
+  }
+  40% {
+    transform: translate(10px, -60px) scale(0.95);
+  }
+  60% {
+    transform: translate(-20px, -35px) scale(1.05);
+  }
+  80% {
+    transform: translate(-15px, -10px) scale(0.98);
+  }
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+}
+
+/* Float animation - gentle upward drift */
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-20px);
+  }
+}
+
+/* Glow pulse - subtle radiance */
+@keyframes pulse-glow {
+  0%, 100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+/* Fade in from bottom */
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Scale in elegantly */
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-blob {
+  animation: blob 9s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 4s ease-in-out infinite;
+}
+
+.animation-delay-2000 {
+  animation-delay: 3s;
+}
+
+.animation-delay-4000 {
+  animation-delay: 6s;
+}
+
+.animate-fade-up {
+  animation: fade-up 1s ease-out forwards;
+}
+
+.animate-scale-in {
+  animation: scale-in 0.8s ease-out forwards;
 }
 
 @layer components {
@@ -110,6 +232,57 @@
   .card-description {
     font-size: var(--text-sm);
     line-height: var(--phi);
+  }
+
+  /* Modal with golden proportions */
+  .modal {
+    border-radius: calc(var(--sp-md) * 0.5);
+  }
+
+  .modal-header {
+    padding: var(--sp-lg);
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .modal-content {
+    padding: var(--sp-lg);
+    gap: var(--sp-md);
+  }
+
+  /* Form inputs with golden proportions */
+  .form-input {
+    padding: var(--sp-md) var(--sp-lg);
+    border-radius: calc(var(--sp-sm) * 0.5);
+    font-size: var(--text-base);
+    line-height: var(--phi);
+  }
+
+  /* Buttons with golden proportions */
+  .btn {
+    padding: var(--sp-md) var(--sp-lg);
+    border-radius: calc(var(--sp-sm) * 0.5);
+    font-size: var(--text-base);
+    transition: all 300ms ease;
+  }
+
+  .btn-primary {
+    background-color: var(--accent-primary);
+    color: white;
+  }
+
+  .btn-primary:hover {
+    background-color: var(--accent-secondary);
+    box-shadow: 0 0 calc(var(--sp-lg) * 1.5) rgba(211, 47, 47, 0.5);
+  }
+
+  /* Section spacing with golden ratio */
+  .section {
+    padding: var(--sp-2xl) var(--sp-lg);
+  }
+
+  .section-title {
+    font-size: var(--text-xl);
+    margin-bottom: var(--sp-2xl);
   }
 }
 

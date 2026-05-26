@@ -5,6 +5,7 @@ mod components;
 mod pages;
 
 use components::layout::Layout;
+use components::theme::ThemeProvider;
 use pages::home::Home;
 
 #[component]
@@ -12,9 +13,11 @@ pub fn App() -> impl IntoView {
     info!("🔄 App component rendering...");
     
     view! {
-        <Layout>
-            <Home />
-        </Layout>
+        <ThemeProvider>
+            <Layout>
+                <Home />
+            </Layout>
+        </ThemeProvider>
     }
 }
 

@@ -4,11 +4,15 @@
   "description": "AI Product Commercialization & Business Process Automation",
   "scripts": {
     "tailwind:build": "tailwindcss -i ./crates/frontend/input.css -o ./crates/frontend/styles.css",
-    "dev": "npm run tailwind:build && cargo build --release && npm run serve",
-    "build": "npm run tailwind:build && cargo build --release",
+    "wasm:build": "wasm-pack build crates/frontend --target web --out-dir pkg --release",
+    "dev": "npm run tailwind:build && npm run wasm:build && cargo build --release && npm run serve",
+    "build": "npm run tailwind:build && npm run wasm:build && cargo build --release",
     "serve": "cd crates/backend && cargo run --release"
   },
   "devDependencies": {
     "tailwindcss": "^3.4.0"
+  },
+  "dependencies": {
+    "wasm-pack": "^0.15.0"
   }
 }
