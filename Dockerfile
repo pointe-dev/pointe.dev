@@ -31,7 +31,7 @@ RUN npm run tailwind:build
 
 # Build the backend binary
 # Output: /app/target/release/backend
-RUN cargo build -p backend --release --locked
+RUN cargo build -p backend --release
 
 # Build the frontend WASM with wasm-pack
 # This creates optimized WASM in crates/frontend/pkg

@@ -1,0 +1,2 @@
+[build]
+# Each crate compiles to its own target
