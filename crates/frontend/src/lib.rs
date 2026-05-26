@@ -26,7 +26,7 @@ pub fn main() {
     
     leptos::mount_to_body(|| {
         info!("📦 Mounting App component...");
-        view! { <App /> }
+        App()
     });
     
     info!("✅ Leptos mounted!");
