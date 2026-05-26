@@ -4,6 +4,7 @@ use axum::{
 };
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
+use tower_http::services::ServeDir;
 use tracing_subscriber;
 
 mod handlers;
@@ -19,11 +20,24 @@ async fn main() {
     // Application state
     let state = Arc::new(AppState::new());
 
+    // Serve static files (frontend WASM, assets, etc.)
+    let serve_dir = ServeDir::new("./frontend")
+        .not_found_service(
+            // Fallback to index.html for SPA routing
+            axum::response::IntoResponse::into_response(
+                axum::http::StatusCode::NOT_FOUND
+            ),
+        );
+
     // Build router
     let app = Router::new()
-        .route("/", get(handlers::health::health_check))
+        // API routes
+        .route("/api/health", get(handlers::health::health_check))
         .route("/api/services", get(handlers::services::get_services))
         .with_state(state)
+        // Serve static frontend assets
+        .nest_service("/pkg", ServeDir::new("./frontend/pkg"))
+        .nest_service("/", ServeDir::new("./frontend"))
         .layer(CorsLayer::permissive());
 
     // Bind to all interfaces (0.0.0.0) so Railway/Docker can access it
@@ -31,7 +45,7 @@ async fn main() {
         .await
         .expect("Failed to bind to port 3001");
 
-    tracing::info!("✨ pointe.dev backend listening on http://0.0.0.0:3001");
+    tracing::info!("✨ pointe.dev backend + frontend listening on http://0.0.0.0:3001");
 
     axum::serve(listener, app)
         .await

@@ -44,7 +44,10 @@ WORKDIR /app
 COPY --from=builder /app/target/release/backend /app/backend
 
 # Copy the frontend WASM from builder stage
-COPY --from=builder /app/crates/frontend/pkg /app/frontend
+COPY --from=builder /app/crates/frontend/pkg /app/frontend/pkg
+
+# Copy the index.html
+COPY --from=builder /app/crates/frontend/index.html /app/frontend/index.html
 
 # Expose the port the backend listens on
 EXPOSE 3001
