@@ -50,7 +50,7 @@ pub fn SliderInput(
                     if p.len() > 15 {
                         p.remove(0);
                     }
-                    set_particles(p);
+                    set_particles.set(p);
                 }
             }
         }
