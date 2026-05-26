@@ -20,7 +20,3 @@ shared = { path = "../shared" }
 [[bin]]
 name = "backend"
 path = "src/main.rs"
-
-[profile.release]
-opt-level = 3
-lto = true
