@@ -30,3 +30,10 @@ pub fn App() -> impl IntoView {
         </Layout>
     }
 }
+
+/// Entry point for WASM — mounts the Leptos app to the DOM
+#[wasm_bindgen::prelude::wasm_bindgen(start)]
+pub fn main() {
+    _ = console_log::init_with_level(log::Level::Debug);
+    leptos::mount_to_body(|| view! { <App /> });
+}

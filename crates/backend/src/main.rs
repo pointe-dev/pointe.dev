@@ -21,7 +21,7 @@ async fn main() {
     let state = Arc::new(AppState::new());
 
     // Serve static files (frontend WASM, assets, etc.)
-    let serve_dir = ServeDir::new("./frontend")
+    let _serve_dir = ServeDir::new("./frontend")
         .not_found_service(
             // Fallback to index.html for SPA routing
             axum::response::IntoResponse::into_response(
