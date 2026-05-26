@@ -1,0 +1,40 @@
+services:
+  # Backend service (Axum server)
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pointe-dev-backend
+    ports:
+      - "3001:3001"  # Map container port 3001 to localhost:3001
+    environment:
+      RUST_LOG: info           # Log level
+      DATABASE_URL: postgresql://postgres:dev@postgres:5432/pointe  # Optional: PostgreSQL connection
+    depends_on:
+      - postgres  # Wait for postgres to start
+    networks:
+      - pointe-network
+    restart: unless-stopped
+
+  # PostgreSQL database (optional, for future use)
+  postgres:
+    image: postgres:15-alpine
+    container_name: pointe-dev-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: dev
+      POSTGRES_DB: pointe
+    ports:
+      - "5432:5432"  # Map container port 5432 to localhost:5432
+    volumes:
+      - postgres_data:/var/lib/postgresql/data  # Persist data between restarts
+    networks:
+      - pointe-network
+    restart: unless-stopped
+
+networks:
+  pointe-network:
+    driver: bridge
+
+volumes:
+  postgres_data:

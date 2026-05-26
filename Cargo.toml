@@ -40,3 +40,22 @@ tracing-subscriber = "0.3"
 opt-level = 3
 lto = true
 codegen-units = 1
+
+[[workspace.metadata.leptos]]
+name = "pointe"
+crate-type = "cdylib"
+package = "frontend"
+lib-package = "frontend"
+lib-dir = "crates/frontend/src"
+bin-package = "backend"
+output-name = "pointe"
+bin-dir = "crates/backend/src"
+
+[workspace.metadata.leptos.build]
+sass-input-file = "crates/frontend/src/style.scss"
+sass-output-file = "target/site/style.css"
+
+[workspace.metadata.leptos.bin]
+name = "pointe"
+end2end-dir = "e2e"
+end2end-cmd = "npx playwright test"

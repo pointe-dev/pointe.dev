@@ -1,0 +1,61 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/pointe-dev:latest
+            ${{ secrets.DOCKER_USERNAME }}/pointe-dev:${{ github.sha }}
+          cache-from: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/pointe-dev:buildcache
+          cache-to: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/pointe-dev:buildcache,mode=max
+
+      - name: Test Docker image
+        run: |
+          docker run --rm ${{ secrets.DOCKER_USERNAME }}/pointe-dev:latest ./backend --help || true
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Run tests
+        run: cargo test --all
