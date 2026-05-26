@@ -1,12 +1,11 @@
 use leptos::*;
-use leptos_router::*;
 use log::info;
 
 mod components;
 mod pages;
 
 use components::layout::Layout;
-use pages::{home::Home, not_found::NotFound};
+use pages::home::Home;
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -14,12 +13,7 @@ pub fn App() -> impl IntoView {
     
     view! {
         <Layout>
-            <Router>
-                <Routes>
-                    <Route path="/" view=Home />
-                    <Route path="/*" view=NotFound />
-                </Routes>
-            </Router>
+            <Home />
         </Layout>
     }
 }
