@@ -7,10 +7,51 @@
   body {
     @apply bg-black text-white scroll-smooth;
   }
+  
+  /* Clean text selection */
+  ::selection {
+    @apply bg-red-600 text-white;
+  }
 }
 
 @layer components {
   .behind-curtain-container {
     @apply w-full;
   }
+  
+  /* Glowing slider handle */
+  .slider-handle {
+    @apply transition-all duration-100;
+    box-shadow: 0 0 20px rgba(211, 47, 47, 0.6), 0 0 40px rgba(211, 47, 47, 0.3);
+  }
+  
+  .slider-handle:hover {
+    box-shadow: 0 0 30px rgba(211, 47, 47, 0.8), 0 0 60px rgba(211, 47, 47, 0.5);
+  }
+  
+  /* Particle effects */
+  .particle {
+    @apply absolute pointer-events-none;
+    animation: float 3s ease-in-out infinite;
+  }
+  
+  @keyframes float {
+    0%, 100% {
+      opacity: 0;
+      transform: translateY(0) translateX(0);
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+  
+  /* Slider track glow */
+  .slider-track {
+    @apply transition-all duration-200;
+  }
+  
+  .slider-track-active {
+    box-shadow: 0 0 15px rgba(211, 47, 47, 0.4), inset 0 0 10px rgba(211, 47, 47, 0.2);
+  }
 }
+
