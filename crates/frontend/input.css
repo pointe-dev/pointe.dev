@@ -2,26 +2,64 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Golden Ratio Constants */
+:root {
+  /* φ (phi) = 1.618... */
+  --phi: 1.618;
+  --phi-inv: 0.618; /* 1/φ */
+  
+  /* Base unit (8px) */
+  --base: 8px;
+  
+  /* Golden ratio spacing */
+  --sp-xs: calc(var(--base) * var(--phi-inv)); /* 5.144px */
+  --sp-sm: var(--base); /* 8px */
+  --sp-md: calc(var(--base) * var(--phi)); /* 12.944px */
+  --sp-lg: calc(var(--sp-md) * var(--phi)); /* 20.944px */
+  --sp-xl: calc(var(--sp-lg) * var(--phi)); /* 33.888px */
+  --sp-2xl: calc(var(--sp-xl) * var(--phi)); /* 54.832px */
+  
+  /* Golden ratio typography */
+  --text-sm: calc(16px * var(--phi-inv)); /* ~9.888px */
+  --text-base: 16px;
+  --text-lg: calc(16px * var(--phi)); /* ~25.888px */
+  --text-xl: calc(16px * var(--phi) * var(--phi)); /* ~41.888px */
+  --text-2xl: calc(16px * var(--phi) * var(--phi) * var(--phi)); /* ~67.776px */
+}
+
 /* Custom pointe.dev styles */
 @layer base {
   body {
     @apply bg-black text-white scroll-smooth;
   }
   
-  /* Clean text selection */
+  /* Clean text selection with golden ratio spacing */
   ::selection {
     @apply bg-red-600 text-white;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    line-height: var(--phi);
+    letter-spacing: calc(-0.02em * var(--phi-inv));
   }
 }
 
 @layer components {
   .behind-curtain-container {
     @apply w-full;
+    padding: var(--sp-2xl) 0;
   }
   
-  /* Glowing slider handle */
+  /* Golden ratio proportions for panels */
+  .panel {
+    aspect-ratio: var(--phi) / 1;
+  }
+  
+  /* Glowing slider handle with golden proportions */
   .slider-handle {
     @apply transition-all duration-100;
+    width: calc(var(--sp-lg) * 1.5);
+    height: calc(var(--sp-lg) * 1.5);
     box-shadow: 0 0 20px rgba(211, 47, 47, 0.6), 0 0 40px rgba(211, 47, 47, 0.3);
   }
   
@@ -32,6 +70,8 @@
   /* Particle effects */
   .particle {
     @apply absolute pointer-events-none;
+    width: calc(var(--sp-xs) * 0.5);
+    height: calc(var(--sp-xs) * 0.5);
     animation: float 3s ease-in-out infinite;
   }
   
@@ -45,13 +85,32 @@
     }
   }
   
-  /* Slider track glow */
+  /* Slider track glow with golden spacing */
   .slider-track {
     @apply transition-all duration-200;
+    height: calc(var(--sp-sm) * 0.5);
+    border-radius: calc(var(--sp-sm) * 0.25);
   }
   
   .slider-track-active {
     box-shadow: 0 0 15px rgba(211, 47, 47, 0.4), inset 0 0 10px rgba(211, 47, 47, 0.2);
   }
+  
+  /* Cards with golden ratio proportions */
+  .card {
+    padding: var(--sp-lg);
+    gap: var(--sp-md);
+  }
+  
+  .card-title {
+    font-size: var(--text-lg);
+    margin-bottom: calc(var(--sp-md) * var(--phi-inv));
+  }
+  
+  .card-description {
+    font-size: var(--text-sm);
+    line-height: var(--phi);
+  }
 }
+
 

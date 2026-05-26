@@ -35,7 +35,7 @@ pub fn BehindCurtain() -> impl IntoView {
                 </p>
             </div>
 
-            <div class="relative w-full h-96 overflow-hidden rounded-lg border border-gray-800">
+            <div class="panel relative w-full overflow-hidden rounded-lg border border-gray-800">
                 <div
                     class="absolute inset-0 transition-opacity duration-200"
                     style:opacity=move || format!("{}", art_visible.get())

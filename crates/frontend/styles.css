@@ -562,7 +562,7 @@ body {
   color: rgb(255 255 255 / var(--tw-text-opacity, 1));
 }
 
-/* Clean text selection */
+/* Clean text selection with golden ratio spacing */
 
 ::-moz-selection {
   --tw-bg-opacity: 1;
@@ -576,6 +576,11 @@ body {
   background-color: rgb(220 38 38 / var(--tw-bg-opacity, 1));
   --tw-text-opacity: 1;
   color: rgb(255 255 255 / var(--tw-text-opacity, 1));
+}
+
+h1, h2, h3, h4, h5, h6 {
+  line-height: var(--phi);
+  letter-spacing: calc(-0.02em * var(--phi-inv));
 }
 
 .container {
@@ -614,14 +619,23 @@ body {
 
 .behind-curtain-container {
   width: 100%;
+  padding: var(--sp-2xl) 0;
 }
 
-/* Glowing slider handle */
+/* Golden ratio proportions for panels */
+
+.panel {
+  aspect-ratio: var(--phi) / 1;
+}
+
+/* Glowing slider handle with golden proportions */
 
 .slider-handle {
   transition-property: all;
   transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
   transition-duration: 100ms;
+  width: calc(var(--sp-lg) * 1.5);
+  height: calc(var(--sp-lg) * 1.5);
   box-shadow: 0 0 20px rgba(211, 47, 47, 0.6), 0 0 40px rgba(211, 47, 47, 0.3);
 }
 
@@ -634,6 +648,8 @@ body {
 .particle {
   pointer-events: none;
   position: absolute;
+  width: calc(var(--sp-xs) * 0.5);
+  height: calc(var(--sp-xs) * 0.5);
   animation: float 3s ease-in-out infinite;
 }
 
@@ -648,16 +664,35 @@ body {
   }
 }
 
-/* Slider track glow */
+/* Slider track glow with golden spacing */
 
 .slider-track {
   transition-property: all;
   transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
   transition-duration: 200ms;
+  height: calc(var(--sp-sm) * 0.5);
+  border-radius: calc(var(--sp-sm) * 0.25);
 }
 
 .slider-track-active {
   box-shadow: 0 0 15px rgba(211, 47, 47, 0.4), inset 0 0 10px rgba(211, 47, 47, 0.2);
+}
+
+/* Cards with golden ratio proportions */
+
+.card {
+  padding: var(--sp-lg);
+  gap: var(--sp-md);
+}
+
+.card-title {
+  font-size: var(--text-lg);
+  margin-bottom: calc(var(--sp-md) * var(--phi-inv));
+}
+
+.card-description {
+  font-size: var(--text-sm);
+  line-height: var(--phi);
 }
 
 .pointer-events-none {
@@ -705,10 +740,6 @@ body {
   margin-bottom: 4rem;
 }
 
-.mb-2 {
-  margin-bottom: 0.5rem;
-}
-
 .mb-4 {
   margin-bottom: 1rem;
 }
@@ -751,10 +782,6 @@ body {
 
 .h-6 {
   height: 1.5rem;
-}
-
-.h-96 {
-  height: 24rem;
 }
 
 .h-full {
@@ -1157,6 +1184,40 @@ body {
   transition-timing-function: cubic-bezier(0, 0, 0.2, 1);
 }
 
+/* Golden Ratio Constants */
+
+:root {
+  /* φ (phi) = 1.618... */
+  --phi: 1.618;
+  --phi-inv: 0.618;
+  /* 1/φ */
+  /* Base unit (8px) */
+  --base: 8px;
+  /* Golden ratio spacing */
+  --sp-xs: calc(var(--base) * var(--phi-inv));
+  /* 5.144px */
+  --sp-sm: var(--base);
+  /* 8px */
+  --sp-md: calc(var(--base) * var(--phi));
+  /* 12.944px */
+  --sp-lg: calc(var(--sp-md) * var(--phi));
+  /* 20.944px */
+  --sp-xl: calc(var(--sp-lg) * var(--phi));
+  /* 33.888px */
+  --sp-2xl: calc(var(--sp-xl) * var(--phi));
+  /* 54.832px */
+  /* Golden ratio typography */
+  --text-sm: calc(16px * var(--phi-inv));
+  /* ~9.888px */
+  --text-base: 16px;
+  --text-lg: calc(16px * var(--phi));
+  /* ~25.888px */
+  --text-xl: calc(16px * var(--phi) * var(--phi));
+  /* ~41.888px */
+  --text-2xl: calc(16px * var(--phi) * var(--phi) * var(--phi));
+  /* ~67.776px */
+}
+
 /* Custom pointe.dev styles */
 
 .hover\:border-red-600:hover {
@@ -1169,4 +1230,5 @@ body {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
+
 
