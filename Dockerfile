@@ -28,13 +28,14 @@ RUN cd crates/frontend && \
     wasm-pack build --target web --release
 
 # Stage 2: Runtime
-# This is a lightweight image that only contains what's needed to run the app
-FROM alpine:3.18 AS runtime
+# Use Debian instead of Alpine for libc compatibility
+FROM debian:bookworm-slim AS runtime
 
-# Install only runtime dependencies (OpenSSL)
-RUN apk add --no-cache \
+# Install only runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 \
-    ca-certificates
+    ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 # Create app directory
 WORKDIR /app
