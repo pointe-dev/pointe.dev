@@ -10,8 +10,37 @@
 <body class="bg-black text-white">
     <div id="app"></div>
     <script type="module">
-        import init from '/pkg/frontend.js';
-        init();
+        console.log("📍 Script starting...");
+        
+        try {
+            console.log("📥 Importing frontend.js...");
+            import('/pkg/frontend.js').then(module => {
+                console.log("✅ Import successful, calling init()...");
+                console.log("Module contents:", module);
+                
+                if (module.default && typeof module.default === 'function') {
+                    console.log("🚀 Calling default export...");
+                    module.default().then(() => {
+                        console.log("✅ Init completed!");
+                    }).catch(err => {
+                        console.error("❌ Init error:", err);
+                    });
+                } else if (module.init && typeof module.init === 'function') {
+                    console.log("🚀 Calling init()...");
+                    module.init().then(() => {
+                        console.log("✅ Init completed!");
+                    }).catch(err => {
+                        console.error("❌ Init error:", err);
+                    });
+                } else {
+                    console.error("❌ No init function found in module!");
+                }
+            }).catch(err => {
+                console.error("❌ Import failed:", err);
+            });
+        } catch (err) {
+            console.error("❌ Script error:", err);
+        }
     </script>
 </body>
 </html>

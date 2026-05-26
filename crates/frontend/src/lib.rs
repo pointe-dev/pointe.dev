@@ -25,5 +25,12 @@ pub fn App() -> impl IntoView {
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
 pub fn main() {
     _ = console_log::init_with_level(log::Level::Debug);
-    leptos::mount_to_body(|| view! { <App /> });
+    console_log::log!("🚀 Leptos WASM initializing...");
+    
+    leptos::mount_to_body(|| {
+        console_log::log!("📦 Mounting App component...");
+        view! { <App /> }
+    });
+    
+    console_log::log!("✅ Leptos mounted!");
 }

@@ -17,17 +17,27 @@ async fn main() {
     // Initialize tracing
     tracing_subscriber::fmt::init();
 
+    // Log current working directory
+    let cwd = std::env::current_dir().expect("Failed to get CWD");
+    tracing::info!("📁 Current working directory: {:?}", cwd);
+
+    // Check if frontend directory exists
+    let frontend_dir = std::path::Path::new("./frontend");
+    if frontend_dir.exists() {
+        tracing::info!("✅ /frontend directory exists");
+        if let Ok(entries) = std::fs::read_dir("./frontend") {
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    tracing::info!("   📄 {:?}", entry.path());
+                }
+            }
+        }
+    } else {
+        tracing::warn!("❌ /frontend directory NOT found!");
+    }
+
     // Application state
     let state = Arc::new(AppState::new());
-
-    // Serve static files (frontend WASM, assets, etc.)
-    let _serve_dir = ServeDir::new("./frontend")
-        .not_found_service(
-            // Fallback to index.html for SPA routing
-            axum::response::IntoResponse::into_response(
-                axum::http::StatusCode::NOT_FOUND
-            ),
-        );
 
     // Build router
     let app = Router::new()
