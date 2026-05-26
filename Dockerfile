@@ -6,7 +6,12 @@ FROM rust:latest AS builder
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js for Tailwind CSS build
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs
 
 # Install wasm32 target and tools for frontend compilation
 RUN rustup target add wasm32-unknown-unknown && \
@@ -17,6 +22,12 @@ WORKDIR /app
 
 # Copy entire project
 COPY . .
+
+# Install Node dependencies
+RUN npm install
+
+# Build Tailwind CSS
+RUN npm run tailwind:build
 
 # Build the backend binary
 # Output: /app/target/release/backend
@@ -45,6 +56,9 @@ COPY --from=builder /app/target/release/backend /app/backend
 
 # Copy the frontend WASM from builder stage
 COPY --from=builder /app/crates/frontend/pkg /app/frontend/pkg
+
+# Copy the compiled CSS
+COPY --from=builder /app/crates/frontend/styles.css /app/frontend/styles.css
 
 # Copy the index.html
 COPY --from=builder /app/crates/frontend/index.html /app/frontend/index.html

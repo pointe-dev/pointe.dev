@@ -3,9 +3,10 @@
   "version": "0.1.0",
   "description": "AI Product Commercialization & Business Process Automation",
   "scripts": {
-    "dev": "cargo leptos watch",
-    "build": "cargo leptos build --release",
-    "start": "cargo leptos watch"
+    "tailwind:build": "tailwindcss -i ./crates/frontend/input.css -o ./crates/frontend/styles.css",
+    "dev": "npm run tailwind:build && cargo build --release && npm run serve",
+    "build": "npm run tailwind:build && cargo build --release",
+    "serve": "cd crates/backend && cargo run --release"
   },
   "devDependencies": {
     "tailwindcss": "^3.4.0"

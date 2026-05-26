@@ -590,13 +590,13 @@ version = "0.1.0"
 dependencies = [
  "console_log",
  "leptos",
- "leptos_meta",
  "leptos_router",
  "log",
  "serde",
  "serde_json",
  "shared",
  "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -1177,7 +1177,6 @@ dependencies = [
  "tracing",
  "typed-builder",
  "typed-builder-macro",
- "wasm-bindgen",
  "web-sys",
 ]
 
@@ -1266,20 +1265,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "leptos_meta"
-version = "0.6.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25acc2f63cf91932013e400a95bf6e35e5d3dbb44a7b7e25a8e3057d12005b3b"
-dependencies = [
- "cfg-if",
- "indexmap",
- "leptos",
- "tracing",
- "wasm-bindgen",
- "web-sys",
-]
-
-[[package]]
 name = "leptos_reactive"
 version = "0.6.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1289,7 +1274,6 @@ dependencies = [
  "cfg-if",
  "futures",
  "indexmap",
- "js-sys",
  "oco_ref",
  "paste",
  "pin-project",
@@ -1301,9 +1285,7 @@ dependencies = [
  "slotmap",
  "thiserror",
  "tracing",
- "wasm-bindgen",
  "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]
