@@ -56,11 +56,19 @@ pub fn SliderInput(
         }
     };
 
-    let handle_mouse_down = move |_| {
+    let handle_mouse_down = move |_: web_sys::MouseEvent| {
         set_is_dragging.set(true);
     };
 
-    let handle_mouse_up = move |_| {
+    let handle_touch_start = move |_: web_sys::TouchEvent| {
+        set_is_dragging.set(true);
+    };
+
+    let handle_mouse_up = move |_: web_sys::MouseEvent| {
+        set_is_dragging.set(false);
+    };
+
+    let handle_touch_end = move |_: web_sys::TouchEvent| {
         set_is_dragging.set(false);
     };
 
@@ -90,9 +98,9 @@ pub fn SliderInput(
                 value=move || position.get().to_string()
                 on:input=handle_input
                 on:mousedown=handle_mouse_down
-                on:touchstart=handle_mouse_down
+                on:touchstart=handle_touch_start
                 on:mouseup=handle_mouse_up
-                on:touchend=handle_mouse_up
+                on:touchend=handle_touch_end
                 class="absolute w-full h-full opacity-0 cursor-col-resize pointer-events-auto z-10"
             />
 
