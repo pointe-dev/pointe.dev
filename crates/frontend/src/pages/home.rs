@@ -3,6 +3,8 @@ use crate::components::behind_curtain::BehindCurtain;
 
 #[component]
 pub fn Home() -> impl IntoView {
+    log::info!("🏠 Home page rendering...");
+    
     view! {
         <div class="bg-black text-white">
             {/* Hero + Behind the Curtain */}

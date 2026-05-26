@@ -2,6 +2,8 @@ use leptos::*;
 
 #[component]
 pub fn Layout(children: Children) -> impl IntoView {
+    log::info!("🎨 Layout rendering...");
+    
     view! {
         <div class="min-h-screen bg-black text-white">
             <nav class="bg-black border-b border-gray-900">

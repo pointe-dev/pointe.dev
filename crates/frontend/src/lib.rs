@@ -10,6 +10,8 @@ use pages::{home::Home, not_found::NotFound};
 
 #[component]
 pub fn App() -> impl IntoView {
+    info!("🔄 App component rendering...");
+    
     view! {
         <Layout>
             <Router>
