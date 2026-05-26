@@ -26,12 +26,12 @@ async fn main() {
         .with_state(state)
         .layer(CorsLayer::permissive());
 
-    // Bind to localhost:3001
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3001")
+    // Bind to all interfaces (0.0.0.0) so Railway/Docker can access it
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3001")
         .await
         .expect("Failed to bind to port 3001");
 
-    tracing::info!("✨ pointe.dev backend listening on http://127.0.0.1:3001");
+    tracing::info!("✨ pointe.dev backend listening on http://0.0.0.0:3001");
 
     axum::serve(listener, app)
         .await
