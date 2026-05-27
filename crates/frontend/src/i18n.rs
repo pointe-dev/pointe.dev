@@ -11,7 +11,7 @@ pub fn t(lang: Lang, key: &str) -> &'static str {
         (Fr,"nav.talk")=>"Discutons", (En,"nav.talk")=>"Let's Talk", (De,"nav.talk")=>"Kontakt",
         // Hero
         (Fr,"hero.badge")=>"Agence IA", (En,"hero.badge")=>"AI Agency", (De,"hero.badge")=>"KI-Agentur",
-        (Fr,"hero.line1")=>"Automatisation précise.", (En,"hero.line1")=>"Sharp automation.", (De,"hero.line1")=>"Präzise Automatisierung.",
+        (Fr,"hero.line1")=>"Automatisation pointue.", (En,"hero.line1")=>"Sharp automation.", (De,"hero.line1")=>"Präzise Automatisierung.",
         (Fr,"hero.sub")=>"Des agents autonomes qui pilotent vos processus — pour que vous dirigiez, sans gérer.",
         (En,"hero.sub")=>"Autonomous agents that run your business processes — so you lead, not manage.",
         (De,"hero.sub")=>"Autonome Agenten, die Ihre Prozesse steuern — damit Sie führen, nicht verwalten.",
