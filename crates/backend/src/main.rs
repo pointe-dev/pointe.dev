@@ -79,7 +79,7 @@ async fn handle_ai_chat(
     Json(payload): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, StatusCode> {
     let body = OpenRouterRequest {
-        model: "meta-llama/llama-3.1-8b-instruct:free",
+        model: "meta-llama/llama-3.3-70b-instruct:free",
         max_tokens: 1024,
         messages: vec![
             OpenRouterMessage { role: "system", content: SYSTEM_PROMPT },
