@@ -284,10 +284,10 @@ pub fn Chat() -> impl IntoView {
                 </div>
 
                 {/* Mermaid canvas — desktop only */}
-                <div class="hidden lg:flex flex-col w-80 xl:w-96 border-l border-gray-100 dark:border-gray-900 bg-gray-50/50 dark:bg-black shrink-0">
+                <div class="hidden lg:flex flex-col w-96 xl:w-[420px] border-l border-gray-100 dark:border-gray-900 bg-gray-50/30 dark:bg-gray-950/30 shrink-0">
 
                     {/* Canvas header */}
-                    <div class="px-5 py-4 border-b border-gray-100 dark:border-gray-900 flex items-center justify-between">
+                    <div class="px-5 py-4 border-b border-gray-100 dark:border-gray-900 flex items-center justify-between shrink-0">
                         <p class="text-xs text-gray-400 uppercase tracking-widest">"Votre workflow"</p>
                         {move || current_diagram.get().map(|_| view! {
                             <span class="flex items-center gap-1.5">
@@ -298,7 +298,7 @@ pub fn Chat() -> impl IntoView {
                     </div>
 
                     {/* Canvas body */}
-                    <div class="flex-1 overflow-auto p-5 relative">
+                    <div class="flex-1 overflow-y-auto p-6 relative">
 
                         {/* Mermaid SVG container — always in DOM so JS can inject */}
                         <div

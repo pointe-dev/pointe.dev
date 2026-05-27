@@ -15,26 +15,42 @@
         h1, h2, h3, h4, h5, h6 { font-weight: 500; }
         strong, .font-bold { font-weight: 700; }
         /* Mermaid SVG responsive */
-        #mermaid-canvas svg { width: 100% !important; height: auto !important; max-width: 100%; }
+        #mermaid-canvas svg {
+            width: 100% !important;
+            height: auto !important;
+            max-width: 100%;
+            display: block;
+        }
+        #mermaid-canvas .node rect,
+        #mermaid-canvas .node circle,
+        #mermaid-canvas .node polygon {
+            rx: 8px;
+            ry: 8px;
+        }
     </style>
     <!-- Mermaid for workflow diagrams -->
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
     <script>
+        const isDark = document.documentElement.classList.contains('dark') ||
+            window.matchMedia('(prefers-color-scheme: dark)').matches;
+
         mermaid.initialize({
             startOnLoad: false,
             theme: 'base',
             themeVariables: {
-                primaryColor: '#ffffff',
-                primaryBorderColor: '#e5e7eb',
-                primaryTextColor: '#111827',
+                primaryColor: isDark ? '#1a1a1a' : '#ffffff',
+                primaryBorderColor: isDark ? '#374151' : '#e5e7eb',
+                primaryTextColor: isDark ? '#f3f4f6' : '#111827',
                 lineColor: '#dc2626',
-                secondaryColor: '#fff1f2',
-                tertiaryColor: '#f9fafb',
-                edgeLabelBackground: '#ffffff',
+                secondaryColor: isDark ? '#1f1f1f' : '#fff1f2',
+                tertiaryColor: isDark ? '#111111' : '#f9fafb',
+                edgeLabelBackground: isDark ? '#1a1a1a' : '#ffffff',
                 fontFamily: "'Ubuntu', sans-serif",
-                fontSize: '12px'
+                fontSize: '13px',
+                nodeSpacing: 40,
+                rankSpacing: 50,
             },
-            flowchart: { curve: 'basis', padding: 16 },
+            flowchart: { curve: 'monotoneY', padding: 20, useMaxWidth: true },
             securityLevel: 'loose'
         });
 
