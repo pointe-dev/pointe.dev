@@ -38,6 +38,15 @@ fn parse_mermaid(content: &str) -> (String, Option<String>) {
     (content.to_string(), None)
 }
 
+fn render_markdown(input: &str) -> String {
+    use pulldown_cmark::{html::push_html, Options, Parser};
+    let opts = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES;
+    let parser = Parser::new_ext(input, opts);
+    let mut out = String::new();
+    push_html(&mut out, parser);
+    out
+}
+
 fn copy_text(text: &str) {
     let _ = js_sys::Function::new_with_args(
         "t",
@@ -162,12 +171,13 @@ pub fn Chat() -> impl IntoView {
                                     } else {
                                         (
                                             "flex justify-start flex-col items-start gap-1",
-                                            "max-w-[80%] px-5 py-3 bg-gray-50 dark:bg-gray-950 text-gray-800 dark:text-gray-200 border border-gray-100 dark:border-gray-900 rounded-2xl rounded-tl-sm text-sm leading-relaxed",
+                                            "chat-md max-w-[80%] px-5 py-3 bg-gray-50 dark:bg-gray-950 text-gray-800 dark:text-gray-200 border border-gray-100 dark:border-gray-900 rounded-2xl rounded-tl-sm text-sm leading-relaxed",
                                         )
                                     };
+                                    let html = if is_user { None } else { Some(render_markdown(&content)) };
                                     view! {
                                         <div class=outer>
-                                            <div class=inner>{content}</div>
+                                            <div class=inner inner_html=html.unwrap_or(content)></div>
                                             {(!is_user).then(|| {
                                                 let text = content_for_copy.clone();
                                                 view! {

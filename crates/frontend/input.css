@@ -512,4 +512,25 @@ html.dark {
   }
 }
 
+/* Markdown rendering inside AI chat bubbles */
+.chat-md p          { margin-bottom: 0.5rem; }
+.chat-md p:last-child { margin-bottom: 0; }
+.chat-md strong, .chat-md b { font-weight: 600; }
+.chat-md em, .chat-md i     { font-style: italic; }
+.chat-md ul  { list-style: disc;    padding-left: 1.25rem; margin: 0.4rem 0; }
+.chat-md ol  { list-style: decimal; padding-left: 1.25rem; margin: 0.4rem 0; }
+.chat-md li  { margin-bottom: 0.2rem; }
+.chat-md code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.8em;
+  background: rgba(0,0,0,0.06);
+  border-radius: 3px;
+  padding: 0.1em 0.3em;
+}
+.dark .chat-md code { background: rgba(255,255,255,0.08); }
+.chat-md h1,.chat-md h2,.chat-md h3 { font-weight: 600; margin: 0.6rem 0 0.3rem; }
+.chat-md h1 { font-size: 1.1em; }
+.chat-md h2 { font-size: 1.05em; }
+.chat-md h3 { font-size: 1em; }
+
 
