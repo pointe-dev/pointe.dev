@@ -63,9 +63,11 @@ pub fn Chat() -> impl IntoView {
     let lang = use_context::<RwSignal<Lang>>()
         .unwrap_or_else(|| create_rw_signal(Lang::Fr));
 
-    let welcome_msg = move || t(lang.get(), "chat.welcome").to_string();
+    let welcome_raw = t(lang.get_untracked(), "chat.welcome").to_string();
+    let welcome_html = render_markdown(&welcome_raw);
 
-    let messages = create_rw_signal::<Vec<(bool, String)>>(vec![(false, welcome_msg())]);
+    // (is_user, raw_text_for_copy, pre-rendered_html)
+    let messages = create_rw_signal::<Vec<(bool, String, String)>>(vec![(false, welcome_raw, welcome_html)]);
     let input_text    = create_rw_signal(String::new());
     let is_loading    = create_rw_signal(false);
     let copied_idx: RwSignal<Option<usize>> = create_rw_signal(None);
@@ -96,16 +98,20 @@ pub fn Chat() -> impl IntoView {
     let send = move || {
         let msg = input_text.get_untracked().trim().to_string();
         if msg.is_empty() || is_loading.get_untracked() { return; }
-        input_text.set(String::new());
-        messages.update(|v| v.push((true, msg.clone())));
-        is_loading.set(true);
 
         let err_msg     = t(lang.get_untracked(), "chat.error").to_string();
         let offline_msg = t(lang.get_untracked(), "chat.offline").to_string();
 
+        let msg_for_api = msg.clone();
+        batch(move || {
+            input_text.set(String::new());
+            messages.update(|v| v.push((true, msg.clone(), msg.clone())));
+            is_loading.set(true);
+        });
+
         spawn_local(async move {
             let result = Request::post("/api/ai/chat")
-                .json(&ChatRequest { description: msg })
+                .json(&ChatRequest { description: msg_for_api })
                 .unwrap()
                 .send()
                 .await;
@@ -114,16 +120,29 @@ pub fn Chat() -> impl IntoView {
                 Ok(resp) => match resp.json::<ChatResponse>().await {
                     Ok(data) => {
                         let (text, diagram) = parse_mermaid(&data.response);
-                        messages.update(|v| v.push((false, text)));
-                        if let Some(d) = diagram {
-                            current_diagram.set(Some(d));
-                        }
+                        let html = render_markdown(&text);
+                        batch(move || {
+                            messages.update(|v| v.push((false, text, html)));
+                            if let Some(d) = diagram { current_diagram.set(Some(d)); }
+                            is_loading.set(false);
+                        });
                     }
-                    Err(_) => messages.update(|v| v.push((false, err_msg))),
+                    Err(_) => {
+                        let html = render_markdown(&err_msg);
+                        batch(move || {
+                            messages.update(|v| v.push((false, err_msg, html)));
+                            is_loading.set(false);
+                        });
+                    }
                 },
-                Err(_) => messages.update(|v| v.push((false, offline_msg))),
+                Err(_) => {
+                    let html = render_markdown(&offline_msg);
+                    batch(move || {
+                        messages.update(|v| v.push((false, offline_msg, html)));
+                        is_loading.set(false);
+                    });
+                }
             }
-            is_loading.set(false);
         });
     };
 
@@ -161,8 +180,7 @@ pub fn Chat() -> impl IntoView {
                     <div class="flex-1 overflow-y-auto px-6 py-6">
                         <div class="max-w-2xl mx-auto space-y-5">
                             {move || {
-                                messages.get().into_iter().enumerate().map(|(i, (is_user, content))| {
-                                    let content_for_copy = content.clone();
+                                messages.get().into_iter().enumerate().map(|(i, (is_user, raw, html))| {
                                     let (outer, inner) = if is_user {
                                         (
                                             "flex justify-end flex-col items-end gap-1",
@@ -174,12 +192,11 @@ pub fn Chat() -> impl IntoView {
                                             "chat-md max-w-[80%] px-5 py-3 bg-gray-50 dark:bg-gray-950 text-gray-800 dark:text-gray-200 border border-gray-100 dark:border-gray-900 rounded-2xl rounded-tl-sm text-sm leading-relaxed",
                                         )
                                     };
-                                    let html = if is_user { None } else { Some(render_markdown(&content)) };
                                     view! {
                                         <div class=outer>
-                                            <div class=inner inner_html=html.unwrap_or(content)></div>
+                                            <div class=inner inner_html=html></div>
                                             {(!is_user).then(|| {
-                                                let text = content_for_copy.clone();
+                                                let text = raw.clone();
                                                 view! {
                                                     <button
                                                         on:click=move |_| {
