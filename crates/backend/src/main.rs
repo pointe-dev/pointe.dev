@@ -79,7 +79,7 @@ async fn handle_ai_chat(
     Json(payload): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, StatusCode> {
     let body = OpenRouterRequest {
-        model: "meta-llama/llama-3.3-70b-instruct:free",
+        model: "openrouter/free",
         max_tokens: 1024,
         messages: vec![
             OpenRouterMessage { role: "system", content: SYSTEM_PROMPT },
@@ -112,13 +112,7 @@ async fn handle_ai_chat(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let text = or_resp
-        .choices
-        .into_iter()
-        .next()
-        .map(|c| c.message.content)
-        .unwrap_or_default();
-
+    let text = or_resp.choices.into_iter().next().map(|c| c.message.content).unwrap_or_default();
     Ok(Json(ChatResponse { response: text }))
 }
 
