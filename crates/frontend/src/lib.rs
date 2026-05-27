@@ -3,6 +3,7 @@ use log::info;
 
 mod components;
 mod pages;
+pub mod i18n;
 
 use components::layout::Layout;
 use components::theme::ThemeProvider;

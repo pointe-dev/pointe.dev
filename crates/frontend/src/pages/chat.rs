@@ -2,6 +2,7 @@ use leptos::*;
 use serde::{Deserialize, Serialize};
 use leptos::spawn_local;
 use gloo_net::http::Request;
+use crate::i18n::{Lang, t};
 
 #[derive(Serialize)]
 struct ChatRequest {
@@ -15,9 +16,14 @@ struct ChatResponse {
 
 #[component]
 pub fn Chat() -> impl IntoView {
+    let lang = use_context::<RwSignal<Lang>>()
+        .unwrap_or_else(|| create_rw_signal(Lang::Fr));
+
+    let welcome_msg = move || t(lang.get(), "chat.welcome").to_string();
+
     let messages = create_rw_signal::<Vec<(bool, String)>>(vec![(
         false,
-        "Bienvenue. Décrivez votre activité ou le processus que vous souhaitez transformer — je vous aide à identifier où l'automatisation crée le plus de valeur.".to_string(),
+        welcome_msg(),
     )]);
     let input_text = create_rw_signal(String::new());
     let is_loading = create_rw_signal(false);
@@ -42,6 +48,9 @@ pub fn Chat() -> impl IntoView {
         messages.update(|v| v.push((true, msg.clone())));
         is_loading.set(true);
 
+        let err_msg = t(lang.get_untracked(), "chat.error").to_string();
+        let offline_msg = t(lang.get_untracked(), "chat.offline").to_string();
+
         spawn_local(async move {
             let result = Request::post("/api/ai/chat")
                 .json(&ChatRequest { description: msg })
@@ -52,13 +61,9 @@ pub fn Chat() -> impl IntoView {
             match result {
                 Ok(resp) => match resp.json::<ChatResponse>().await {
                     Ok(data) => messages.update(|v| v.push((false, data.response))),
-                    Err(_) => messages.update(|v| {
-                        v.push((false, "Une erreur est survenue. Réessayez.".to_string()))
-                    }),
+                    Err(_) => messages.update(|v| v.push((false, err_msg))),
                 },
-                Err(_) => messages.update(|v| {
-                    v.push((false, "Impossible de contacter le serveur.".to_string()))
-                }),
+                Err(_) => messages.update(|v| v.push((false, offline_msg))),
             }
             is_loading.set(false);
         });
@@ -77,9 +82,11 @@ pub fn Chat() -> impl IntoView {
 
             <div class="border-b border-gray-100 dark:border-gray-900 px-6 py-8 max-w-3xl mx-auto w-full">
                 <p class="text-xs text-gray-400 dark:text-gray-600 uppercase tracking-widest mb-2">"pointe.dev"</p>
-                <h2 class="text-2xl font-bold text-gray-900 dark:text-white">"Parlons de vos besoins."</h2>
+                <h2 class="text-2xl font-bold text-gray-900 dark:text-white">
+                    {move || t(lang.get(), "chat.title")}
+                </h2>
                 <p class="text-sm text-gray-400 dark:text-gray-500 mt-1 font-light">
-                    "Décrivez votre flux de travail — nous identifions comment l'automatisation s'y intègre."
+                    {move || t(lang.get(), "chat.sub")}
                 </p>
             </div>
 
@@ -126,7 +133,7 @@ pub fn Chat() -> impl IntoView {
                 <div class="max-w-3xl mx-auto flex gap-3 items-end">
                     <textarea
                         class="flex-1 resize-none bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-600 focus:outline-none focus:border-red-600 dark:focus:border-red-600 transition-colors leading-relaxed"
-                        placeholder="Décrivez votre contexte ou votre défi…"
+                        placeholder=move || t(lang.get(), "chat.placeholder")
                         rows="2"
                         prop:value=move || input_text.get()
                         on:input=move |ev| input_text.set(event_target_value(&ev))
@@ -137,7 +144,7 @@ pub fn Chat() -> impl IntoView {
                         class="px-5 py-3 bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors text-sm font-semibold shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
                         disabled=move || is_loading.get()
                     >
-                        "Envoyer →"
+                        {move || t(lang.get(), "chat.send")}
                     </button>
                 </div>
             </div>

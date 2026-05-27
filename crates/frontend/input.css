@@ -72,7 +72,53 @@ html.dark {
   }
 }
 
-/* En pointe — élévation sur la pointe, suspension, descente douce */
+/* En pointe — élévation fluide, sans suspension, grace continue */
+@keyframes pointe-rise {
+  0% {
+    transform: translate(0, 0) scaleX(1) scaleY(1) rotate(0deg);
+    animation-timing-function: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  }
+  30% {
+    transform: translate(var(--da, 8px), var(--lift-y, -60px)) scaleX(0.82) scaleY(1.18) rotate(var(--rt, 0.5deg));
+    animation-timing-function: cubic-bezier(0.55, 0.055, 0.675, 0.19);
+  }
+  55% {
+    transform: translate(var(--db, -4px), calc(var(--lift-y, -60px) * 0.65)) scaleX(0.90) scaleY(1.10) rotate(calc(var(--rt, 0.5deg) * -0.4));
+    animation-timing-function: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  }
+  78% {
+    transform: translate(var(--dc, 12px), var(--lift-y, -60px)) scaleX(0.80) scaleY(1.20) rotate(var(--rt, 0.5deg));
+    animation-timing-function: cubic-bezier(0.215, 0.61, 0.355, 1);
+  }
+  100% {
+    transform: translate(0, 0) scaleX(1) scaleY(1) rotate(0deg);
+  }
+}
+
+/* Arabesque — balayage latéral, extension horizontale */
+@keyframes arabesque {
+  0% {
+    transform: translate(0, 0) scaleX(1) scaleY(1) skewX(0deg);
+    animation-timing-function: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  }
+  22% {
+    transform: translate(var(--da, 22px), -18px) scaleX(0.72) scaleY(1.12) skewX(2deg);
+    animation-timing-function: cubic-bezier(0.55, 0.055, 0.675, 0.19);
+  }
+  48% {
+    transform: translate(var(--db, -14px), -38px) scaleX(1.08) scaleY(0.90) skewX(-1.5deg);
+    animation-timing-function: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  }
+  72% {
+    transform: translate(var(--dc, 10px), -14px) scaleX(0.86) scaleY(1.08) skewX(1.2deg);
+    animation-timing-function: cubic-bezier(0.215, 0.61, 0.355, 1);
+  }
+  100% {
+    transform: translate(0, 0) scaleX(1) scaleY(1) skewX(0deg);
+  }
+}
+
+/* Alias kept for any remaining usages */
 @keyframes pointe {
   0% {
     animation-timing-function: cubic-bezier(0.33, 1, 0.68, 1);
@@ -88,6 +134,18 @@ html.dark {
   }
   100% {
     transform: translate(0, 0) scaleX(1) scaleY(1);
+  }
+}
+
+/* Page transition — glisse depuis le bas, léger */
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
@@ -191,6 +249,18 @@ html.dark {
 
 .animate-pointe {
   animation: pointe 11s ease-in-out infinite;
+}
+
+.animate-pointe-rise {
+  animation: pointe-rise 10s ease-in-out infinite;
+}
+
+.animate-arabesque {
+  animation: arabesque 11s ease-in-out infinite;
+}
+
+.page-transition {
+  animation: page-enter 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .animate-float {
