@@ -129,28 +129,28 @@ pub fn Chat() -> impl IntoView {
     view! {
         <div class="flex flex-col bg-white dark:bg-black" style="min-height: calc(100vh - 65px);">
 
-            {/* Header */}
-            <div class="border-b border-gray-100 dark:border-gray-900 px-6 py-6 max-w-none">
-                <div class="max-w-3xl lg:ml-0 lg:max-w-none px-0">
-                    <p class="text-xs text-gray-400 dark:text-gray-600 uppercase tracking-widest mb-2">"pointe.dev"</p>
-                    <h2 class="text-2xl font-bold text-gray-900 dark:text-white">
-                        {move || t(lang.get(), "chat.title")}
-                    </h2>
-                    <p class="text-sm text-gray-400 dark:text-gray-500 mt-1 font-light">
-                        {move || t(lang.get(), "chat.sub")}
-                    </p>
-                </div>
-            </div>
-
             {/* Main: chat + canvas */}
             <div class="flex flex-1 overflow-hidden">
 
                 {/* Chat column */}
                 <div class="flex flex-col flex-1 min-w-0 overflow-hidden">
 
+                    {/* Header */}
+                    <div class="border-b border-gray-100 dark:border-gray-900 px-6 py-6 shrink-0">
+                        <div class="max-w-2xl mx-auto">
+                            <p class="text-xs text-gray-400 dark:text-gray-600 uppercase tracking-widest mb-2">"pointe.dev"</p>
+                            <h2 class="text-2xl font-bold text-gray-900 dark:text-white">
+                                {move || t(lang.get(), "chat.title")}
+                            </h2>
+                            <p class="text-sm text-gray-400 dark:text-gray-500 mt-1 font-light">
+                                {move || t(lang.get(), "chat.sub")}
+                            </p>
+                        </div>
+                    </div>
+
                     {/* Messages */}
                     <div class="flex-1 overflow-y-auto px-6 py-6">
-                        <div class="max-w-2xl space-y-5">
+                        <div class="max-w-2xl mx-auto space-y-5">
                             {move || {
                                 messages.get().into_iter().enumerate().map(|(i, (is_user, content))| {
                                     let content_for_copy = content.clone();
@@ -177,19 +177,16 @@ pub fn Chat() -> impl IntoView {
                                                             copied_idx.set(Some(i));
                                                             let ci = copied_idx;
                                                             let cb = Closure::once(move || ci.set(None));
-                                                            let _ = web_sys::window().unwrap()
-                                                                .set_timeout_with_callback_and_timeout_and_arguments_0(
+                                                            if let Some(w) = web_sys::window() {
+                                                                let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
                                                                     cb.as_ref().unchecked_ref(), 2000
                                                                 );
+                                                            }
                                                             cb.forget();
                                                         }
-                                                        class="text-xs text-gray-300 hover:text-red-500 transition-colors pl-1"
+                                                        class="text-base leading-none text-gray-300 hover:text-red-500 transition-colors pl-1"
                                                     >
-                                                        {move || if copied_idx.get() == Some(i) {
-                                                            t(lang.get(), "modal.copied")
-                                                        } else {
-                                                            t(lang.get(), "modal.copy")
-                                                        }}
+                                                        {move || if copied_idx.get() == Some(i) { "✓" } else { "📋" }}
                                                     </button>
                                                 }
                                             })}
@@ -215,7 +212,8 @@ pub fn Chat() -> impl IntoView {
                     </div>
 
                     {/* Continue on messaging apps */}
-                    <div class="px-6 py-2 flex items-center gap-3 border-t border-gray-50 dark:border-gray-900/50">
+                    <div class="px-6 py-2 border-t border-gray-50 dark:border-gray-900/50">
+                        <div class="max-w-2xl mx-auto flex items-center gap-3">
                         <span class="text-xs text-gray-300 dark:text-gray-700">"Continuer sur"</span>
                         <a
                             href="https://wa.me/33600000000"
@@ -233,11 +231,12 @@ pub fn Chat() -> impl IntoView {
                         >
                             "Telegram"
                         </a>
+                        </div>
                     </div>
 
                     {/* Input */}
                     <div class="border-t border-gray-100 dark:border-gray-900 px-6 py-4">
-                        <div class="max-w-2xl flex gap-3 items-center">
+                        <div class="max-w-2xl mx-auto flex gap-3 items-center">
                             <textarea
                                 class="flex-1 resize-none bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-600 focus:outline-none focus:border-red-600 dark:focus:border-red-600 transition-colors leading-relaxed"
                                 placeholder=move || t(lang.get(), "chat.placeholder")

@@ -25,13 +25,10 @@ pub fn BehindCurtain() -> impl IntoView {
         let Some(el) = node_ref.get() else { return; };
         let rect = el.get_bounding_client_rect();
 
-        let vh = js_sys::Reflect::get(
-            web_sys::window().unwrap().as_ref(),
-            &wasm_bindgen::JsValue::from_str("innerHeight"),
-        )
-        .ok()
-        .and_then(|v| v.as_f64())
-        .unwrap_or(800.0) as f32;
+        let vh = web_sys::window()
+            .and_then(|w| w.inner_height().ok())
+            .and_then(|v| v.as_f64())
+            .unwrap_or(800.0) as f32;
 
         let top = rect.top() as f32;
         let bottom = rect.bottom() as f32;
