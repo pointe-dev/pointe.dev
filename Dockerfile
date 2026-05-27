@@ -54,14 +54,10 @@ WORKDIR /app
 # Copy the compiled binary from builder stage
 COPY --from=builder /app/target/release/backend /app/backend
 
-# Copy the frontend WASM from builder stage
-COPY --from=builder /app/crates/frontend/pkg /app/frontend/pkg
-
-# Copy the compiled CSS
-COPY --from=builder /app/crates/frontend/styles.css /app/frontend/styles.css
-
-# Copy the index.html
-COPY --from=builder /app/crates/frontend/index.html /app/frontend/index.html
+# Copy the frontend assets — must match the paths served in main.rs
+COPY --from=builder /app/crates/frontend/pkg /app/crates/frontend/pkg
+COPY --from=builder /app/crates/frontend/styles.css /app/crates/frontend/styles.css
+COPY --from=builder /app/crates/frontend/index.html /app/crates/frontend/index.html
 
 # Expose the port the backend listens on
 EXPOSE 3001
