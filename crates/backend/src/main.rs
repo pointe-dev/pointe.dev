@@ -107,8 +107,14 @@ async fn handle_ai_chat(
         return Err(StatusCode::BAD_GATEWAY);
     }
 
-    let or_resp: OpenRouterResponse = resp.json().await.map_err(|e| {
-        tracing::error!("OpenRouter parse error: {e}");
+    let raw = resp.text().await.map_err(|e| {
+        tracing::error!("OpenRouter read error: {e}");
+        StatusCode::BAD_GATEWAY
+    })?;
+    tracing::debug!("OpenRouter raw response: {raw}");
+
+    let or_resp: OpenRouterResponse = serde_json::from_str(&raw).map_err(|e| {
+        tracing::error!("OpenRouter parse error: {e} — body: {raw}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
