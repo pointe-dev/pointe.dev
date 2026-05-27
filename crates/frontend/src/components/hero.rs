@@ -1,7 +1,7 @@
 use leptos::*;
 
 #[component]
-pub fn Hero(on_contact_click: impl Fn() + 'static) -> impl IntoView {
+pub fn Hero(on_chat_click: impl Fn() + 'static) -> impl IntoView {
     view! {
         <section class="min-h-screen relative flex flex-col justify-center items-center text-center py-20 px-6 overflow-hidden bg-white dark:bg-black">
 
@@ -57,7 +57,7 @@ pub fn Hero(on_contact_click: impl Fn() + 'static) -> impl IntoView {
                 {/* CTAs */}
                 <div class="flex flex-col gap-4 justify-center items-center animate-fade-up stagger-3">
                     <button
-                        on:click=move |_| (on_contact_click)()
+                        on:click=move |_| (on_chat_click)()
                         class="px-10 py-4 bg-red-600 text-white rounded-lg font-semibold text-lg hover:bg-red-700 transition-all duration-200 hover:shadow-red-glow hover:-translate-y-0.5 w-full max-w-xs"
                     >
                         "Start your automation →"

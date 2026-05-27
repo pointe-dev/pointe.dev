@@ -58,14 +58,13 @@ pub fn Layout() -> impl IntoView {
                         >
                             "Chat"
                         </button>
-                        {move || (active_page.get() == Page::Home).then(|| view! {
-                            <a
-                                href="#gallery"
-                                class="text-sm font-medium text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
-                            >
-                                "Solutions"
-                            </a>
-                        })}
+                        <a
+                            href="#gallery"
+                            on:click=move |_| active_page.set(Page::Home)
+                            class="text-sm font-medium text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
+                        >
+                            "Solutions"
+                        </a>
                         <button
                             on:click=on_contact
                             class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm font-medium"
@@ -79,7 +78,7 @@ pub fn Layout() -> impl IntoView {
 
             <main class="flex-1">
                 {move || match active_page.get() {
-                    Page::Home => view! { <Home /> }.into_view(),
+                    Page::Home => view! { <Home on_chat_click=move || active_page.set(Page::Chat) /> }.into_view(),
                     Page::Chat => view! { <Chat /> }.into_view(),
                 }}
             </main>
