@@ -16,6 +16,28 @@ struct ChatResponse {
     response: String,
 }
 
+// Split off ```mermaid ... ``` blocks from AI response text
+fn parse_mermaid(content: &str) -> (String, Option<String>) {
+    const OPEN: &str = "```mermaid\n";
+    const CLOSE: &str = "\n```";
+    if let Some(s) = content.find(OPEN) {
+        let after = &content[s + OPEN.len()..];
+        if let Some(e) = after.find(CLOSE) {
+            let diagram = after[..e].trim().to_string();
+            let before  = content[..s].trim();
+            let rest    = after[e + CLOSE.len()..].trim();
+            let text = match (before.is_empty(), rest.is_empty()) {
+                (true,  true)  => String::new(),
+                (false, true)  => before.to_string(),
+                (true,  false) => rest.to_string(),
+                (false, false) => format!("{}\n\n{}", before, rest),
+            };
+            return (text, Some(diagram));
+        }
+    }
+    (content.to_string(), None)
+}
+
 fn copy_text(text: &str) {
     let _ = js_sys::Function::new_with_args(
         "t",
@@ -34,18 +56,17 @@ pub fn Chat() -> impl IntoView {
 
     let welcome_msg = move || t(lang.get(), "chat.welcome").to_string();
 
-    let messages = create_rw_signal::<Vec<(bool, String)>>(vec![(
-        false,
-        welcome_msg(),
-    )]);
-    let input_text = create_rw_signal(String::new());
-    let is_loading = create_rw_signal(false);
+    let messages = create_rw_signal::<Vec<(bool, String)>>(vec![(false, welcome_msg())]);
+    let input_text    = create_rw_signal(String::new());
+    let is_loading    = create_rw_signal(false);
     let copied_idx: RwSignal<Option<usize>> = create_rw_signal(None);
+    let current_diagram: RwSignal<Option<String>> = create_rw_signal(None);
 
+    // Auto-scroll to end on new message
     create_effect(move |_| {
         let _ = messages.get();
-        if let Some(window) = web_sys::window() {
-            if let Some(doc) = window.document() {
+        if let Some(w) = web_sys::window() {
+            if let Some(doc) = w.document() {
                 if let Some(el) = doc.get_element_by_id("chat-end") {
                     el.scroll_into_view();
                 }
@@ -53,16 +74,24 @@ pub fn Chat() -> impl IntoView {
         }
     });
 
+    // Render mermaid diagram when it changes
+    create_effect(move |_| {
+        if let Some(ref code) = current_diagram.get() {
+            let _ = js_sys::Function::new_with_args(
+                "code",
+                "renderMermaidTo(code, 'mermaid-canvas')"
+            ).call1(&wasm_bindgen::JsValue::NULL, &wasm_bindgen::JsValue::from_str(code));
+        }
+    });
+
     let send = move || {
         let msg = input_text.get_untracked().trim().to_string();
-        if msg.is_empty() || is_loading.get_untracked() {
-            return;
-        }
+        if msg.is_empty() || is_loading.get_untracked() { return; }
         input_text.set(String::new());
         messages.update(|v| v.push((true, msg.clone())));
         is_loading.set(true);
 
-        let err_msg = t(lang.get_untracked(), "chat.error").to_string();
+        let err_msg     = t(lang.get_untracked(), "chat.error").to_string();
         let offline_msg = t(lang.get_untracked(), "chat.offline").to_string();
 
         spawn_local(async move {
@@ -74,7 +103,13 @@ pub fn Chat() -> impl IntoView {
 
             match result {
                 Ok(resp) => match resp.json::<ChatResponse>().await {
-                    Ok(data) => messages.update(|v| v.push((false, data.response))),
+                    Ok(data) => {
+                        let (text, diagram) = parse_mermaid(&data.response);
+                        messages.update(|v| v.push((false, text)));
+                        if let Some(d) = diagram {
+                            current_diagram.set(Some(d));
+                        }
+                    }
                     Err(_) => messages.update(|v| v.push((false, err_msg))),
                 },
                 Err(_) => messages.update(|v| v.push((false, offline_msg))),
@@ -94,100 +129,178 @@ pub fn Chat() -> impl IntoView {
     view! {
         <div class="flex flex-col bg-white dark:bg-black" style="min-height: calc(100vh - 65px);">
 
-            <div class="border-b border-gray-100 dark:border-gray-900 px-6 py-8 max-w-3xl mx-auto w-full">
-                <p class="text-xs text-gray-400 dark:text-gray-600 uppercase tracking-widest mb-2">"pointe.dev"</p>
-                <h2 class="text-2xl font-bold text-gray-900 dark:text-white">
-                    {move || t(lang.get(), "chat.title")}
-                </h2>
-                <p class="text-sm text-gray-400 dark:text-gray-500 mt-1 font-light">
-                    {move || t(lang.get(), "chat.sub")}
-                </p>
-            </div>
-
-            <div class="flex-1 overflow-y-auto px-6 py-8 max-w-3xl mx-auto w-full">
-                <div class="space-y-5">
-                    {move || {
-                        messages.get().into_iter().enumerate().map(|(i, (is_user, content))| {
-                            let content_for_copy = content.clone();
-                            let (outer, inner) = if is_user {
-                                (
-                                    "flex justify-end flex-col items-end gap-1",
-                                    "max-w-[72%] px-5 py-3 bg-red-600 text-white rounded-2xl rounded-tr-sm text-sm leading-relaxed",
-                                )
-                            } else {
-                                (
-                                    "flex justify-start flex-col items-start gap-1",
-                                    "max-w-[72%] px-5 py-3 bg-gray-50 dark:bg-gray-950 text-gray-800 dark:text-gray-200 border border-gray-100 dark:border-gray-900 rounded-2xl rounded-tl-sm text-sm leading-relaxed",
-                                )
-                            };
-                            view! {
-                                <div class=outer>
-                                    <div class=inner>{content}</div>
-                                    {(!is_user).then(|| {
-                                        let text = content_for_copy.clone();
-                                        view! {
-                                            <button
-                                                on:click=move |_| {
-                                                    copy_text(&text);
-                                                    copied_idx.set(Some(i));
-                                                    let ci = copied_idx;
-                                                    let cb = Closure::once(move || ci.set(None));
-                                                    let _ = web_sys::window()
-                                                        .unwrap()
-                                                        .set_timeout_with_callback_and_timeout_and_arguments_0(
-                                                            cb.as_ref().unchecked_ref(),
-                                                            2000
-                                                        );
-                                                    cb.forget();
-                                                }
-                                                class="text-xs text-gray-400 hover:text-red-600 transition-colors pl-1"
-                                            >
-                                                {move || if copied_idx.get() == Some(i) {
-                                                    t(lang.get(), "modal.copied")
-                                                } else {
-                                                    t(lang.get(), "modal.copy")
-                                                }}
-                                            </button>
-                                        }
-                                    })}
-                                </div>
-                            }
-                        }).collect_view()
-                    }}
-
-                    {move || is_loading.get().then(|| view! {
-                        <div class="flex justify-start">
-                            <div class="px-5 py-3 bg-gray-50 dark:bg-gray-950 border border-gray-100 dark:border-gray-900 rounded-2xl rounded-tl-sm">
-                                <div class="flex gap-1.5 items-center h-4">
-                                    <span class="w-1.5 h-1.5 rounded-full bg-red-400 animate-bounce" style="animation-delay: 0ms"></span>
-                                    <span class="w-1.5 h-1.5 rounded-full bg-red-400 animate-bounce" style="animation-delay: 140ms"></span>
-                                    <span class="w-1.5 h-1.5 rounded-full bg-red-400 animate-bounce" style="animation-delay: 280ms"></span>
-                                </div>
-                            </div>
-                        </div>
-                    })}
-
-                    <div id="chat-end"></div>
+            {/* Header */}
+            <div class="border-b border-gray-100 dark:border-gray-900 px-6 py-6 max-w-none">
+                <div class="max-w-3xl lg:ml-0 lg:max-w-none px-0">
+                    <p class="text-xs text-gray-400 dark:text-gray-600 uppercase tracking-widest mb-2">"pointe.dev"</p>
+                    <h2 class="text-2xl font-bold text-gray-900 dark:text-white">
+                        {move || t(lang.get(), "chat.title")}
+                    </h2>
+                    <p class="text-sm text-gray-400 dark:text-gray-500 mt-1 font-light">
+                        {move || t(lang.get(), "chat.sub")}
+                    </p>
                 </div>
             </div>
 
-            <div class="border-t border-gray-100 dark:border-gray-900 px-6 py-4">
-                <div class="max-w-3xl mx-auto flex gap-3 items-center">
-                    <textarea
-                        class="flex-1 resize-none bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-600 focus:outline-none focus:border-red-600 dark:focus:border-red-600 transition-colors leading-relaxed"
-                        placeholder=move || t(lang.get(), "chat.placeholder")
-                        rows="2"
-                        prop:value=move || input_text.get()
-                        on:input=move |ev| input_text.set(event_target_value(&ev))
-                        on:keydown=on_keydown
-                    ></textarea>
-                    <button
-                        on:click=move |_| send()
-                        class="flex items-center justify-center px-5 py-3 bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors text-sm font-semibold shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
-                        disabled=move || is_loading.get()
-                    >
-                        {move || t(lang.get(), "chat.send")}
-                    </button>
+            {/* Main: chat + canvas */}
+            <div class="flex flex-1 overflow-hidden">
+
+                {/* Chat column */}
+                <div class="flex flex-col flex-1 min-w-0 overflow-hidden">
+
+                    {/* Messages */}
+                    <div class="flex-1 overflow-y-auto px-6 py-6">
+                        <div class="max-w-2xl space-y-5">
+                            {move || {
+                                messages.get().into_iter().enumerate().map(|(i, (is_user, content))| {
+                                    let content_for_copy = content.clone();
+                                    let (outer, inner) = if is_user {
+                                        (
+                                            "flex justify-end flex-col items-end gap-1",
+                                            "max-w-[80%] px-5 py-3 bg-red-600 text-white rounded-2xl rounded-tr-sm text-sm leading-relaxed",
+                                        )
+                                    } else {
+                                        (
+                                            "flex justify-start flex-col items-start gap-1",
+                                            "max-w-[80%] px-5 py-3 bg-gray-50 dark:bg-gray-950 text-gray-800 dark:text-gray-200 border border-gray-100 dark:border-gray-900 rounded-2xl rounded-tl-sm text-sm leading-relaxed",
+                                        )
+                                    };
+                                    view! {
+                                        <div class=outer>
+                                            <div class=inner>{content}</div>
+                                            {(!is_user).then(|| {
+                                                let text = content_for_copy.clone();
+                                                view! {
+                                                    <button
+                                                        on:click=move |_| {
+                                                            copy_text(&text);
+                                                            copied_idx.set(Some(i));
+                                                            let ci = copied_idx;
+                                                            let cb = Closure::once(move || ci.set(None));
+                                                            let _ = web_sys::window().unwrap()
+                                                                .set_timeout_with_callback_and_timeout_and_arguments_0(
+                                                                    cb.as_ref().unchecked_ref(), 2000
+                                                                );
+                                                            cb.forget();
+                                                        }
+                                                        class="text-xs text-gray-300 hover:text-red-500 transition-colors pl-1"
+                                                    >
+                                                        {move || if copied_idx.get() == Some(i) {
+                                                            t(lang.get(), "modal.copied")
+                                                        } else {
+                                                            t(lang.get(), "modal.copy")
+                                                        }}
+                                                    </button>
+                                                }
+                                            })}
+                                        </div>
+                                    }
+                                }).collect_view()
+                            }}
+
+                            {move || is_loading.get().then(|| view! {
+                                <div class="flex justify-start">
+                                    <div class="px-5 py-3 bg-gray-50 dark:bg-gray-950 border border-gray-100 dark:border-gray-900 rounded-2xl rounded-tl-sm">
+                                        <div class="flex gap-1.5 items-center h-4">
+                                            <span class="w-1.5 h-1.5 rounded-full bg-red-400 animate-bounce" style="animation-delay:0ms"></span>
+                                            <span class="w-1.5 h-1.5 rounded-full bg-red-400 animate-bounce" style="animation-delay:140ms"></span>
+                                            <span class="w-1.5 h-1.5 rounded-full bg-red-400 animate-bounce" style="animation-delay:280ms"></span>
+                                        </div>
+                                    </div>
+                                </div>
+                            })}
+
+                            <div id="chat-end"></div>
+                        </div>
+                    </div>
+
+                    {/* Continue on messaging apps */}
+                    <div class="px-6 py-2 flex items-center gap-3 border-t border-gray-50 dark:border-gray-900/50">
+                        <span class="text-xs text-gray-300 dark:text-gray-700">"Continuer sur"</span>
+                        <a
+                            href="https://wa.me/33600000000"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="text-xs px-2.5 py-1 rounded-full border border-gray-200 dark:border-gray-800 text-gray-400 hover:border-green-400 hover:text-green-600 dark:hover:text-green-400 transition-colors"
+                        >
+                            "WhatsApp"
+                        </a>
+                        <a
+                            href="https://t.me/pointedev"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="text-xs px-2.5 py-1 rounded-full border border-gray-200 dark:border-gray-800 text-gray-400 hover:border-sky-400 hover:text-sky-500 dark:hover:text-sky-400 transition-colors"
+                        >
+                            "Telegram"
+                        </a>
+                    </div>
+
+                    {/* Input */}
+                    <div class="border-t border-gray-100 dark:border-gray-900 px-6 py-4">
+                        <div class="max-w-2xl flex gap-3 items-center">
+                            <textarea
+                                class="flex-1 resize-none bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-600 focus:outline-none focus:border-red-600 dark:focus:border-red-600 transition-colors leading-relaxed"
+                                placeholder=move || t(lang.get(), "chat.placeholder")
+                                rows="2"
+                                prop:value=move || input_text.get()
+                                on:input=move |ev| input_text.set(event_target_value(&ev))
+                                on:keydown=on_keydown
+                            ></textarea>
+                            <button
+                                on:click=move |_| send()
+                                class="flex items-center justify-center px-5 py-3 bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors text-sm font-semibold shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                                disabled=move || is_loading.get()
+                            >
+                                {move || t(lang.get(), "chat.send")}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Mermaid canvas — desktop only */}
+                <div class="hidden lg:flex flex-col w-80 xl:w-96 border-l border-gray-100 dark:border-gray-900 bg-gray-50/50 dark:bg-black shrink-0">
+
+                    {/* Canvas header */}
+                    <div class="px-5 py-4 border-b border-gray-100 dark:border-gray-900 flex items-center justify-between">
+                        <p class="text-xs text-gray-400 uppercase tracking-widest">"Votre workflow"</p>
+                        {move || current_diagram.get().map(|_| view! {
+                            <span class="flex items-center gap-1.5">
+                                <span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span>
+                                <span class="text-xs text-gray-400">"Généré par IA"</span>
+                            </span>
+                        })}
+                    </div>
+
+                    {/* Canvas body */}
+                    <div class="flex-1 overflow-auto p-5 relative">
+
+                        {/* Mermaid SVG container — always in DOM so JS can inject */}
+                        <div
+                            id="mermaid-canvas"
+                            class=move || if current_diagram.get().is_some() {
+                                "w-full animate-canvas-in"
+                            } else {
+                                "hidden"
+                            }
+                        ></div>
+
+                        {/* Empty state */}
+                        {move || current_diagram.get().is_none().then(|| view! {
+                            <div class="flex flex-col items-center justify-center h-full min-h-48 text-center px-4 py-8">
+                                <div class="w-16 h-16 rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-800 flex items-center justify-center mb-5">
+                                    <svg class="w-7 h-7 text-gray-300 dark:text-gray-700" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
+                                    </svg>
+                                </div>
+                                <p class="text-sm font-medium text-gray-400 dark:text-gray-600 mb-2">
+                                    "Workflow en attente"
+                                </p>
+                                <p class="text-xs text-gray-300 dark:text-gray-700 leading-relaxed max-w-[160px]">
+                                    "Décrivez votre processus — l'IA le visualisera ici en temps réel."
+                                </p>
+                            </div>
+                        })}
+                    </div>
                 </div>
             </div>
         </div>

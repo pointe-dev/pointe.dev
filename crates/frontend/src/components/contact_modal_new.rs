@@ -70,12 +70,12 @@ pub fn ContactModal(
         {move || if is_open.get() {
             view! {
                 <div
-                    class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 animate-fade-up"
+                    class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-backdrop-in"
                     on:click=move |ev| {
                         if ev.target() == ev.current_target() { is_open.set(false); }
                     }
                 >
-                    <div class="bg-white dark:bg-black border border-gray-200 dark:border-gray-800 rounded-xl max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-2xl">
+                    <div class="bg-white dark:bg-black border border-gray-200 dark:border-gray-800 rounded-xl max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-2xl animate-modal-enter">
 
                         {/* Header */}
                         <div class="flex justify-between items-center px-6 py-5 border-b border-gray-100 dark:border-gray-900">
@@ -110,7 +110,7 @@ pub fn ContactModal(
                         <div class="px-6 py-6">
                             {move || match current_step.get() {
                                 ContactStep::Start => view! {
-                                    <div class="space-y-3 animate-fade-up">
+                                    <div class="space-y-3 animate-step-enter">
                                         <p class="text-sm text-gray-500 dark:text-gray-400 mb-5">
                                             {move || t(lang.get(), "modal.choose")}
                                         </p>
@@ -152,7 +152,7 @@ pub fn ContactModal(
                                 }.into_view(),
 
                                 ContactStep::AiChat => view! {
-                                    <div class="space-y-4 animate-fade-up">
+                                    <div class="space-y-4 animate-step-enter">
                                         <textarea
                                             placeholder=move || t(lang.get(), "modal.ai_ph")
                                             on:input=move |ev| set_use_case_input.set(event_target_value(&ev))
@@ -160,7 +160,7 @@ pub fn ContactModal(
                                             rows=4
                                         />
                                         {move || (!ai_response.get().is_empty()).then(|| view! {
-                                            <div class="p-4 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-100 dark:border-gray-800 animate-fade-up">
+                                            <div class="p-4 bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-100 dark:border-gray-800 animate-step-enter">
                                                 <p class="text-sm text-gray-600 dark:text-gray-400 whitespace-pre-line leading-relaxed">
                                                     {ai_response.get()}
                                                 </p>
@@ -187,7 +187,7 @@ pub fn ContactModal(
                                 }.into_view(),
 
                                 ContactStep::ContactInfo => view! {
-                                    <div class="space-y-3 animate-fade-up">
+                                    <div class="space-y-3 animate-step-enter">
                                         <input
                                             type="text"
                                             placeholder=move || t(lang.get(), "modal.name_ph")
@@ -235,7 +235,7 @@ pub fn ContactModal(
                                 }.into_view(),
 
                                 ContactStep::Calendly => view! {
-                                    <div class="space-y-4 animate-fade-up">
+                                    <div class="space-y-4 animate-step-enter">
                                         <p class="text-sm text-gray-500 dark:text-gray-400">
                                             {move || t(lang.get(), "modal.cal_body")}
                                         </p>

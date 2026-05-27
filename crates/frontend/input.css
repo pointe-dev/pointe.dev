@@ -139,14 +139,32 @@ html.dark {
 
 /* Page transition — glisse depuis le bas, léger */
 @keyframes page-enter {
-  from {
-    opacity: 0;
-    transform: translateY(18px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Modal backdrop — fade only, pas de mouvement */
+@keyframes backdrop-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Modal card — scale + montée douce, courbe ressort */
+@keyframes modal-enter {
+  from { opacity: 0; transform: scale(0.94) translateY(16px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0); }
+}
+
+/* Transition entre étapes — glisse depuis la droite */
+@keyframes step-enter {
+  from { opacity: 0; transform: translateX(14px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* Canvas mermaid — apparition douce */
+@keyframes canvas-in {
+  from { opacity: 0; transform: scale(0.98); }
+  to   { opacity: 1; transform: scale(1); }
 }
 
 /* Float animation - gentle upward drift */
@@ -262,6 +280,11 @@ html.dark {
 .page-transition {
   animation: page-enter 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
+
+.animate-backdrop-in  { animation: backdrop-in  0.22s ease both; }
+.animate-modal-enter  { animation: modal-enter  0.32s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.animate-step-enter   { animation: step-enter   0.22s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.animate-canvas-in    { animation: canvas-in    0.4s  cubic-bezier(0.22, 1, 0.36, 1) both; }
 
 .animate-float {
   animation: float 7s ease-in-out infinite;

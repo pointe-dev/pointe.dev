@@ -11,6 +11,12 @@ enum Page {
     Chat,
 }
 
+fn scroll_to_top() {
+    let _ = js_sys::Function::new_no_args(
+        "window.scrollTo({top:0,behavior:'smooth'})"
+    ).call0(&wasm_bindgen::JsValue::NULL);
+}
+
 fn scroll_to_gallery() {
     let _ = web_sys::window().and_then(|w| {
         let f = js_sys::Function::new_no_args(
@@ -54,7 +60,7 @@ pub fn Layout() -> impl IntoView {
             <nav class="sticky top-0 z-40 bg-white/95 dark:bg-black/95 border-b border-gray-200 dark:border-gray-800 backdrop-blur-sm">
                 <div class="max-w-7xl mx-auto px-6 py-4 flex justify-between items-center">
                     <button
-                        on:click=move |_| active_page.set(Page::Home)
+                        on:click=move |_| { active_page.set(Page::Home); scroll_to_top(); }
                         class="text-2xl font-bold tracking-tight"
                     >
                         <span class="text-red-600">"pointe"</span>
@@ -63,7 +69,7 @@ pub fn Layout() -> impl IntoView {
                     </button>
                     <div class="flex items-center gap-6">
                         <button
-                            on:click=move |_| active_page.set(Page::Home)
+                            on:click=move |_| { active_page.set(Page::Home); scroll_to_top(); }
                             class=move || nav_btn_class(Page::Home)
                         >
                             {move || t(lang.get(), "nav.home")}

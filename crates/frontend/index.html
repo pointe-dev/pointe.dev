@@ -4,59 +4,59 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="High-end AI agency turning complex engineering into effortless elegance.">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data:; font-src 'self' data: https://fonts.gstatic.com;">
-    <title>pointe.dev - Invisible Complexity, Visible Grace</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com https://cdn.jsdelivr.net; script-src 'self' 'unsafe-eval' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; font-src 'self' data: https://fonts.gstatic.com;">
+    <title>pointe.dev — Automatisation pointue.</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Ubuntu:wght@300;400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/styles.css">
     <style>
-        body {
-            font-family: 'Ubuntu', sans-serif;
-            font-weight: 400;
-        }
-        h1, h2, h3, h4, h5, h6 {
-            font-weight: 500;
-        }
-        strong, .font-bold {
-            font-weight: 700;
-        }
+        body { font-family: 'Ubuntu', sans-serif; font-weight: 400; }
+        h1, h2, h3, h4, h5, h6 { font-weight: 500; }
+        strong, .font-bold { font-weight: 700; }
+        /* Mermaid SVG responsive */
+        #mermaid-canvas svg { width: 100% !important; height: auto !important; max-width: 100%; }
     </style>
+    <!-- Mermaid for workflow diagrams -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script>
+        mermaid.initialize({
+            startOnLoad: false,
+            theme: 'base',
+            themeVariables: {
+                primaryColor: '#ffffff',
+                primaryBorderColor: '#e5e7eb',
+                primaryTextColor: '#111827',
+                lineColor: '#dc2626',
+                secondaryColor: '#fff1f2',
+                tertiaryColor: '#f9fafb',
+                edgeLabelBackground: '#ffffff',
+                fontFamily: "'Ubuntu', sans-serif",
+                fontSize: '12px'
+            },
+            flowchart: { curve: 'basis', padding: 16 },
+            securityLevel: 'loose'
+        });
+
+        async function renderMermaidTo(code, elementId) {
+            try {
+                const id = 'mg-' + Math.random().toString(36).substr(2, 8);
+                const { svg } = await mermaid.render(id, code);
+                const el = document.getElementById(elementId);
+                if (el) el.innerHTML = svg;
+            } catch(e) {
+                console.warn('Mermaid render error:', e);
+            }
+        }
+    </script>
 </head>
 <body class="bg-black text-white">
     <div id="app"></div>
     <script type="module">
-        console.log("📍 Script starting...");
-        
-        try {
-            console.log("📥 Importing frontend.js...");
-            import('/pkg/frontend.js').then(module => {
-                console.log("✅ Import successful, calling init()...");
-                console.log("Module contents:", module);
-                
-                if (module.default && typeof module.default === 'function') {
-                    console.log("🚀 Calling default export...");
-                    module.default().then(() => {
-                        console.log("✅ Init completed!");
-                    }).catch(err => {
-                        console.error("❌ Init error:", err);
-                    });
-                } else if (module.init && typeof module.init === 'function') {
-                    console.log("🚀 Calling init()...");
-                    module.init().then(() => {
-                        console.log("✅ Init completed!");
-                    }).catch(err => {
-                        console.error("❌ Init error:", err);
-                    });
-                } else {
-                    console.error("❌ No init function found in module!");
-                }
-            }).catch(err => {
-                console.error("❌ Import failed:", err);
-            });
-        } catch (err) {
-            console.error("❌ Script error:", err);
-        }
+        import('/pkg/frontend.js').then(m => {
+            if (m.default) m.default().catch(console.error);
+            else if (m.init) m.init().catch(console.error);
+        }).catch(console.error);
     </script>
 </body>
 </html>
