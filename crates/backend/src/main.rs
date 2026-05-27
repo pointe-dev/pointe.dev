@@ -1,7 +1,8 @@
 use axum::{
+    extract::State,
+    http::StatusCode,
     routing::{get, post},
-    Router,
-    Json,
+    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -15,71 +16,132 @@ mod state;
 
 use state::AppState;
 
-#[derive(Deserialize, Serialize)]
-pub struct UseCase {
-    pub description: String,
+const SYSTEM_PROMPT: &str = "\
+Tu es l'assistant IA de pointe.dev, une agence d'automatisation sur mesure. \
+Tu accompagnes les prospects à identifier comment l'automatisation peut transformer leurs opérations. \
+Tu es concis, précis, professionnel et chaleureux.
+
+Règles absolues :
+- Réponds TOUJOURS dans la langue de l'utilisateur (FR, EN ou DE)
+- Pose des questions ciblées pour qualifier le besoin : secteur, volume de tâches, taille d'équipe, douleur principale
+- Quand l'utilisateur décrit un processus ou workflow, génère OBLIGATOIREMENT un diagramme Mermaid \
+  dans le format exact suivant (sans espace avant les backticks) :
+```mermaid
+graph LR
+  A[Étape 1] --> B[Étape 2]
+```
+- Les nœuds Mermaid doivent être courts (3-4 mots max), le graphe lisible
+- Après le diagramme, explique brièvement comment pointe.dev automatise ce flux
+- Si le prospect semble qualifié (processus répétitif, volume significatif), propose de planifier un appel
+- Ne jamais halluciner des chiffres précis — utilise des fourchettes réalistes
+- Réponse max : 200 mots hors diagramme";
+
+#[derive(Deserialize)]
+struct ChatRequest {
+    description: String,
 }
 
 #[derive(Serialize)]
-pub struct AiResponse {
-    pub response: String,
+struct ChatResponse {
+    response: String,
 }
 
-async fn handle_ai_chat(Json(payload): Json<UseCase>) -> Json<AiResponse> {
-    let response = format!(
-        "Thanks for sharing: \"{}\"\n\nBased on your use case, we can help you:\n• Automate repetitive workflows\n• Reduce manual hours by up to 80%\n• Set up monitoring and alerts\n\nReady to move forward?",
-        payload.description
-    );
-    
-    Json(AiResponse { response })
+#[derive(Serialize)]
+struct ClaudeRequest<'a> {
+    model: &'a str,
+    max_tokens: u32,
+    system: &'a str,
+    messages: Vec<ClaudeMessage<'a>>,
+}
+
+#[derive(Serialize)]
+struct ClaudeMessage<'a> {
+    role: &'a str,
+    content: &'a str,
+}
+
+#[derive(Deserialize)]
+struct ClaudeResponse {
+    content: Vec<ClaudeContent>,
+}
+
+#[derive(Deserialize)]
+struct ClaudeContent {
+    text: String,
+}
+
+async fn handle_ai_chat(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<ChatRequest>,
+) -> Result<Json<ChatResponse>, StatusCode> {
+    let body = ClaudeRequest {
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1024,
+        system: SYSTEM_PROMPT,
+        messages: vec![ClaudeMessage {
+            role: "user",
+            content: &payload.description,
+        }],
+    };
+
+    let resp = state
+        .http
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", &state.anthropic_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!("Claude API request failed: {e}");
+            StatusCode::BAD_GATEWAY
+        })?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        tracing::error!("Claude API error {status}: {text}");
+        return Err(StatusCode::BAD_GATEWAY);
+    }
+
+    let claude: ClaudeResponse = resp.json().await.map_err(|e| {
+        tracing::error!("Claude response parse error: {e}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let text = claude
+        .content
+        .into_iter()
+        .next()
+        .map(|c| c.text)
+        .unwrap_or_default();
+
+    Ok(Json(ChatResponse { response: text }))
 }
 
 #[tokio::main]
 async fn main() {
-    // Initialize tracing
+    dotenvy::dotenv().ok();
     tracing_subscriber::fmt::init();
 
-    // Log current working directory
-    let cwd = std::env::current_dir().expect("Failed to get CWD");
-    tracing::info!("📁 Current working directory: {:?}", cwd);
-
-    // Check if frontend directory exists
-    let frontend_dir = std::path::Path::new("./frontend");
-    if frontend_dir.exists() {
-        tracing::info!("✅ /frontend directory exists");
-        if let Ok(entries) = std::fs::read_dir("./frontend") {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    tracing::info!("   📄 {:?}", entry.path());
-                }
-            }
-        }
-    } else {
-        tracing::warn!("❌ /frontend directory NOT found!");
-    }
-
-    // Application state
     let state = Arc::new(AppState::new());
 
-    // Build router
     let app = Router::new()
-        // API routes
         .route("/api/health", get(handlers::health::health_check))
         .route("/api/services", get(handlers::services::get_services))
         .route("/api/ai/chat", post(handle_ai_chat))
         .with_state(state)
-        // Serve static frontend assets
         .nest_service("/pkg", ServeDir::new("./crates/frontend/pkg"))
         .nest_service("/", ServeDir::new("./crates/frontend"))
         .layer(CorsLayer::permissive())
         .layer(CompressionLayer::new());
 
-    // Bind to all interfaces (0.0.0.0) so Railway/Docker can access it
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3001")
         .await
         .expect("Failed to bind to port 3001");
 
-    tracing::info!("✨ pointe.dev backend + frontend listening on http://0.0.0.0:3001");
+    tracing::info!("✨ pointe.dev listening on http://0.0.0.0:3001");
 
     axum::serve(listener, app)
         .await
