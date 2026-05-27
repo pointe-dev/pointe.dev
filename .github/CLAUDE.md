@@ -195,7 +195,7 @@ async def stripe_webhook(event: StripeEvent):
 ## Conventions de code — non négociables
 
 ### Python
-- FastAPI avec `async/await` partout — zéro code synchrone bloquant
+- Axum avec `async/await` partout — zéro code synchrone bloquant
 - Pydantic v2 pour tous les schémas (BaseModel strict)
 - Type hints complets sur toutes les fonctions
 - LangGraph : `StateGraph` uniquement, jamais `AgentExecutor`
@@ -259,33 +259,7 @@ N8N_WEBHOOK_URL=
 ## Structure de dossiers cible
 
 ```
-pointe.dev/
-├── apps/
-│   ├── web/              # Next.js frontend
-│   └── api/              # FastAPI backend
-│       ├── agents/
-│       │   ├── orchestrator.py
-│       │   ├── leads/
-│       │   │   ├── enrichment.py
-│       │   │   ├── scoring.py
-│       │   │   ├── draft.py
-│       │   │   └── crm.py
-│       │   └── veille/
-│       │       ├── scraper.py
-│       │       ├── correlation.py
-│       │       ├── brief.py
-│       │       └── delivery.py
-│       ├── routers/
-│       │   ├── chat.py
-│       │   ├── templates.py
-│       │   └── webhooks.py
-│       └── db/
-│           └── supabase.py
-├── packages/
-│   └── shared/           # Types partagés TS/Python
-├── workflows/
-│   └── n8n/              # Templates n8n versionnés en JSON
-└── CLAUDE.md             # Ce fichier
+TODO
 ```
 
 ---
@@ -293,8 +267,8 @@ pointe.dev/
 ## Priorités de build dans l'ordre
 
 1. Schéma Supabase + migrations
-2. FastAPI gateway (sessions + WebSocket streaming)
-3. Agent Orchestrateur avec routage dynamique
+2. Axum gateway (sessions + WebSocket streaming)
+3. Agent Orchestrateur avec routage dynamique + qdrant (containing n8n and apify docs and templates)
 4. Flotte Lead Agent (Package 1) — pipeline complet
 5. Playground frontend (chat widget + boutons options)
 6. Stripe webhooks + activation automatique

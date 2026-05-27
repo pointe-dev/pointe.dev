@@ -19,7 +19,7 @@ pub fn t(lang: Lang, key: &str) -> &'static str {
         (Fr,"hero.alt")=>"Voir les solutions", (En,"hero.alt")=>"See solutions", (De,"hero.alt")=>"Lösungen ansehen",
         (Fr,"hero.scroll")=>"Défiler", (En,"hero.scroll")=>"Scroll", (De,"hero.scroll")=>"Scrollen",
         (Fr,"hero.w1")=>"Pour les fondateurs.", (En,"hero.w1")=>"For founders.", (De,"hero.w1")=>"Für Gründer.",
-        (Fr,"hero.w2")=>"Pour les équipes commerciales.", (En,"hero.w2")=>"For sales leaders.", (De,"hero.w2")=>"Für Sales-Teams.",
+        (Fr,"hero.w2")=>"Pour les commerciaux.", (En,"hero.w2")=>"For sales leaders.", (De,"hero.w2")=>"Für Sales-Teams.",
         (Fr,"hero.w3")=>"Pour les équipes ops.", (En,"hero.w3")=>"For ops teams.", (De,"hero.w3")=>"Für Ops-Teams.",
         (Fr,"hero.w4")=>"Pour la croissance.", (En,"hero.w4")=>"For growth teams.", (De,"hero.w4")=>"Für Growth-Teams.",
         (Fr,"hero.w5")=>"Pour les builders.", (En,"hero.w5")=>"For builders.", (De,"hero.w5")=>"Für Builder.",
