@@ -122,7 +122,7 @@ pub fn Layout() -> impl IntoView {
                 }}
             </main>
 
-            <ContactModal is_open=is_contact_open />
+            <ContactModal is_open=is_contact_open on_chat=move || active_page.set(Page::Chat) />
 
             {move || (active_page.get() == Page::Home).then(|| view! {
                 <footer class="bg-gray-50 dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 py-12 px-6">

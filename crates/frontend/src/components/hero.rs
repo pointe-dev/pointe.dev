@@ -39,8 +39,8 @@ pub fn Hero(on_chat_click: impl Fn() + 'static) -> impl IntoView {
                     style="left: 44%; width: 108px; height: 680px; \
                            animation-duration: 10s; animation-delay: -1s; \
                            --da: 8px; --db: -5px; --dc: 10px; --rt: 0.5deg; --lift-y: -85px; \
-                           background: rgba(220, 38, 38, 0.20); \
-                           filter: blur(32px); \
+                           background: rgba(220, 38, 38, 0.11); \
+                           filter: blur(48px); \
                            border-radius: 46% 54% 50% 50% / 52% 48% 54% 46%;"
                 ></div>
 
@@ -108,12 +108,16 @@ pub fn Hero(on_chat_click: impl Fn() + 'static) -> impl IntoView {
                     >
                         {move || t(lang.get(), "hero.cta")}
                     </button>
-                    <a
-                        href="#gallery"
+                    <button
+                        on:click=move |_| {
+                            let _ = js_sys::Function::new_no_args(
+                                "document.getElementById('gallery')?.scrollIntoView({behavior:'smooth'})"
+                            ).call0(&wasm_bindgen::JsValue::NULL);
+                        }
                         class="px-10 py-4 border border-gray-200 dark:border-gray-800 text-gray-700 dark:text-gray-300 rounded-lg font-semibold text-lg hover:border-red-600 hover:text-red-600 transition-all duration-200 hover:-translate-y-0.5 w-full max-w-xs"
                     >
                         {move || t(lang.get(), "hero.alt")}
-                    </a>
+                    </button>
                 </div>
             </div>
 
