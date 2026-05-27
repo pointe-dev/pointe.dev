@@ -47,74 +47,76 @@ struct ChatResponse {
 }
 
 #[derive(Serialize)]
-struct ClaudeRequest<'a> {
+struct OpenRouterRequest<'a> {
     model: &'a str,
     max_tokens: u32,
-    system: &'a str,
-    messages: Vec<ClaudeMessage<'a>>,
+    messages: Vec<OpenRouterMessage<'a>>,
 }
 
 #[derive(Serialize)]
-struct ClaudeMessage<'a> {
+struct OpenRouterMessage<'a> {
     role: &'a str,
     content: &'a str,
 }
 
 #[derive(Deserialize)]
-struct ClaudeResponse {
-    content: Vec<ClaudeContent>,
+struct OpenRouterResponse {
+    choices: Vec<OpenRouterChoice>,
 }
 
 #[derive(Deserialize)]
-struct ClaudeContent {
-    text: String,
+struct OpenRouterChoice {
+    message: OpenRouterMessageOut,
+}
+
+#[derive(Deserialize)]
+struct OpenRouterMessageOut {
+    content: String,
 }
 
 async fn handle_ai_chat(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, StatusCode> {
-    let body = ClaudeRequest {
-        model: "claude-haiku-4-5-20251001",
+    let body = OpenRouterRequest {
+        model: "meta-llama/llama-3.1-8b-instruct:free",
         max_tokens: 1024,
-        system: SYSTEM_PROMPT,
-        messages: vec![ClaudeMessage {
-            role: "user",
-            content: &payload.description,
-        }],
+        messages: vec![
+            OpenRouterMessage { role: "system", content: SYSTEM_PROMPT },
+            OpenRouterMessage { role: "user",   content: &payload.description },
+        ],
     };
 
     let resp = state
         .http
-        .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", &state.anthropic_key)
-        .header("anthropic-version", "2023-06-01")
+        .post("https://openrouter.ai/api/v1/chat/completions")
+        .header("Authorization", format!("Bearer {}", state.openrouter_key))
         .header("content-type", "application/json")
         .json(&body)
         .send()
         .await
         .map_err(|e| {
-            tracing::error!("Claude API request failed: {e}");
+            tracing::error!("OpenRouter request failed: {e}");
             StatusCode::BAD_GATEWAY
         })?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        tracing::error!("Claude API error {status}: {text}");
+        tracing::error!("OpenRouter error {status}: {text}");
         return Err(StatusCode::BAD_GATEWAY);
     }
 
-    let claude: ClaudeResponse = resp.json().await.map_err(|e| {
-        tracing::error!("Claude response parse error: {e}");
+    let or_resp: OpenRouterResponse = resp.json().await.map_err(|e| {
+        tracing::error!("OpenRouter parse error: {e}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let text = claude
-        .content
+    let text = or_resp
+        .choices
         .into_iter()
         .next()
-        .map(|c| c.text)
+        .map(|c| c.message.content)
         .unwrap_or_default();
 
     Ok(Json(ChatResponse { response: text }))
