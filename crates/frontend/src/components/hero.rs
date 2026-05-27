@@ -5,11 +5,20 @@ pub fn Hero(on_contact_click: impl Fn() + 'static) -> impl IntoView {
     view! {
         <section class="min-h-screen relative flex flex-col justify-center items-center text-center py-20 px-6 overflow-hidden bg-white dark:bg-black">
 
-            {/* Background — assertive, alive */}
-            <div class="absolute inset-0 pointer-events-none select-none">
-                <div class="absolute -top-32 -left-32 w-[700px] h-[700px] bg-red-600/10 dark:bg-red-600/15 rounded-full blur-3xl animate-blob"></div>
-                <div class="absolute bottom-0 right-0 w-[500px] h-[500px] bg-red-500/8 dark:bg-red-500/12 rounded-full blur-3xl animate-blob animation-delay-2000"></div>
-                <div class="absolute top-1/2 left-1/2 w-[300px] h-[300px] bg-red-400/5 dark:bg-red-400/8 rounded-full blur-3xl animate-blob animation-delay-4000"></div>
+            {/* Background — trois silhouettes qui s'élèvent, vaguement */}
+            <div class="absolute inset-0 pointer-events-none select-none overflow-hidden">
+                <div
+                    class="absolute bottom-0 left-[12%] w-[160px] h-[520px] bg-red-600/8 dark:bg-red-600/10 blur-3xl animate-pointe"
+                    style="animation-duration: 13s; animation-delay: -1s; --drift-x: -18px; --lift-y: -55px; border-radius: 48% 52% 40% 60% / 55% 45% 62% 38%;"
+                ></div>
+                <div
+                    class="absolute bottom-0 left-[46%] w-[120px] h-[640px] bg-red-500/6 dark:bg-red-500/9 blur-3xl animate-pointe"
+                    style="animation-duration: 10s; --drift-x: 8px; --lift-y: -90px; border-radius: 44% 56% 52% 48% / 50% 50% 50% 50%;"
+                ></div>
+                <div
+                    class="absolute bottom-0 right-[10%] w-[140px] h-[480px] bg-red-400/5 dark:bg-red-400/8 blur-3xl animate-pointe"
+                    style="animation-duration: 15s; animation-delay: -6s; --drift-x: 22px; --lift-y: -48px; border-radius: 52% 48% 44% 56% / 42% 58% 42% 58%;"
+                ></div>
             </div>
 
             {/* Content */}

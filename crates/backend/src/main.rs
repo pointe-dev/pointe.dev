@@ -5,6 +5,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tracing_subscriber;
@@ -70,7 +71,8 @@ async fn main() {
         // Serve static frontend assets
         .nest_service("/pkg", ServeDir::new("./crates/frontend/pkg"))
         .nest_service("/", ServeDir::new("./crates/frontend"))
-        .layer(CorsLayer::permissive());
+        .layer(CorsLayer::permissive())
+        .layer(CompressionLayer::new());
 
     // Bind to all interfaces (0.0.0.0) so Railway/Docker can access it
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3001")

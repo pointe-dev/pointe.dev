@@ -72,25 +72,22 @@ html.dark {
   }
 }
 
-/* Blob animation - confident, alive */
-@keyframes blob {
+/* En pointe — élévation sur la pointe, suspension, descente douce */
+@keyframes pointe {
   0% {
-    transform: translate(0, 0) scale(1);
+    animation-timing-function: cubic-bezier(0.33, 1, 0.68, 1);
+    transform: translate(0, 0) scaleX(1) scaleY(1);
   }
-  15% {
-    transform: translate(40px, -80px) scale(1.15);
+  28% {
+    animation-timing-function: linear;
+    transform: translate(var(--drift-x, 10px), var(--lift-y, -70px)) scaleX(0.8) scaleY(1.22);
   }
-  35% {
-    transform: translate(20px, -100px) scale(0.9);
-  }
-  55% {
-    transform: translate(-50px, -60px) scale(1.12);
-  }
-  75% {
-    transform: translate(-30px, -20px) scale(0.94);
+  62% {
+    animation-timing-function: cubic-bezier(0.32, 0, 0.67, 0);
+    transform: translate(var(--drift-x, 10px), var(--lift-y, -70px)) scaleX(0.8) scaleY(1.22);
   }
   100% {
-    transform: translate(0, 0) scale(1);
+    transform: translate(0, 0) scaleX(1) scaleY(1);
   }
 }
 
@@ -192,8 +189,8 @@ html.dark {
   }
 }
 
-.animate-blob {
-  animation: blob 6s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+.animate-pointe {
+  animation: pointe 11s ease-in-out infinite;
 }
 
 .animate-float {
