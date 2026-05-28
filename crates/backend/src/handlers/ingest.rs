@@ -1,8 +1,7 @@
 use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use crate::embeddings;
-use crate::qdrant::{QdrantStore, TemplatePayload, TemplatePoint};
+use crate::qdrant::{TemplatePayload, TemplatePoint};
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -26,8 +25,8 @@ pub async fn ingest(
     State(state): State<Arc<AppState>>,
     Json(templates): Json<Vec<IngestTemplate>>,
 ) -> Result<Json<IngestResponse>, (StatusCode, String)> {
-    let (Some(qdrant), Some(openai_key)) = (&state.qdrant, &state.openai_key) else {
-        return Err((StatusCode::SERVICE_UNAVAILABLE, "Qdrant or OpenAI not configured".to_string()));
+    let (Some(qdrant), Some(engine)) = (&state.qdrant, &state.embeddings) else {
+        return Err((StatusCode::SERVICE_UNAVAILABLE, "Qdrant or embedding engine not configured".to_string()));
     };
 
     qdrant.ensure_collection().await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
@@ -35,12 +34,10 @@ pub async fn ingest(
     let mut points = Vec::with_capacity(templates.len());
     for t in templates {
         let embed_text = format!("{} — {} — {}", t.name, t.description, t.tags.join(", "));
-        let vector = embeddings::embed(&state.http, openai_key, &embed_text)
-            .await
-            .map_err(|e| {
-                tracing::error!("[ingest] embed failed for '{}': {e}", t.name);
-                (StatusCode::BAD_GATEWAY, e)
-            })?;
+        let vector = engine.embed(embed_text).await.map_err(|e| {
+            tracing::error!("[ingest] embed failed for '{}': {e}", t.name);
+            (StatusCode::INTERNAL_SERVER_ERROR, e)
+        })?;
 
         points.push(TemplatePoint {
             payload: TemplatePayload {

@@ -22,6 +22,7 @@ mod qdrant;
 mod sessions;
 mod state;
 
+use embeddings::EmbeddingEngine;
 use langfuse::LangfuseClient;
 use pipeline::PipelineStore;
 use qdrant::QdrantStore;
@@ -207,7 +208,6 @@ async fn main() {
 
     let (system_prompt, langfuse) = init_langfuse(http.clone()).await;
 
-    let openai_key = std::env::var("OPENAI_API_KEY").ok();
     let qdrant = std::env::var("QDRANT_URL").ok().map(|url| {
         tracing::info!("Qdrant configured at {url}");
         QdrantStore::new(http.clone(), url)
@@ -216,15 +216,25 @@ async fn main() {
         tracing::warn!("QDRANT_URL not set — RAG disabled, builder uses stub");
     }
 
+    // BGE-M3 downloads ~300 MB on first run, then stays cached.
+    let embeddings = tokio::task::spawn_blocking(EmbeddingEngine::new)
+        .await
+        .unwrap_or_else(|e| Err(format!("join error: {e}")))
+        .map_err(|e| tracing::warn!("Embedding engine unavailable: {e} — RAG disabled"))
+        .ok();
+    if embeddings.is_some() {
+        tracing::info!("Embedding engine ready (BGE-M3, 1024 dims, local)");
+    }
+
     let state = Arc::new(AppState {
         anthropic_key,
-        openai_key,
         http,
         system_prompt,
         langfuse,
         sessions: SessionStore::new(),
         pipelines: PipelineStore::new(),
         qdrant,
+        embeddings,
     });
 
     let app = Router::new()

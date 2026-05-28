@@ -44,14 +44,14 @@ pub async fn run_builder(app: &AppState, ctx: &mut PipelineContext) -> Result<()
     tracing::info!("[builder] session={} attempt={}", ctx.session_id, ctx.build_attempts);
 
     // 1. Retrieve similar templates from Qdrant (if configured)
-    let templates_context = match (&app.qdrant, &app.openai_key) {
-        (Some(qdrant), Some(openai_key)) => {
+    let templates_context = match (&app.qdrant, &app.embeddings) {
+        (Some(qdrant), Some(engine)) => {
             let query = format!(
                 "{} {}",
                 ctx.client_need,
                 ctx.research_output.as_deref().unwrap_or_default()
             );
-            match crate::embeddings::embed(&app.http, openai_key, &query).await {
+            match engine.embed(query).await {
                 Ok(vector) => match qdrant.search(vector, 3).await {
                     Ok(hits) if !hits.is_empty() => {
                         let summaries: Vec<String> = hits.iter().map(|h| {
@@ -67,7 +67,7 @@ pub async fn run_builder(app: &AppState, ctx: &mut PipelineContext) -> Result<()
                 Err(e) => { tracing::warn!("[builder] embed failed: {e}"); String::new() }
             }
         }
-        _ => { tracing::warn!("[builder] RAG disabled (Qdrant or OpenAI not configured)"); String::new() }
+        _ => { tracing::warn!("[builder] RAG disabled (Qdrant or embeddings not configured)"); String::new() }
     };
 
     // 2. Build the Sonnet prompt
