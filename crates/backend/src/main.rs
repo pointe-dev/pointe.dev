@@ -4,6 +4,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tower_http::compression::CompressionLayer;
@@ -12,11 +13,13 @@ use tower_http::services::ServeDir;
 use tracing_subscriber;
 
 mod handlers;
+mod langfuse;
 mod state;
 
+use langfuse::LangfuseClient;
 use state::AppState;
 
-const SYSTEM_PROMPT: &str = "\
+const FALLBACK_PROMPT: &str = "\
 Tu es l'assistant IA de pointe.dev, une agence d'automatisation sur mesure. \
 Tu accompagnes les prospects à identifier comment l'automatisation peut transformer leurs opérations. \
 Tu es concis, précis, professionnel et chaleureux.
@@ -79,11 +82,13 @@ async fn handle_ai_chat(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, StatusCode> {
+    let start = Utc::now();
+
     let body = OpenRouterRequest {
         model: "openrouter/free",
         max_tokens: 1024,
         messages: vec![
-            OpenRouterMessage { role: "system", content: SYSTEM_PROMPT },
+            OpenRouterMessage { role: "system", content: &state.system_prompt },
             OpenRouterMessage { role: "user",   content: &payload.description },
         ],
     };
@@ -120,6 +125,19 @@ async fn handle_ai_chat(
     })?;
 
     let text = or_resp.choices.into_iter().next().map(|c| c.message.content).unwrap_or_default();
+    let end = Utc::now();
+
+    if state.langfuse.is_some() {
+        let input = payload.description.clone();
+        let output = text.clone();
+        let state2 = state.clone();
+        tokio::spawn(async move {
+            if let Some(lf) = &state2.langfuse {
+                lf.trace(&input, &output, "openrouter/free", start, end).await;
+            }
+        });
+    }
+
     Ok(Json(ChatResponse { response: text }))
 }
 
@@ -128,7 +146,12 @@ async fn main() {
     dotenvy::dotenv().ok();
     tracing_subscriber::fmt::init();
 
-    let state = Arc::new(AppState::new());
+    let http = reqwest::Client::new();
+    let openrouter_key = std::env::var("OPENROUTER_API_KEY").expect("OPENROUTER_API_KEY must be set");
+
+    let (system_prompt, langfuse) = init_langfuse(http.clone()).await;
+
+    let state = Arc::new(AppState { openrouter_key, http, system_prompt, langfuse });
 
     let app = Router::new()
         .route("/api/health", get(handlers::health::health_check))
@@ -150,4 +173,31 @@ async fn main() {
     axum::serve(listener, app)
         .await
         .expect("Server error");
+}
+
+async fn init_langfuse(http: reqwest::Client) -> (String, Option<LangfuseClient>) {
+    let (Some(pub_key), Some(sec_key), Some(base_url)) = (
+        std::env::var("LANGFUSE_PUBLIC_KEY").ok(),
+        std::env::var("LANGFUSE_SECRET_KEY").ok(),
+        std::env::var("LANGFUSE_BASE_URL").ok(),
+    ) else {
+        tracing::warn!("Langfuse keys not set, using fallback prompt");
+        return (FALLBACK_PROMPT.to_string(), None);
+    };
+
+    let mut client = LangfuseClient::new(http, base_url, pub_key, sec_key);
+    match client.fetch_prompt("qualifier-chatbot-prompt").await {
+        Ok(prompt) => {
+            tracing::info!(
+                "Loaded Langfuse prompt '{}' v{}",
+                client.prompt_name,
+                client.prompt_version
+            );
+            (prompt, Some(client))
+        }
+        Err(e) => {
+            tracing::warn!("Failed to fetch Langfuse prompt: {e} — using fallback");
+            (FALLBACK_PROMPT.to_string(), Some(client))
+        }
+    }
 }
