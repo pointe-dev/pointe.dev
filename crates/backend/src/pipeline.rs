@@ -54,9 +54,11 @@ pub struct PipelineContext {
     pub critic_feedback: Vec<String>,
     /// Number of build attempts so far.
     pub build_attempts: u8,
-    /// Price in euros, set by run_pricing.
+    /// One-time setup fee in euros, set by run_pricing.
     pub price_quote: Option<u32>,
-    /// Client-facing justification for the price.
+    /// Monthly recurring fee in euros (maintenance + monitoring + n8n hosting if deploy_target="own").
+    pub price_monthly: Option<u32>,
+    /// Client-facing justification covering both one-time and monthly fees.
     pub price_justification: Option<String>,
     /// n8n workflow ID after deployment.
     pub n8n_workflow_id: Option<String>,

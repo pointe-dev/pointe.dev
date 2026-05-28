@@ -119,13 +119,20 @@ impl QdrantStore {
         #[derive(Deserialize)]
         struct Hit { payload: Option<TemplatePayload>, score: f32 }
 
-        let resp: SearchResp = self.http
+        let raw = self.http
             .post(self.url(&format!("/collections/{COLLECTION}/points/search")))
             .json(&SearchReq { vector: query_vector, limit, with_payload: true })
             .send()
             .await
-            .map_err(|e| e.to_string())?
-            .json()
+            .map_err(|e| e.to_string())?;
+
+        if !raw.status().is_success() {
+            let s = raw.status();
+            let b = raw.text().await.unwrap_or_default();
+            return Err(format!("Qdrant search {s}: {b}"));
+        }
+
+        let resp: SearchResp = raw.json()
             .await
             .map_err(|e| format!("Qdrant search parse: {e}"))?;
 

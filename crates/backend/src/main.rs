@@ -334,6 +334,7 @@ async fn main() {
         .route("/api/admin/ingest", post(handlers::ingest::ingest))
         .route("/api/stripe/checkout", post(handlers::stripe::create_checkout))
         .route("/api/stripe/webhook", post(handlers::stripe::webhook))
+        .route("/mcp", post(handlers::mcp::handle))
         .with_state(state)
         .nest(
             "/pkg",

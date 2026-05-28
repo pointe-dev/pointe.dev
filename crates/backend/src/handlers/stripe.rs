@@ -31,7 +31,7 @@ pub async fn create_checkout(
     let stripe = state.stripe.as_ref()
         .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Stripe not configured".to_string()))?;
 
-    let (price_eur, workflow_name) = {
+    let (price_eur, price_monthly_eur, workflow_name) = {
         let guard = state.pipelines.0.read().await;
         let record = guard.get(&payload.pipeline_id)
             .ok_or((StatusCode::NOT_FOUND, "pipeline not found".to_string()))?;
@@ -39,13 +39,15 @@ pub async fn create_checkout(
         let price = record.ctx.price_quote
             .ok_or((StatusCode::CONFLICT, "pipeline has no price quote yet".to_string()))?;
 
+        let monthly = record.ctx.price_monthly.unwrap_or(0);
+
         let name = record.ctx.workflow_json
             .as_ref()
             .and_then(|w| w["name"].as_str())
             .unwrap_or("Workflow d'automatisation")
             .to_string();
 
-        (price, name)
+        (price, monthly, name)
     };
 
     let app_url = std::env::var("APP_URL")
@@ -58,7 +60,7 @@ pub async fn create_checkout(
     let cancel_url = format!("{app_url}/#chat");
 
     let session = stripe
-        .create_checkout(payload.pipeline_id, price_eur, &workflow_name, &success_url, &cancel_url)
+        .create_checkout(payload.pipeline_id, price_eur, price_monthly_eur, &workflow_name, &success_url, &cancel_url)
         .await
         .map_err(|e| {
             tracing::error!("[stripe] checkout failed: {e}");
@@ -66,7 +68,7 @@ pub async fn create_checkout(
         })?;
 
     tracing::info!(
-        "[stripe] checkout created session={} pipeline={} price={price_eur}€",
+        "[stripe] checkout created session={} pipeline={} setup={price_eur}€ monthly={price_monthly_eur}€",
         session.id, payload.pipeline_id
     );
 

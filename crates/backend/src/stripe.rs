@@ -29,30 +29,41 @@ impl StripeClient {
         &self,
         pipeline_id: Uuid,
         price_eur: u32,
+        price_monthly_eur: u32,
         workflow_name: &str,
         success_url: &str,
         cancel_url: &str,
     ) -> Result<CheckoutSession, String> {
-        // Stripe amounts are in cents
-        let amount_cents = price_eur * 100;
+        let setup_cents = (price_eur * 100).to_string();
+        let monthly_cents = (price_monthly_eur * 100).to_string();
+        let monthly_desc = format!("Maintenance & monitoring mensuel — {workflow_name}");
 
-        // Stripe API uses form encoding with bracket-notation for nested fields
+        // Stripe API uses form encoding with bracket-notation for nested fields.
+        // Two line items: one-time setup + first month's recurring fee (informational).
+        // The recurring subscription is handled separately after payment confirmation.
         let params = [
             ("mode", "payment"),
             ("currency", "eur"),
+            // Line 0: one-time setup fee
             ("line_items[0][quantity]", "1"),
             ("line_items[0][price_data][currency]", "eur"),
             ("line_items[0][price_data][product_data][name]", workflow_name),
             ("line_items[0][price_data][product_data][description]",
                 "Workflow d'automatisation sur mesure — pointe.dev"),
-            ("line_items[0][price_data][unit_amount]", &amount_cents.to_string()),
+            ("line_items[0][price_data][unit_amount]", &setup_cents),
+            // Line 1: first month's recurring fee (transparent pricing)
+            ("line_items[1][quantity]", "1"),
+            ("line_items[1][price_data][currency]", "eur"),
+            ("line_items[1][price_data][product_data][name]", "Abonnement mensuel (1er mois)"),
+            ("line_items[1][price_data][product_data][description]", &monthly_desc),
+            ("line_items[1][price_data][unit_amount]", &monthly_cents),
             ("metadata[pipeline_id]", &pipeline_id.to_string()),
+            ("metadata[price_monthly]", &price_monthly_eur.to_string()),
             ("success_url", success_url),
             ("cancel_url", cancel_url),
-            // Allow promo codes
             ("allow_promotion_codes", "true"),
-            // Collect billing address for invoicing
             ("billing_address_collection", "auto"),
+            ("invoice_creation[enabled]", "true"),
         ];
 
         #[derive(serde::Deserialize)]
@@ -61,6 +72,7 @@ impl StripeClient {
         let resp = self.http
             .post("https://api.stripe.com/v1/checkout/sessions")
             .basic_auth(&self.secret_key, Option::<&str>::None)
+            .header("Stripe-Version", "2024-12-18.acacia")
             .form(&params)
             .send()
             .await

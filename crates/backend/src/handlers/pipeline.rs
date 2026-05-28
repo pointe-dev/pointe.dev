@@ -36,6 +36,12 @@ pub struct StatusResponse {
     pub pipeline_id: String,
     pub stage: serde_json::Value,
     pub updated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price_quote: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price_monthly: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price_justification: Option<String>,
 }
 
 /// GET /api/pipeline/:id
@@ -44,15 +50,16 @@ pub async fn status(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<StatusResponse>, StatusCode> {
-    let (stage, updated_at) = state.pipelines
-        .status(id)
-        .await
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let guard = state.pipelines.0.read().await;
+    let record = guard.get(&id).ok_or(StatusCode::NOT_FOUND)?;
 
     Ok(Json(StatusResponse {
         pipeline_id: id.to_string(),
-        stage: serde_json::to_value(&stage).unwrap_or_default(),
-        updated_at: updated_at.to_rfc3339(),
+        stage: serde_json::to_value(&record.stage).unwrap_or_default(),
+        updated_at: record.updated_at.to_rfc3339(),
+        price_quote: record.ctx.price_quote,
+        price_monthly: record.ctx.price_monthly,
+        price_justification: record.ctx.price_justification.clone(),
     }))
 }
 

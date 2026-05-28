@@ -32,10 +32,8 @@ pub async fn run_qualifier(app: &AppState, ctx: &mut PipelineContext) -> Result<
 
     // Fallback: infer from client_need (pipeline started via /api/pipeline/start directly)
     let prompt = format!(
-        "Extract a qualification summary from this automation request in one line.\n\
-Format: \"sector | main pain | current tools | approximate volume\"\n\
-Request: {}\n\
-Respond with only the summary line, nothing else.",
+        "Output a single line: \"sector | main pain | current tools | volume\"\n\
+Input: {}",
         ctx.client_need
     );
 
@@ -85,32 +83,15 @@ pub async fn run_research(app: &AppState, ctx: &mut PipelineContext) -> Result<(
     tracing::info!("[research] session={}", ctx.session_id);
 
     let prompt = format!(
-        "You are a senior automation consultant at pointe.dev, an automation agency.\n\
-Analyze the following client need and produce a technical research report.\n\n\
-Client need: {}\n\
-Qualification summary: {}\n\n\
-Respond with ONLY valid JSON matching this exact schema:\n\
-{{\n\
-  \"sector\": \"string (e.g. ecommerce, real-estate, logistics)\",\n\
-  \"current_tools\": [\"list of tools/software the client likely uses\"],\n\
-  \"pain_points\": [\"list of specific pain points to address\"],\n\
-  \"integrations_required\": [\n\
-    {{\n\
-      \"name\": \"Tool name\",\n\
-      \"n8n_node\": \"exact n8n node identifier or null if custom HTTP\",\n\
-      \"auth_type\": \"oauth2 | api_key | webhook | none\",\n\
-      \"notes\": \"brief setup note\"\n\
-    }}\n\
-  ],\n\
-  \"api_keys_to_acquire\": [\"list of API credentials pointe.dev must set up\"],\n\
-  \"feasibility_score\": 0-10,\n\
-  \"complexity\": \"simple | medium | complex\",\n\
-  \"estimated_build_hours\": \"range e.g. 2-4\",\n\
-  \"approach\": \"one sentence describing the automation architecture\",\n\
-  \"risks\": [\"up to 3 technical risks or edge cases to watch\"]\n\
-}}",
+        "Output ONLY valid JSON. No prose, no fences.\n\
+Client: {}\nSummary: {}\n\
+Schema: {{sector,current_tools[],pain_points[],\
+integrations_required[{{name,n8n_node,auth_type,notes}}],\
+api_keys_to_acquire[],feasibility_score(0-10),\
+complexity(simple|medium|complex),estimated_build_hours,\
+approach(1 sentence),risks[{{description,severity(low|medium|high)}}](max 3)}}",
         ctx.client_need,
-        ctx.qualification_summary.as_deref().unwrap_or("not yet available"),
+        ctx.qualification_summary.as_deref().unwrap_or(""),
     );
 
     #[derive(serde::Serialize)]
@@ -129,7 +110,7 @@ Respond with ONLY valid JSON matching this exact schema:\n\
         .header("content-type", "application/json")
         .json(&Req {
             model: "claude-sonnet-4-6",
-            max_tokens: 1024,
+            max_tokens: 2048,
             messages: vec![Msg { role: "user", content: prompt }],
         })
         .send()
@@ -250,16 +231,13 @@ pub async fn run_builder(app: &AppState, ctx: &mut PipelineContext) -> Result<()
     };
 
     let prompt = format!(
-        "You are an n8n workflow architect. Generate a production-ready n8n workflow JSON \
-for the following client need.\n\n\
-Client need: {}\n\
-Research findings: {}{}{}\n\n\
-Output ONLY valid JSON that can be imported directly into n8n. \
-Use realistic node types (e.g. n8n-nodes-base.webhook, n8n-nodes-base.gmail, \
-@n8n/n8n-nodes-langchain.openAi). Include node positions, connections, and \
-reasonable default parameters. No explanation, just the JSON.",
+        "Output ONLY valid n8n workflow JSON. No prose, no fences, no position fields.\n\
+Keep parameters minimal: only type, name, typeVersion, and 2-3 essential params per node.\n\
+Use {{}} for all credential/auth fields. Max 8 nodes.\n\
+Required top-level: name, nodes[], connections{{}}.\n\
+Client: {}\nResearch: {}{}{}",
         ctx.client_need,
-        ctx.research_output.as_deref().unwrap_or("none"),
+        ctx.research_output.as_deref().unwrap_or(""),
         rag_block,
         feedback_block,
     );
@@ -281,7 +259,7 @@ reasonable default parameters. No explanation, just the JSON.",
         .header("content-type", "application/json")
         .json(&Req {
             model: "claude-sonnet-4-6",
-            max_tokens: 4096,
+            max_tokens: 8192,
             messages: vec![Msg { role: "user", content: prompt }],
         })
         .send()
@@ -308,8 +286,10 @@ reasonable default parameters. No explanation, just the JSON.",
         .trim();
 
     ctx.workflow_json = Some(
-        serde_json::from_str(json_str)
-            .map_err(|e| AgentError(format!("workflow JSON parse: {e}")))?
+        serde_json::from_str(json_str).map_err(|e| {
+            let preview = &json_str[..json_str.len().min(500)];
+            AgentError(format!("workflow JSON parse: {e}\nRaw (first 500): {preview}"))
+        })?
     );
     Ok(())
 }
@@ -323,24 +303,12 @@ pub async fn run_critic(app: &AppState, ctx: &mut PipelineContext) -> Result<boo
         .ok_or_else(|| AgentError("critic called with no workflow_json".to_string()))?;
 
     let prompt = format!(
-        "You are a senior n8n automation architect doing a quality review.\n\n\
-Client need: {}\n\
-Qualification summary: {}\n\
-Research findings: {}\n\n\
-Workflow to review:\n{}\n\n\
-Evaluate the workflow on these criteria:\n\
-1. Node types are valid n8n node identifiers (e.g. n8n-nodes-base.webhook)\n\
-2. All connections reference nodes that exist in the workflow\n\
-3. The workflow actually solves the client need end-to-end\n\
-4. No missing critical steps (error handling, data mapping, authentication)\n\
-5. Complexity is appropriate — not over-engineered, not under-built\n\n\
-Respond with ONLY valid JSON in this exact format:\n\
-{{\"approved\": true}} \
-or \
-{{\"approved\": false, \"feedback\": \"Concise list of specific issues to fix, max 3 bullet points.\"}}",
+        "Output ONLY: {{\"approved\":true}} or {{\"approved\":false,\"feedback\":\"max 3 issues\"}}\n\
+Check: valid n8n node types, no broken connections, solves client need end-to-end, \
+no missing auth/error-handling, appropriate complexity.\n\
+Client: {}\nResearch: {}\nWorkflow:\n{}",
         ctx.client_need,
-        ctx.qualification_summary.as_deref().unwrap_or("none"),
-        ctx.research_output.as_deref().unwrap_or("none"),
+        ctx.research_output.as_deref().unwrap_or(""),
         serde_json::to_string_pretty(workflow).unwrap_or_default(),
     );
 
@@ -419,9 +387,14 @@ pub async fn run_pricing(app: &AppState, ctx: &mut PipelineContext) -> Result<()
         .map(|v| v.len())
         .unwrap_or(2);
 
-    let risk_count = research
+    // Risk premium: low=75, medium=150, high=300 per risk
+    let risk_premium: u32 = research
         .and_then(|r| r["risks"].as_array())
-        .map(|v| v.len())
+        .map(|risks| risks.iter().map(|r| match r["severity"].as_str() {
+            Some("high")   => 300,
+            Some("medium") => 150,
+            _              => 75,  // low or missing
+        }).sum())
         .unwrap_or(0);
 
     let feasibility: f32 = research
@@ -431,55 +404,62 @@ pub async fn run_pricing(app: &AppState, ctx: &mut PipelineContext) -> Result<()
 
     // Base price by complexity tier (euros)
     let base: u32 = match complexity {
-        "simple"  => 350,
-        "complex" => 1800,
-        _         => 800, // medium
+        "simple"  => 900,
+        "complex" => 6000,
+        _         => 2500, // medium
     };
 
-    // +€120 per integration beyond the first two
-    let integration_premium = (integration_count.saturating_sub(2) as u32) * 120;
-
-    // +€150 per identified risk
-    let risk_premium = risk_count as u32 * 150;
+    // +€200 per integration beyond the first two
+    let integration_premium = (integration_count.saturating_sub(2) as u32) * 200;
 
     // Low feasibility (<6) adds a complexity buffer
-    let feasibility_buffer: u32 = if feasibility < 6.0 { 400 } else { 0 };
+    let feasibility_buffer: u32 = if feasibility < 6.0 { 600 } else { 0 };
 
     // Node count from workflow (if already built — critic approved it)
     let node_count = ctx.workflow_json.as_ref()
         .and_then(|w| w["nodes"].as_array())
         .map(|n| n.len())
         .unwrap_or(0);
-    let node_premium = (node_count.saturating_sub(4) as u32) * 40;
+    let node_premium = (node_count.saturating_sub(5) as u32) * 60;
 
     let subtotal = base + integration_premium + risk_premium + feasibility_buffer + node_premium;
 
     // Round up to nearest €50 for clean invoice numbers
-    let price = ((subtotal + 49) / 50) * 50;
+    let setup_price = ((subtotal + 49) / 50) * 50;
+
+    // Monthly recurring fee: maintenance + monitoring + n8n hosting (if our instance)
+    // Base: 12% of setup, min per tier, +€30/integration beyond 2, rounded to €25
+    let monthly_base: u32 = match complexity {
+        "simple"  => 100,
+        "complex" => 500,
+        _         => 250, // medium
+    };
+    let monthly_integration_fee = (integration_count.saturating_sub(2) as u32) * 50;
+    let monthly_subtotal = monthly_base + monthly_integration_fee;
+    let monthly_price = ((monthly_subtotal + 24) / 25) * 25;
 
     tracing::info!(
-        "[pricing] base={base} +integrations={integration_premium} +risks={risk_premium} \
-+feasibility={feasibility_buffer} +nodes={node_premium} → {price}€"
+        "[pricing] setup={setup_price}€ (base={base} int={integration_premium} risks={risk_premium} \
+feas={feasibility_buffer} nodes={node_premium}) | monthly={monthly_price}€"
     );
+
+    let integrations_str = research
+        .and_then(|r| r["integrations_required"].as_array())
+        .map(|v| v.iter().filter_map(|i| i["name"].as_str()).collect::<Vec<_>>().join(", "))
+        .unwrap_or_else(|| "standard integrations".to_string());
 
     // --- 2. Haiku writes the client-facing justification ---
 
     let justification_prompt = format!(
-        "You are writing a short price justification for a client proposal. \
-Be professional, concrete, and focus on value delivered — not on our internal costs.\n\n\
-Project: {need}\n\
-Complexity: {complexity}\n\
-Integrations: {integrations}\n\
-Price: {price}€\n\n\
-Write 2-3 sentences maximum. Mention the specific integrations. \
-Emphasize time saved or errors eliminated. No fluff, no filler.",
+        "2-3 sentences. Professional, no filler. Mention integrations. Focus on time saved / errors eliminated.\n\
+Include both fees naturally in the last sentence.\n\
+Project: {need}\nComplexity: {complexity}\nIntegrations: {integrations}\n\
+Setup fee: {setup}€ (one-time) | Monthly: {monthly}€/mo (maintenance + monitoring + hosting)",
         need        = ctx.client_need,
         complexity  = complexity,
-        integrations = research
-            .and_then(|r| r["integrations_required"].as_array())
-            .map(|v| v.iter().filter_map(|i| i["name"].as_str()).collect::<Vec<_>>().join(", "))
-            .unwrap_or_else(|| "standard integrations".to_string()),
-        price = price,
+        integrations = integrations_str,
+        setup       = setup_price,
+        monthly     = monthly_price,
     );
 
     #[derive(serde::Serialize)]
@@ -514,10 +494,11 @@ Emphasize time saved or errors eliminated. No fluff, no filler.",
             .unwrap_or_default()
     } else {
         tracing::warn!("[pricing] justification call failed: {}", resp.status());
-        format!("Automatisation {complexity} — {price}€ incluant configuration et déploiement.")
+        format!("Automatisation {complexity} — {setup_price}€ (setup) + {monthly_price}€/mois.")
     };
 
-    ctx.price_quote        = Some(price);
+    ctx.price_quote        = Some(setup_price);
+    ctx.price_monthly      = Some(monthly_price);
     ctx.price_justification = Some(justification);
     Ok(())
 }
@@ -556,6 +537,17 @@ pub async fn run_deploy(app: &AppState, ctx: &mut PipelineContext) -> Result<(),
     // Ensure required top-level fields are present
     obj.entry("settings").or_insert_with(|| serde_json::json!({ "executionOrder": "v1" }));
     obj.entry("staticData").or_insert(serde_json::Value::Null);
+
+    // n8n requires position {x, y} on every node — inject a simple top-down layout if missing
+    if let Some(nodes) = obj.get_mut("nodes").and_then(|n| n.as_array_mut()) {
+        for (i, node) in nodes.iter_mut().enumerate() {
+            if let Some(obj) = node.as_object_mut() {
+                obj.entry("position").or_insert_with(|| {
+                    serde_json::json!({ "x": 250, "y": i as i64 * 200 })
+                });
+            }
+        }
+    }
 
     // Use client need as workflow name if the builder didn't set one
     obj.entry("name").or_insert_with(|| {
