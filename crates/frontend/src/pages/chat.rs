@@ -178,7 +178,7 @@ pub fn Chat() -> impl IntoView {
     };
 
     view! {
-        <div class="flex flex-col bg-white dark:bg-black" style="min-height: calc(100vh - 65px);">
+        <div class="flex flex-col bg-white dark:bg-black" style="height: calc(100vh - 65px);">
 
             {/* Main: chat + canvas */}
             <div class="flex flex-1 overflow-hidden">
