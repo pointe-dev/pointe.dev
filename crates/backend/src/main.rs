@@ -1,6 +1,7 @@
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{header, HeaderValue, StatusCode},
+    middleware::{self, Next},
     routing::{get, post},
     Json, Router,
 };
@@ -158,7 +159,12 @@ async fn main() {
         .route("/api/services", get(handlers::services::get_services))
         .route("/api/ai/chat", post(handle_ai_chat))
         .with_state(state)
-        .nest_service("/pkg", ServeDir::new("./crates/frontend/pkg"))
+        .nest(
+            "/pkg",
+            Router::new()
+                .nest_service("/", ServeDir::new("./crates/frontend/pkg"))
+                .layer(middleware::from_fn(no_store)),
+        )
         .nest_service("/", ServeDir::new("./crates/frontend"))
         .layer(CorsLayer::permissive())
         .layer(CompressionLayer::new());
@@ -173,6 +179,15 @@ async fn main() {
     axum::serve(listener, app)
         .await
         .expect("Server error");
+}
+
+async fn no_store(req: axum::extract::Request, next: Next) -> axum::response::Response {
+    let mut resp = next.run(req).await;
+    resp.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    resp
 }
 
 async fn init_langfuse(http: reqwest::Client) -> (String, Option<LangfuseClient>) {
