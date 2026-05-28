@@ -56,6 +56,8 @@ pub struct PipelineContext {
     pub build_attempts: u8,
     /// Price in euros, set by run_pricing.
     pub price_quote: Option<u32>,
+    /// Client-facing justification for the price.
+    pub price_justification: Option<String>,
     /// n8n workflow ID after deployment.
     pub n8n_workflow_id: Option<String>,
 }

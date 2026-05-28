@@ -350,13 +350,124 @@ or \
     }
 }
 
-/// Computes the price: workflow complexity score × token cost × margin target.
-/// Stores a euro amount in ctx.price_quote.
-pub async fn run_pricing(_app: &AppState, ctx: &mut PipelineContext) -> Result<(), AgentError> {
+/// Computes the price from research_json using deterministic rules, then asks Haiku
+/// to write a client-facing justification. Numbers never come from the LLM.
+pub async fn run_pricing(app: &AppState, ctx: &mut PipelineContext) -> Result<(), AgentError> {
     tracing::info!("[pricing] session={}", ctx.session_id);
-    // TODO: rule-based complexity (node count, integrations, volume) + Haiku explanation →
-    //   { base_cost_eur: u32, margin_multiplier: f32, final_price_eur: u32, justification: "" }
-    ctx.price_quote = Some(500);
+
+    // --- 1. Rule-based price calculation ---
+
+    let research = ctx.research_json.as_ref();
+
+    let complexity = research
+        .and_then(|r| r["complexity"].as_str())
+        .unwrap_or("medium");
+
+    let integration_count = research
+        .and_then(|r| r["integrations_required"].as_array())
+        .map(|v| v.len())
+        .unwrap_or(2);
+
+    let risk_count = research
+        .and_then(|r| r["risks"].as_array())
+        .map(|v| v.len())
+        .unwrap_or(0);
+
+    let feasibility: f32 = research
+        .and_then(|r| r["feasibility_score"].as_f64())
+        .map(|f| f as f32)
+        .unwrap_or(7.0);
+
+    // Base price by complexity tier (euros)
+    let base: u32 = match complexity {
+        "simple"  => 350,
+        "complex" => 1800,
+        _         => 800, // medium
+    };
+
+    // +€120 per integration beyond the first two
+    let integration_premium = (integration_count.saturating_sub(2) as u32) * 120;
+
+    // +€150 per identified risk
+    let risk_premium = risk_count as u32 * 150;
+
+    // Low feasibility (<6) adds a complexity buffer
+    let feasibility_buffer: u32 = if feasibility < 6.0 { 400 } else { 0 };
+
+    // Node count from workflow (if already built — critic approved it)
+    let node_count = ctx.workflow_json.as_ref()
+        .and_then(|w| w["nodes"].as_array())
+        .map(|n| n.len())
+        .unwrap_or(0);
+    let node_premium = (node_count.saturating_sub(4) as u32) * 40;
+
+    let subtotal = base + integration_premium + risk_premium + feasibility_buffer + node_premium;
+
+    // Round up to nearest €50 for clean invoice numbers
+    let price = ((subtotal + 49) / 50) * 50;
+
+    tracing::info!(
+        "[pricing] base={base} +integrations={integration_premium} +risks={risk_premium} \
++feasibility={feasibility_buffer} +nodes={node_premium} → {price}€"
+    );
+
+    // --- 2. Haiku writes the client-facing justification ---
+
+    let justification_prompt = format!(
+        "You are writing a short price justification for a client proposal. \
+Be professional, concrete, and focus on value delivered — not on our internal costs.\n\n\
+Project: {need}\n\
+Complexity: {complexity}\n\
+Integrations: {integrations}\n\
+Price: {price}€\n\n\
+Write 2-3 sentences maximum. Mention the specific integrations. \
+Emphasize time saved or errors eliminated. No fluff, no filler.",
+        need        = ctx.client_need,
+        complexity  = complexity,
+        integrations = research
+            .and_then(|r| r["integrations_required"].as_array())
+            .map(|v| v.iter().filter_map(|i| i["name"].as_str()).collect::<Vec<_>>().join(", "))
+            .unwrap_or_else(|| "standard integrations".to_string()),
+        price = price,
+    );
+
+    #[derive(serde::Serialize)]
+    struct Req { model: &'static str, max_tokens: u32, messages: Vec<Msg> }
+    #[derive(serde::Serialize)]
+    struct Msg { role: &'static str, content: String }
+    #[derive(serde::Deserialize)]
+    struct Resp { content: Vec<Content> }
+    #[derive(serde::Deserialize)]
+    struct Content { #[serde(rename = "type")] kind: String, text: Option<String> }
+
+    let resp = app.http
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", &app.anthropic_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&Req {
+            model: "claude-haiku-4-5-20251001",
+            max_tokens: 200,
+            messages: vec![Msg { role: "user", content: justification_prompt }],
+        })
+        .send()
+        .await
+        .map_err(|e| AgentError(format!("pricing justification request: {e}")))?;
+
+    let justification = if resp.status().is_success() {
+        let ant: Resp = resp.json().await
+            .map_err(|e| AgentError(format!("pricing justification parse: {e}")))?;
+        ant.content.into_iter()
+            .find(|c| c.kind == "text")
+            .and_then(|c| c.text)
+            .unwrap_or_default()
+    } else {
+        tracing::warn!("[pricing] justification call failed: {}", resp.status());
+        format!("Automatisation {complexity} — {price}€ incluant configuration et déploiement.")
+    };
+
+    ctx.price_quote        = Some(price);
+    ctx.price_justification = Some(justification);
     Ok(())
 }
 
