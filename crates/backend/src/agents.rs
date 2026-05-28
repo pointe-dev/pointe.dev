@@ -30,11 +30,121 @@ pub async fn run_qualifier(_app: &AppState, ctx: &mut PipelineContext) -> Result
 
 /// Researches the client's domain: required APIs, integration points, feasibility.
 /// Determines which API keys pointe.dev must acquire to plug into the client's stack.
-pub async fn run_research(_app: &AppState, ctx: &mut PipelineContext) -> Result<(), AgentError> {
+pub async fn run_research(app: &AppState, ctx: &mut PipelineContext) -> Result<(), AgentError> {
     tracing::info!("[research] session={}", ctx.session_id);
-    // TODO: web search (SerpAPI/Brave) + Sonnet analysis →
-    //   { apis_required: [], integration_notes: "", feasibility_score: 0-10 }
-    ctx.research_output = Some("stub: aucune intégration complexe détectée".to_string());
+
+    let prompt = format!(
+        "You are a senior automation consultant at pointe.dev, an automation agency.\n\
+Analyze the following client need and produce a technical research report.\n\n\
+Client need: {}\n\
+Qualification summary: {}\n\n\
+Respond with ONLY valid JSON matching this exact schema:\n\
+{{\n\
+  \"sector\": \"string (e.g. ecommerce, real-estate, logistics)\",\n\
+  \"current_tools\": [\"list of tools/software the client likely uses\"],\n\
+  \"pain_points\": [\"list of specific pain points to address\"],\n\
+  \"integrations_required\": [\n\
+    {{\n\
+      \"name\": \"Tool name\",\n\
+      \"n8n_node\": \"exact n8n node identifier or null if custom HTTP\",\n\
+      \"auth_type\": \"oauth2 | api_key | webhook | none\",\n\
+      \"notes\": \"brief setup note\"\n\
+    }}\n\
+  ],\n\
+  \"api_keys_to_acquire\": [\"list of API credentials pointe.dev must set up\"],\n\
+  \"feasibility_score\": 0-10,\n\
+  \"complexity\": \"simple | medium | complex\",\n\
+  \"estimated_build_hours\": \"range e.g. 2-4\",\n\
+  \"approach\": \"one sentence describing the automation architecture\",\n\
+  \"risks\": [\"up to 3 technical risks or edge cases to watch\"]\n\
+}}",
+        ctx.client_need,
+        ctx.qualification_summary.as_deref().unwrap_or("not yet available"),
+    );
+
+    #[derive(serde::Serialize)]
+    struct Req { model: &'static str, max_tokens: u32, messages: Vec<Msg> }
+    #[derive(serde::Serialize)]
+    struct Msg { role: &'static str, content: String }
+    #[derive(serde::Deserialize)]
+    struct Resp { content: Vec<Content> }
+    #[derive(serde::Deserialize)]
+    struct Content { #[serde(rename = "type")] kind: String, text: Option<String> }
+
+    let resp = app.http
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", &app.anthropic_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&Req {
+            model: "claude-sonnet-4-6",
+            max_tokens: 1024,
+            messages: vec![Msg { role: "user", content: prompt }],
+        })
+        .send()
+        .await
+        .map_err(|e| AgentError(format!("research request: {e}")))?;
+
+    if !resp.status().is_success() {
+        let s = resp.status();
+        let b = resp.text().await.unwrap_or_default();
+        return Err(AgentError(format!("research Sonnet {s}: {b}")));
+    }
+
+    let ant: Resp = resp.json().await.map_err(|e| AgentError(format!("research parse: {e}")))?;
+    let raw = ant.content.into_iter()
+        .find(|c| c.kind == "text")
+        .and_then(|c| c.text)
+        .unwrap_or_default();
+
+    let json_str = raw.trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    let structured: serde_json::Value = serde_json::from_str(json_str)
+        .map_err(|e| AgentError(format!("research JSON parse: {e} — raw: {raw}")))?;
+
+    // Human-readable summary for builder/critic prompts
+    let summary = format!(
+        "Sector: {sector}\n\
+Complexity: {complexity} | Feasibility: {score}/10 | Est. build: {hours}h\n\
+Integrations: {integrations}\n\
+API keys needed: {keys}\n\
+Approach: {approach}\n\
+Risks: {risks}",
+        sector    = structured["sector"].as_str().unwrap_or("unknown"),
+        complexity = structured["complexity"].as_str().unwrap_or("medium"),
+        score     = structured["feasibility_score"].as_f64().unwrap_or(7.0),
+        hours     = structured["estimated_build_hours"].as_str().unwrap_or("?"),
+        integrations = structured["integrations_required"]
+            .as_array().unwrap_or(&vec![])
+            .iter()
+            .map(|i| i["name"].as_str().unwrap_or("?"))
+            .collect::<Vec<_>>().join(", "),
+        keys = structured["api_keys_to_acquire"]
+            .as_array().unwrap_or(&vec![])
+            .iter()
+            .filter_map(|k| k.as_str())
+            .collect::<Vec<_>>().join(", "),
+        approach  = structured["approach"].as_str().unwrap_or(""),
+        risks     = structured["risks"]
+            .as_array().unwrap_or(&vec![])
+            .iter()
+            .filter_map(|r| r.as_str())
+            .collect::<Vec<_>>().join("; "),
+    );
+
+    tracing::info!(
+        "[research] session={} complexity={} feasibility={}/10",
+        ctx.session_id,
+        structured["complexity"].as_str().unwrap_or("?"),
+        structured["feasibility_score"].as_f64().unwrap_or(0.0),
+    );
+
+    ctx.research_output = Some(summary);
+    ctx.research_json = Some(structured);
     Ok(())
 }
 

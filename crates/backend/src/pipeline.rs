@@ -44,8 +44,10 @@ pub struct PipelineContext {
     pub client_need: String,
     /// Structured summary produced by run_qualifier.
     pub qualification_summary: Option<String>,
-    /// Findings from run_research.
+    /// Human-readable findings from run_research (fed into builder/critic prompts).
     pub research_output: Option<String>,
+    /// Structured research data (integrations, complexity, risks) — used by pricing.
+    pub research_json: Option<serde_json::Value>,
     /// n8n workflow JSON produced by run_builder.
     pub workflow_json: Option<serde_json::Value>,
     /// Critic feedback accumulated across build attempts.
