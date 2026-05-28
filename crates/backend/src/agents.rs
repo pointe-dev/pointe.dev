@@ -154,14 +154,90 @@ reasonable default parameters. No explanation, just the JSON.",
 }
 
 /// Validates the workflow for correctness, completeness, and client fit.
-/// Returns true if approved, false if revisions needed (feedback stored in ctx).
-pub async fn run_critic(_app: &AppState, ctx: &mut PipelineContext) -> Result<bool, AgentError> {
-    tracing::info!("[critic] session={}", ctx.session_id);
-    // TODO: Sonnet reviews workflow_json against qualification_summary + research_output →
-    //   { approved: bool, issues: [string], suggestions: [string] }
-    // On rejection: push feedback into ctx.critic_feedback before returning false
-    let _ = ctx; // suppress unused warning until implemented
-    Ok(true)
+/// Returns true if approved, false if revisions needed (feedback appended to ctx.critic_feedback).
+pub async fn run_critic(app: &AppState, ctx: &mut PipelineContext) -> Result<bool, AgentError> {
+    tracing::info!("[critic] session={} attempt={}", ctx.session_id, ctx.build_attempts);
+
+    let workflow = ctx.workflow_json.as_ref()
+        .ok_or_else(|| AgentError("critic called with no workflow_json".to_string()))?;
+
+    let prompt = format!(
+        "You are a senior n8n automation architect doing a quality review.\n\n\
+Client need: {}\n\
+Qualification summary: {}\n\
+Research findings: {}\n\n\
+Workflow to review:\n{}\n\n\
+Evaluate the workflow on these criteria:\n\
+1. Node types are valid n8n node identifiers (e.g. n8n-nodes-base.webhook)\n\
+2. All connections reference nodes that exist in the workflow\n\
+3. The workflow actually solves the client need end-to-end\n\
+4. No missing critical steps (error handling, data mapping, authentication)\n\
+5. Complexity is appropriate — not over-engineered, not under-built\n\n\
+Respond with ONLY valid JSON in this exact format:\n\
+{{\"approved\": true}} \
+or \
+{{\"approved\": false, \"feedback\": \"Concise list of specific issues to fix, max 3 bullet points.\"}}",
+        ctx.client_need,
+        ctx.qualification_summary.as_deref().unwrap_or("none"),
+        ctx.research_output.as_deref().unwrap_or("none"),
+        serde_json::to_string_pretty(workflow).unwrap_or_default(),
+    );
+
+    #[derive(serde::Serialize)]
+    struct Req { model: &'static str, max_tokens: u32, messages: Vec<Msg> }
+    #[derive(serde::Serialize)]
+    struct Msg { role: &'static str, content: String }
+    #[derive(serde::Deserialize)]
+    struct Resp { content: Vec<Content> }
+    #[derive(serde::Deserialize)]
+    struct Content { #[serde(rename = "type")] kind: String, text: Option<String> }
+    #[derive(serde::Deserialize)]
+    struct CriticVerdict { approved: bool, feedback: Option<String> }
+
+    let resp = app.http
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", &app.anthropic_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&Req {
+            model: "claude-sonnet-4-6",
+            max_tokens: 512,
+            messages: vec![Msg { role: "user", content: prompt }],
+        })
+        .send()
+        .await
+        .map_err(|e| AgentError(format!("critic request: {e}")))?;
+
+    if !resp.status().is_success() {
+        let s = resp.status();
+        let b = resp.text().await.unwrap_or_default();
+        return Err(AgentError(format!("critic Sonnet {s}: {b}")));
+    }
+
+    let ant: Resp = resp.json().await.map_err(|e| AgentError(format!("critic parse: {e}")))?;
+    let raw = ant.content.into_iter()
+        .find(|c| c.kind == "text")
+        .and_then(|c| c.text)
+        .unwrap_or_default();
+
+    let json_str = raw.trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    let verdict: CriticVerdict = serde_json::from_str(json_str)
+        .map_err(|e| AgentError(format!("critic verdict parse: {e} — raw: {raw}")))?;
+
+    if verdict.approved {
+        tracing::info!("[critic] approved on attempt {}", ctx.build_attempts);
+        Ok(true)
+    } else {
+        let feedback = verdict.feedback.unwrap_or_else(|| "unspecified issues".to_string());
+        tracing::warn!("[critic] rejected attempt {}: {feedback}", ctx.build_attempts);
+        ctx.critic_feedback.push(feedback);
+        Ok(false)
+    }
 }
 
 /// Computes the price: workflow complexity score × token cost × margin target.
