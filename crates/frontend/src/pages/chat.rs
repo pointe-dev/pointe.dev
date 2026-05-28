@@ -200,7 +200,7 @@ pub fn Chat() -> impl IntoView {
                     </div>
 
                     {/* Messages */}
-                    <div class="flex-1 overflow-y-auto px-6 py-6">
+                    <div class="chat-scroll flex-1 overflow-y-auto px-6 py-6">
                         <div class="max-w-2xl mx-auto space-y-5">
                             {move || {
                                 messages.get().into_iter().enumerate().map(|(i, (is_user, raw, html))| {
@@ -323,7 +323,7 @@ pub fn Chat() -> impl IntoView {
                     </div>
 
                     {/* Canvas body */}
-                    <div class="flex-1 overflow-y-auto p-6 relative">
+                    <div class="chat-scroll flex-1 overflow-y-auto p-6 relative">
 
                         {/* Mermaid SVG container — always in DOM so JS can inject */}
                         <div
