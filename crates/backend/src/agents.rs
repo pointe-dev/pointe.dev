@@ -40,21 +40,116 @@ pub async fn run_research(_app: &AppState, ctx: &mut PipelineContext) -> Result<
 
 /// Builds an n8n workflow JSON using Qdrant RAG over n8n templates + Apify docs.
 /// Runs up to MAX_BUILD_ATTEMPTS times, with critic feedback injected each retry.
-pub async fn run_builder(_app: &AppState, ctx: &mut PipelineContext) -> Result<(), AgentError> {
-    tracing::info!(
-        "[builder] session={} attempt={}",
-        ctx.session_id,
-        ctx.build_attempts
+pub async fn run_builder(app: &AppState, ctx: &mut PipelineContext) -> Result<(), AgentError> {
+    tracing::info!("[builder] session={} attempt={}", ctx.session_id, ctx.build_attempts);
+
+    // 1. Retrieve similar templates from Qdrant (if configured)
+    let templates_context = match (&app.qdrant, &app.openai_key) {
+        (Some(qdrant), Some(openai_key)) => {
+            let query = format!(
+                "{} {}",
+                ctx.client_need,
+                ctx.research_output.as_deref().unwrap_or_default()
+            );
+            match crate::embeddings::embed(&app.http, openai_key, &query).await {
+                Ok(vector) => match qdrant.search(vector, 3).await {
+                    Ok(hits) if !hits.is_empty() => {
+                        let summaries: Vec<String> = hits.iter().map(|h| {
+                            format!("Template: {}\nDescription: {}\nTags: {}",
+                                h.name, h.description, h.tags.join(", "))
+                        }).collect();
+                        tracing::info!("[builder] retrieved {} RAG templates", hits.len());
+                        summaries.join("\n\n---\n\n")
+                    }
+                    Ok(_) => { tracing::warn!("[builder] Qdrant returned no hits"); String::new() }
+                    Err(e) => { tracing::warn!("[builder] Qdrant search failed: {e}"); String::new() }
+                },
+                Err(e) => { tracing::warn!("[builder] embed failed: {e}"); String::new() }
+            }
+        }
+        _ => { tracing::warn!("[builder] RAG disabled (Qdrant or OpenAI not configured)"); String::new() }
+    };
+
+    // 2. Build the Sonnet prompt
+    let feedback_block = if ctx.critic_feedback.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nPrevious attempt was rejected. Critic feedback to address:\n{}",
+            ctx.critic_feedback.iter().enumerate()
+                .map(|(i, f)| format!("{}. {f}", i + 1))
+                .collect::<Vec<_>>().join("\n")
+        )
+    };
+
+    let rag_block = if templates_context.is_empty() {
+        String::new()
+    } else {
+        format!("\n\nSimilar workflow templates for reference:\n{templates_context}")
+    };
+
+    let prompt = format!(
+        "You are an n8n workflow architect. Generate a production-ready n8n workflow JSON \
+for the following client need.\n\n\
+Client need: {}\n\
+Research findings: {}{}{}\n\n\
+Output ONLY valid JSON that can be imported directly into n8n. \
+Use realistic node types (e.g. n8n-nodes-base.webhook, n8n-nodes-base.gmail, \
+@n8n/n8n-nodes-langchain.openAi). Include node positions, connections, and \
+reasonable default parameters. No explanation, just the JSON.",
+        ctx.client_need,
+        ctx.research_output.as_deref().unwrap_or("none"),
+        rag_block,
+        feedback_block,
     );
-    // TODO:
-    //   1. Embed client_need + research_output → query Qdrant
-    //   2. Reranker (Cohere) selects top-k n8n templates
-    //   3. Sonnet generates workflow JSON with critic_feedback injected
-    ctx.workflow_json = Some(serde_json::json!({
-        "name": format!("workflow-{}", ctx.session_id),
-        "nodes": [],
-        "connections": {}
-    }));
+
+    // 3. Call Anthropic Sonnet
+    #[derive(serde::Serialize)]
+    struct Req { model: &'static str, max_tokens: u32, messages: Vec<Msg> }
+    #[derive(serde::Serialize)]
+    struct Msg { role: &'static str, content: String }
+    #[derive(serde::Deserialize)]
+    struct Resp { content: Vec<Content> }
+    #[derive(serde::Deserialize)]
+    struct Content { #[serde(rename = "type")] kind: String, text: Option<String> }
+
+    let resp = app.http
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", &app.anthropic_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&Req {
+            model: "claude-sonnet-4-6",
+            max_tokens: 4096,
+            messages: vec![Msg { role: "user", content: prompt }],
+        })
+        .send()
+        .await
+        .map_err(|e| AgentError(format!("Sonnet request: {e}")))?;
+
+    if !resp.status().is_success() {
+        let s = resp.status();
+        let b = resp.text().await.unwrap_or_default();
+        return Err(AgentError(format!("Sonnet {s}: {b}")));
+    }
+
+    let ant: Resp = resp.json().await.map_err(|e| AgentError(format!("Sonnet parse: {e}")))?;
+    let raw = ant.content.into_iter()
+        .find(|c| c.kind == "text")
+        .and_then(|c| c.text)
+        .unwrap_or_default();
+
+    // Strip markdown fences if Sonnet wraps the JSON
+    let json_str = raw.trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    ctx.workflow_json = Some(
+        serde_json::from_str(json_str)
+            .map_err(|e| AgentError(format!("workflow JSON parse: {e}")))?
+    );
     Ok(())
 }
 

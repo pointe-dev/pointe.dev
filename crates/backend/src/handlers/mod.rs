@@ -1,3 +1,4 @@
 pub mod health;
+pub mod ingest;
 pub mod pipeline;
 pub mod services;

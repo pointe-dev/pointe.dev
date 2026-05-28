@@ -1,0 +1,137 @@
+[
+  {
+    "name": "Lead capture from web form to CRM",
+    "description": "Triggered by a webhook when a prospect submits a contact form. Enriches the lead with Clearbit, creates a contact in HubSpot or Pipedrive, sends a Slack notification to the sales team, and queues a follow-up email.",
+    "tags": ["crm", "lead", "form", "hubspot", "pipedrive", "slack", "email"],
+    "workflow_json": {
+      "name": "Lead capture → CRM",
+      "nodes": [
+        { "name": "Webhook", "type": "n8n-nodes-base.webhook", "position": [240, 300] },
+        { "name": "Enrich with Clearbit", "type": "n8n-nodes-base.httpRequest", "position": [460, 300] },
+        { "name": "Create CRM contact", "type": "n8n-nodes-base.hubspot", "position": [680, 300] },
+        { "name": "Slack notify", "type": "n8n-nodes-base.slack", "position": [900, 300] },
+        { "name": "Send welcome email", "type": "n8n-nodes-base.gmail", "position": [900, 460] }
+      ],
+      "connections": {
+        "Webhook": { "main": [[{ "node": "Enrich with Clearbit", "type": "main", "index": 0 }]] },
+        "Enrich with Clearbit": { "main": [[{ "node": "Create CRM contact", "type": "main", "index": 0 }]] },
+        "Create CRM contact": {
+          "main": [
+            [{ "node": "Slack notify", "type": "main", "index": 0 }],
+            [{ "node": "Send welcome email", "type": "main", "index": 0 }]
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "Invoice processing and payment follow-up",
+    "description": "Monitors a Gmail inbox for incoming invoices, extracts key data with an AI node, creates an entry in Airtable or Google Sheets, flags overdue invoices, and sends automated payment reminders by email.",
+    "tags": ["invoice", "finance", "gmail", "airtable", "google-sheets", "reminder", "ai"],
+    "workflow_json": {
+      "name": "Invoice processing",
+      "nodes": [
+        { "name": "Gmail trigger", "type": "n8n-nodes-base.gmailTrigger", "position": [240, 300] },
+        { "name": "Extract invoice data (AI)", "type": "@n8n/n8n-nodes-langchain.openAi", "position": [460, 300] },
+        { "name": "Save to Airtable", "type": "n8n-nodes-base.airtable", "position": [680, 300] },
+        { "name": "Is overdue?", "type": "n8n-nodes-base.if", "position": [900, 300] },
+        { "name": "Send reminder", "type": "n8n-nodes-base.gmail", "position": [1120, 200] },
+        { "name": "Mark paid", "type": "n8n-nodes-base.airtable", "position": [1120, 400] }
+      ],
+      "connections": {
+        "Gmail trigger": { "main": [[{ "node": "Extract invoice data (AI)", "type": "main", "index": 0 }]] },
+        "Extract invoice data (AI)": { "main": [[{ "node": "Save to Airtable", "type": "main", "index": 0 }]] },
+        "Save to Airtable": { "main": [[{ "node": "Is overdue?", "type": "main", "index": 0 }]] },
+        "Is overdue?": {
+          "main": [
+            [{ "node": "Send reminder", "type": "main", "index": 0 }],
+            [{ "node": "Mark paid", "type": "main", "index": 0 }]
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "E-commerce order fulfillment sync",
+    "description": "Syncs new orders from Shopify to a warehouse management system (WMS), updates stock in real time, sends shipping confirmation to the customer, and alerts the logistics team when stock falls below threshold.",
+    "tags": ["ecommerce", "shopify", "wms", "inventory", "shipping", "logistics"],
+    "workflow_json": {
+      "name": "Shopify order fulfillment",
+      "nodes": [
+        { "name": "Shopify trigger", "type": "n8n-nodes-base.shopifyTrigger", "position": [240, 300] },
+        { "name": "Create WMS shipment", "type": "n8n-nodes-base.httpRequest", "position": [460, 300] },
+        { "name": "Update inventory", "type": "n8n-nodes-base.shopify", "position": [680, 300] },
+        { "name": "Low stock?", "type": "n8n-nodes-base.if", "position": [900, 300] },
+        { "name": "Alert logistics team", "type": "n8n-nodes-base.slack", "position": [1120, 200] },
+        { "name": "Send shipping email", "type": "n8n-nodes-base.gmail", "position": [1120, 400] }
+      ],
+      "connections": {
+        "Shopify trigger": { "main": [[{ "node": "Create WMS shipment", "type": "main", "index": 0 }]] },
+        "Create WMS shipment": { "main": [[{ "node": "Update inventory", "type": "main", "index": 0 }]] },
+        "Update inventory": { "main": [[{ "node": "Low stock?", "type": "main", "index": 0 }]] },
+        "Low stock?": {
+          "main": [
+            [{ "node": "Alert logistics team", "type": "main", "index": 0 }],
+            [{ "node": "Send shipping email", "type": "main", "index": 0 }]
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "Customer support ticket routing and escalation",
+    "description": "Receives support tickets from Zendesk or email, classifies them by urgency and topic using an AI node, routes to the right team in Notion or Jira, auto-replies with an acknowledgement, and escalates unanswered tickets after 24 hours.",
+    "tags": ["support", "zendesk", "jira", "notion", "ai", "classification", "escalation"],
+    "workflow_json": {
+      "name": "Support ticket routing",
+      "nodes": [
+        { "name": "Zendesk trigger", "type": "n8n-nodes-base.zendeskTrigger", "position": [240, 300] },
+        { "name": "Classify ticket (AI)", "type": "@n8n/n8n-nodes-langchain.openAi", "position": [460, 300] },
+        { "name": "Route by priority", "type": "n8n-nodes-base.switch", "position": [680, 300] },
+        { "name": "Create Jira issue", "type": "n8n-nodes-base.jira", "position": [900, 200] },
+        { "name": "Create Notion task", "type": "n8n-nodes-base.notion", "position": [900, 400] },
+        { "name": "Auto-reply email", "type": "n8n-nodes-base.gmail", "position": [1120, 300] },
+        { "name": "Wait 24h then escalate", "type": "n8n-nodes-base.wait", "position": [1340, 300] }
+      ],
+      "connections": {
+        "Zendesk trigger": { "main": [[{ "node": "Classify ticket (AI)", "type": "main", "index": 0 }]] },
+        "Classify ticket (AI)": { "main": [[{ "node": "Route by priority", "type": "main", "index": 0 }]] },
+        "Route by priority": {
+          "main": [
+            [{ "node": "Create Jira issue", "type": "main", "index": 0 }],
+            [{ "node": "Create Notion task", "type": "main", "index": 0 }]
+          ]
+        },
+        "Create Jira issue": { "main": [[{ "node": "Auto-reply email", "type": "main", "index": 0 }]] },
+        "Auto-reply email": { "main": [[{ "node": "Wait 24h then escalate", "type": "main", "index": 0 }]] }
+      }
+    }
+  },
+  {
+    "name": "Automated social media publishing pipeline",
+    "description": "Takes content from a Google Sheets editorial calendar, generates social copy variations with an AI node for LinkedIn and Twitter, schedules posts at optimal times, and reports weekly engagement metrics back to the sheet.",
+    "tags": ["social-media", "linkedin", "twitter", "google-sheets", "ai", "scheduling", "content"],
+    "workflow_json": {
+      "name": "Social media publishing",
+      "nodes": [
+        { "name": "Schedule trigger", "type": "n8n-nodes-base.scheduleTrigger", "position": [240, 300] },
+        { "name": "Read editorial calendar", "type": "n8n-nodes-base.googleSheets", "position": [460, 300] },
+        { "name": "Generate copy (AI)", "type": "@n8n/n8n-nodes-langchain.openAi", "position": [680, 300] },
+        { "name": "Post to LinkedIn", "type": "n8n-nodes-base.linkedIn", "position": [900, 200] },
+        { "name": "Post to Twitter", "type": "n8n-nodes-base.twitter", "position": [900, 400] },
+        { "name": "Update sheet with status", "type": "n8n-nodes-base.googleSheets", "position": [1120, 300] }
+      ],
+      "connections": {
+        "Schedule trigger": { "main": [[{ "node": "Read editorial calendar", "type": "main", "index": 0 }]] },
+        "Read editorial calendar": { "main": [[{ "node": "Generate copy (AI)", "type": "main", "index": 0 }]] },
+        "Generate copy (AI)": {
+          "main": [
+            [{ "node": "Post to LinkedIn", "type": "main", "index": 0 }],
+            [{ "node": "Post to Twitter", "type": "main", "index": 0 }]
+          ]
+        },
+        "Post to LinkedIn": { "main": [[{ "node": "Update sheet with status", "type": "main", "index": 0 }]] }
+      }
+    }
+  }
+]

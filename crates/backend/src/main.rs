@@ -14,14 +14,17 @@ use tower_http::services::ServeDir;
 use tracing_subscriber;
 
 mod agents;
+mod embeddings;
 mod handlers;
 mod langfuse;
 mod pipeline;
+mod qdrant;
 mod sessions;
 mod state;
 
 use langfuse::LangfuseClient;
 use pipeline::PipelineStore;
+use qdrant::QdrantStore;
 use sessions::{SessionStore, FREE_MESSAGES};
 use state::AppState;
 
@@ -204,13 +207,24 @@ async fn main() {
 
     let (system_prompt, langfuse) = init_langfuse(http.clone()).await;
 
+    let openai_key = std::env::var("OPENAI_API_KEY").ok();
+    let qdrant = std::env::var("QDRANT_URL").ok().map(|url| {
+        tracing::info!("Qdrant configured at {url}");
+        QdrantStore::new(http.clone(), url)
+    });
+    if qdrant.is_none() {
+        tracing::warn!("QDRANT_URL not set — RAG disabled, builder uses stub");
+    }
+
     let state = Arc::new(AppState {
         anthropic_key,
+        openai_key,
         http,
         system_prompt,
         langfuse,
         sessions: SessionStore::new(),
         pipelines: PipelineStore::new(),
+        qdrant,
     });
 
     let app = Router::new()
@@ -221,6 +235,7 @@ async fn main() {
         .route("/api/pipeline/start", post(handlers::pipeline::start))
         .route("/api/pipeline/:id", get(handlers::pipeline::status))
         .route("/api/pipeline/:id/resume", post(handlers::pipeline::resume))
+        .route("/api/admin/ingest", post(handlers::ingest::ingest))
         .with_state(state)
         .nest(
             "/pkg",
