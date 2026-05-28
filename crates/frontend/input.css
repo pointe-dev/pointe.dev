@@ -512,29 +512,31 @@ html.dark {
   }
 }
 
-/* Thin scrollbar for chat areas */
-.chat-scroll {
+/* Global thin scrollbar */
+html {
   scrollbar-width: thin;
   scrollbar-color: rgba(156, 163, 175, 0.35) transparent;
 }
-.chat-scroll::-webkit-scrollbar       { width: 4px; }
-.chat-scroll::-webkit-scrollbar-track { background: transparent; }
-.chat-scroll::-webkit-scrollbar-thumb {
+html.dark {
+  scrollbar-color: rgba(75, 85, 99, 0.45) transparent;
+}
+::-webkit-scrollbar       { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
   background-color: rgba(156, 163, 175, 0.35);
   border-radius: 2px;
 }
-.chat-scroll::-webkit-scrollbar-thumb:hover {
+::-webkit-scrollbar-thumb:hover {
   background-color: rgba(156, 163, 175, 0.65);
 }
-.dark .chat-scroll {
-  scrollbar-color: rgba(75, 85, 99, 0.45) transparent;
-}
-.dark .chat-scroll::-webkit-scrollbar-thumb {
+.dark ::-webkit-scrollbar-thumb {
   background-color: rgba(75, 85, 99, 0.45);
 }
-.dark .chat-scroll::-webkit-scrollbar-thumb:hover {
+.dark ::-webkit-scrollbar-thumb:hover {
   background-color: rgba(75, 85, 99, 0.75);
 }
+/* Keep class for explicit overrides */
+.chat-scroll { overflow-y: auto; }
 
 /* Markdown rendering inside AI chat bubbles */
 .chat-md p          { margin-bottom: 0.5rem; }
