@@ -13,12 +13,15 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tracing_subscriber;
 
+mod agents;
 mod handlers;
 mod langfuse;
+mod pipeline;
 mod sessions;
 mod state;
 
 use langfuse::LangfuseClient;
+use pipeline::PipelineStore;
 use sessions::{SessionStore, FREE_MESSAGES};
 use state::AppState;
 
@@ -201,13 +204,23 @@ async fn main() {
 
     let (system_prompt, langfuse) = init_langfuse(http.clone()).await;
 
-    let state = Arc::new(AppState { anthropic_key, http, system_prompt, langfuse, sessions: SessionStore::new() });
+    let state = Arc::new(AppState {
+        anthropic_key,
+        http,
+        system_prompt,
+        langfuse,
+        sessions: SessionStore::new(),
+        pipelines: PipelineStore::new(),
+    });
 
     let app = Router::new()
         .route("/api/health", get(handlers::health::health_check))
         .route("/api/services", get(handlers::services::get_services))
         .route("/api/ai/chat", post(handle_ai_chat))
         .route("/api/auth/unlock", post(handle_unlock))
+        .route("/api/pipeline/start", post(handlers::pipeline::start))
+        .route("/api/pipeline/:id", get(handlers::pipeline::status))
+        .route("/api/pipeline/:id/resume", post(handlers::pipeline::resume))
         .with_state(state)
         .nest(
             "/pkg",

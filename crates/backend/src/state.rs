@@ -1,4 +1,5 @@
 use crate::langfuse::LangfuseClient;
+use crate::pipeline::PipelineStore;
 use crate::sessions::SessionStore;
 
 pub struct AppState {
@@ -7,4 +8,5 @@ pub struct AppState {
     pub system_prompt: String,
     pub langfuse: Option<LangfuseClient>,
     pub sessions: SessionStore,
+    pub pipelines: PipelineStore,
 }
