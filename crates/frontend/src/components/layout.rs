@@ -3,12 +3,21 @@ use crate::components::contact_modal::ContactModal;
 use crate::components::theme_toggle::ThemeToggle;
 use crate::pages::home::Home;
 use crate::pages::chat::Chat;
+use crate::pages::merci::Merci;
 use crate::i18n::{Lang, t};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Page {
     Home,
     Chat,
+    Merci,
+}
+
+fn detect_initial_page() -> Page {
+    web_sys::window()
+        .and_then(|w| w.location().pathname().ok())
+        .map(|p| if p.starts_with("/merci") { Page::Merci } else { Page::Home })
+        .unwrap_or(Page::Home)
 }
 
 fn scroll_to_top() {
@@ -29,7 +38,7 @@ fn scroll_to_gallery() {
 #[component]
 pub fn Layout() -> impl IntoView {
     let is_contact_open = create_rw_signal(false);
-    let active_page = create_rw_signal(Page::Home);
+    let active_page = create_rw_signal(detect_initial_page());
     let lang = create_rw_signal(Lang::Fr);
 
     provide_context(lang);
@@ -123,6 +132,11 @@ pub fn Layout() -> impl IntoView {
                     Page::Chat => view! {
                         <div class="page-transition">
                             <Chat />
+                        </div>
+                    }.into_view(),
+                    Page::Merci => view! {
+                        <div class="page-transition">
+                            <Merci on_home_click=move |_| active_page.set(Page::Home) />
                         </div>
                     }.into_view(),
                 }}
