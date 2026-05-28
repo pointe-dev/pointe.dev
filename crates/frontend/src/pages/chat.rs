@@ -7,8 +7,15 @@ use wasm_bindgen::closure::Closure;
 use crate::i18n::{Lang, t};
 
 #[derive(Serialize)]
+struct HistoryMsg {
+    role: String,
+    content: String,
+}
+
+#[derive(Serialize)]
 struct ChatRequest {
     description: String,
+    history: Vec<HistoryMsg>,
 }
 
 #[derive(Deserialize)]
@@ -108,6 +115,16 @@ pub fn Chat() -> impl IntoView {
         let err_msg     = t(lang.get_untracked(), "chat.error").to_string();
         let offline_msg = t(lang.get_untracked(), "chat.offline").to_string();
 
+        // Capture history before adding current message (skip index 0 = welcome)
+        let history: Vec<HistoryMsg> = messages.get_untracked()
+            .into_iter()
+            .skip(1)
+            .map(|(is_user, raw, _)| HistoryMsg {
+                role: if is_user { "user" } else { "assistant" }.to_string(),
+                content: raw,
+            })
+            .collect();
+
         let msg_for_api = msg.clone();
         batch(move || {
             input_text.set(String::new());
@@ -117,7 +134,7 @@ pub fn Chat() -> impl IntoView {
 
         spawn_local(async move {
             let result = Request::post("/api/ai/chat")
-                .json(&ChatRequest { description: msg_for_api })
+                .json(&ChatRequest { description: msg_for_api, history })
                 .unwrap()
                 .send()
                 .await;

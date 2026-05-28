@@ -42,8 +42,16 @@ graph TD
 - Réponse max : 200 mots hors diagramme";
 
 #[derive(Deserialize)]
+struct HistoryMsg {
+    role: String,
+    content: String,
+}
+
+#[derive(Deserialize)]
 struct ChatRequest {
     description: String,
+    #[serde(default)]
+    history: Vec<HistoryMsg>,
 }
 
 #[derive(Serialize)]
@@ -85,13 +93,16 @@ async fn handle_ai_chat(
 ) -> Result<Json<ChatResponse>, StatusCode> {
     let start = Utc::now();
 
+    let mut msgs = vec![OpenRouterMessage { role: "system", content: &state.system_prompt }];
+    for h in &payload.history {
+        msgs.push(OpenRouterMessage { role: &h.role, content: &h.content });
+    }
+    msgs.push(OpenRouterMessage { role: "user", content: &payload.description });
+
     let body = OpenRouterRequest {
         model: "openrouter/free",
         max_tokens: 4096,
-        messages: vec![
-            OpenRouterMessage { role: "system", content: &state.system_prompt },
-            OpenRouterMessage { role: "user",   content: &payload.description },
-        ],
+        messages: msgs,
     };
 
     let resp = state
