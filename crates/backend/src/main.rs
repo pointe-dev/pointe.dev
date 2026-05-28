@@ -60,31 +60,29 @@ struct ChatResponse {
 }
 
 #[derive(Serialize)]
-struct OpenRouterRequest<'a> {
-    model: &'a str,
+struct AnthropicRequest {
+    model: &'static str,
     max_tokens: u32,
-    messages: Vec<OpenRouterMessage<'a>>,
+    system: String,
+    messages: Vec<AnthropicMessage>,
 }
 
 #[derive(Serialize)]
-struct OpenRouterMessage<'a> {
-    role: &'a str,
-    content: &'a str,
+struct AnthropicMessage {
+    role: String,
+    content: String,
 }
 
 #[derive(Deserialize)]
-struct OpenRouterResponse {
-    choices: Vec<OpenRouterChoice>,
+struct AnthropicResponse {
+    content: Vec<AnthropicContent>,
 }
 
 #[derive(Deserialize)]
-struct OpenRouterChoice {
-    message: OpenRouterMessageOut,
-}
-
-#[derive(Deserialize)]
-struct OpenRouterMessageOut {
-    content: Option<String>,
+struct AnthropicContent {
+    #[serde(rename = "type")]
+    kind: String,
+    text: Option<String>,
 }
 
 async fn handle_ai_chat(
@@ -93,51 +91,55 @@ async fn handle_ai_chat(
 ) -> Result<Json<ChatResponse>, StatusCode> {
     let start = Utc::now();
 
-    let mut msgs = vec![OpenRouterMessage { role: "system", content: &state.system_prompt }];
-    for h in &payload.history {
-        msgs.push(OpenRouterMessage { role: &h.role, content: &h.content });
-    }
-    msgs.push(OpenRouterMessage { role: "user", content: &payload.description });
+    let messages: Vec<AnthropicMessage> = payload.history.into_iter()
+        .map(|h| AnthropicMessage { role: h.role, content: h.content })
+        .chain(std::iter::once(AnthropicMessage {
+            role: "user".to_string(),
+            content: payload.description.clone(),
+        }))
+        .collect();
 
-    let body = OpenRouterRequest {
-        model: "openrouter/free",
-        max_tokens: 4096,
-        messages: msgs,
+    let body = AnthropicRequest {
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1024,
+        system: state.system_prompt.clone(),
+        messages,
     };
 
     let resp = state
         .http
-        .post("https://openrouter.ai/api/v1/chat/completions")
-        .header("Authorization", format!("Bearer {}", state.openrouter_key))
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", &state.anthropic_key)
+        .header("anthropic-version", "2023-06-01")
         .header("content-type", "application/json")
         .json(&body)
         .send()
         .await
         .map_err(|e| {
-            tracing::error!("OpenRouter request failed: {e}");
+            tracing::error!("Anthropic request failed: {e}");
             StatusCode::BAD_GATEWAY
         })?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        tracing::error!("OpenRouter error {status}: {text}");
+        tracing::error!("Anthropic error {status}: {text}");
         return Err(StatusCode::BAD_GATEWAY);
     }
 
     let raw = resp.text().await.map_err(|e| {
-        tracing::error!("OpenRouter read error: {e}");
+        tracing::error!("Anthropic read error: {e}");
         StatusCode::BAD_GATEWAY
     })?;
-    tracing::debug!("OpenRouter raw response: {raw}");
 
-    let or_resp: OpenRouterResponse = serde_json::from_str(&raw).map_err(|e| {
-        tracing::error!("OpenRouter parse error: {e} — body: {raw}");
+    let ant_resp: AnthropicResponse = serde_json::from_str(&raw).map_err(|e| {
+        tracing::error!("Anthropic parse error: {e} — body: {raw}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let text = or_resp.choices.into_iter().next()
-        .and_then(|c| c.message.content)
+    let text = ant_resp.content.into_iter()
+        .find(|c| c.kind == "text")
+        .and_then(|c| c.text)
         .unwrap_or_default();
     let end = Utc::now();
 
@@ -147,7 +149,7 @@ async fn handle_ai_chat(
         let state2 = state.clone();
         tokio::spawn(async move {
             if let Some(lf) = &state2.langfuse {
-                lf.trace(&input, &output, "openrouter/free", start, end).await;
+                lf.trace(&input, &output, "claude-haiku-4-5-20251001", start, end).await;
             }
         });
     }
@@ -161,11 +163,11 @@ async fn main() {
     tracing_subscriber::fmt::init();
 
     let http = reqwest::Client::new();
-    let openrouter_key = std::env::var("OPENROUTER_API_KEY").expect("OPENROUTER_API_KEY must be set");
+    let anthropic_key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY must be set");
 
     let (system_prompt, langfuse) = init_langfuse(http.clone()).await;
 
-    let state = Arc::new(AppState { openrouter_key, http, system_prompt, langfuse });
+    let state = Arc::new(AppState { anthropic_key, http, system_prompt, langfuse });
 
     let app = Router::new()
         .route("/api/health", get(handlers::health::health_check))
