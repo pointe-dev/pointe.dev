@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber;
 
 mod agents;
@@ -335,6 +335,7 @@ async fn main() {
         .route("/api/stripe/checkout", post(handlers::stripe::create_checkout))
         .route("/api/stripe/webhook", post(handlers::stripe::webhook))
         .route("/mcp", post(handlers::mcp::handle))
+        .route("/merci", get(serve_index))
         .with_state(state)
         .nest(
             "/pkg",
@@ -342,12 +343,7 @@ async fn main() {
                 .nest_service("/", ServeDir::new("./crates/frontend/pkg"))
                 .layer(middleware::from_fn(no_store)),
         )
-        .nest(
-            "/",
-            Router::new()
-                .nest_service("/", ServeDir::new("./crates/frontend"))
-                .layer(middleware::from_fn(no_store)),
-        )
+        .fallback_service(ServeDir::new("./crates/frontend"))
         .layer(CorsLayer::permissive())
         .layer(CompressionLayer::new());
 
@@ -361,6 +357,20 @@ async fn main() {
     axum::serve(listener, app)
         .await
         .expect("Server error");
+}
+
+async fn serve_index() -> impl axum::response::IntoResponse {
+    match tokio::fs::read("./crates/frontend/index.html").await {
+        Ok(bytes) => axum::response::Response::builder()
+            .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+            .header(header::CACHE_CONTROL, "no-store")
+            .body(axum::body::Body::from(bytes))
+            .unwrap(),
+        Err(_) => axum::response::Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(axum::body::Body::empty())
+            .unwrap(),
+    }
 }
 
 async fn no_store(req: axum::extract::Request, next: Next) -> axum::response::Response {
