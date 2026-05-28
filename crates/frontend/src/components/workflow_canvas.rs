@@ -40,10 +40,10 @@ pub struct WfEdge {
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
-const NODE_W: f32 = 140.0;
-const NODE_H: f32 = 44.0;
-const ROW_GAP: f32 = 90.0;   // vertical spacing between ranks
-const COL_GAP: f32 = 32.0;   // horizontal gap between nodes on same rank
+const NODE_W: f32 = 112.0;
+const NODE_H: f32 = 36.0;
+const ROW_GAP: f32 = 64.0;
+const COL_GAP: f32 = 20.0;
 
 struct LayoutNode {
     id: String,
@@ -172,7 +172,7 @@ pub fn WorkflowCanvas(graph: WorkflowGraph) -> impl IntoView {
     view! {
         <svg
             viewBox=vbox
-            style="width:100%;height:auto;overflow:visible"
+            style="display:block;margin:0 auto;width:100%;max-width:320px;height:auto;overflow:visible"
             xmlns="http://www.w3.org/2000/svg"
         >
             <defs>
@@ -238,7 +238,7 @@ pub fn WorkflowCanvas(graph: WorkflowGraph) -> impl IntoView {
                             y=n.y + NODE_H / 2.0
                             text-anchor="middle"
                             dominant-baseline="middle"
-                            font-size="12"
+                            font-size="11"
                             font-family="Ubuntu, sans-serif"
                             fill=text_fill
                             class="select-none"
