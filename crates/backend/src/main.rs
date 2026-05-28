@@ -76,7 +76,7 @@ struct OpenRouterChoice {
 
 #[derive(Deserialize)]
 struct OpenRouterMessageOut {
-    content: String,
+    content: Option<String>,
 }
 
 async fn handle_ai_chat(
@@ -87,7 +87,7 @@ async fn handle_ai_chat(
 
     let body = OpenRouterRequest {
         model: "openrouter/free",
-        max_tokens: 1024,
+        max_tokens: 4096,
         messages: vec![
             OpenRouterMessage { role: "system", content: &state.system_prompt },
             OpenRouterMessage { role: "user",   content: &payload.description },
@@ -125,7 +125,9 @@ async fn handle_ai_chat(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let text = or_resp.choices.into_iter().next().map(|c| c.message.content).unwrap_or_default();
+    let text = or_resp.choices.into_iter().next()
+        .and_then(|c| c.message.content)
+        .unwrap_or_default();
     let end = Utc::now();
 
     if state.langfuse.is_some() {
