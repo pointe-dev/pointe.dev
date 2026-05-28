@@ -5,9 +5,9 @@
 
 set -euo pipefail
 
-# Load .env
+# Load .env (strips Windows CRLF line endings)
 if [[ -f .env ]]; then
-  set -a; source .env; set +a
+  set -a; source <(sed 's/\r//' .env); set +a
 fi
 
 : "${LANGFUSE_PUBLIC_KEY:?LANGFUSE_PUBLIC_KEY not set}"
