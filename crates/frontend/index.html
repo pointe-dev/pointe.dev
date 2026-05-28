@@ -21,11 +21,15 @@
             max-width: 100%;
             display: block;
         }
-        #mermaid-canvas .node rect,
-        #mermaid-canvas .node circle,
-        #mermaid-canvas .node polygon {
-            rx: 8px;
-            ry: 8px;
+        #mermaid-canvas .node rect {
+            rx: 8;
+            ry: 8;
+        }
+        #mermaid-canvas .node .label {
+            font-family: 'Ubuntu', sans-serif !important;
+        }
+        #mermaid-canvas .edgePath path {
+            stroke-width: 2px;
         }
     </style>
     <!-- Mermaid for workflow diagrams -->
@@ -38,19 +42,19 @@
             startOnLoad: false,
             theme: 'base',
             themeVariables: {
-                primaryColor: isDark ? '#1a1a1a' : '#ffffff',
-                primaryBorderColor: isDark ? '#374151' : '#e5e7eb',
-                primaryTextColor: isDark ? '#f3f4f6' : '#111827',
+                primaryColor: isDark ? '#18181b' : '#f8fafc',
+                primaryBorderColor: isDark ? '#52525b' : '#cbd5e1',
+                primaryTextColor: isDark ? '#f4f4f5' : '#0f172a',
                 lineColor: '#dc2626',
-                secondaryColor: isDark ? '#1f1f1f' : '#fff1f2',
-                tertiaryColor: isDark ? '#111111' : '#f9fafb',
-                edgeLabelBackground: isDark ? '#1a1a1a' : '#ffffff',
+                secondaryColor: isDark ? '#27272a' : '#fff1f2',
+                tertiaryColor: isDark ? '#1a1a1e' : '#f1f5f9',
+                edgeLabelBackground: isDark ? '#18181b' : '#f8fafc',
                 fontFamily: "'Ubuntu', sans-serif",
-                fontSize: '13px',
-                nodeSpacing: 40,
-                rankSpacing: 50,
+                fontSize: '14px',
+                nodeSpacing: 50,
+                rankSpacing: 64,
             },
-            flowchart: { curve: 'monotoneY', padding: 20, useMaxWidth: true },
+            flowchart: { curve: 'basis', padding: 28, useMaxWidth: true },
             securityLevel: 'loose'
         });
 

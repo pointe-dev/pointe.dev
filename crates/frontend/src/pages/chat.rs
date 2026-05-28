@@ -18,10 +18,16 @@ struct ChatResponse {
 
 // Split off ```mermaid ... ``` blocks from AI response text
 fn parse_mermaid(content: &str) -> (String, Option<String>) {
-    const OPEN: &str = "```mermaid\n";
+    const OPEN: &str = "```mermaid";
     const CLOSE: &str = "\n```";
     if let Some(s) = content.find(OPEN) {
-        let after = &content[s + OPEN.len()..];
+        // skip the rest of the opening line (tolerates trailing spaces)
+        let after_tag = &content[s + OPEN.len()..];
+        let after = if let Some(nl) = after_tag.find('\n') {
+            &after_tag[nl + 1..]
+        } else {
+            return (content.to_string(), None);
+        };
         if let Some(e) = after.find(CLOSE) {
             let diagram = after[..e].trim().to_string();
             let before  = content[..s].trim();
@@ -203,7 +209,9 @@ pub fn Chat() -> impl IntoView {
                                                             copy_text(&text);
                                                             copied_idx.set(Some(i));
                                                             let ci = copied_idx;
-                                                            let cb = Closure::once(move || ci.set(None));
+                                                            let cb = Closure::<dyn Fn()>::wrap(Box::new(move || {
+                                                                let _ = ci.try_update(|v| *v = None);
+                                                            }));
                                                             if let Some(w) = web_sys::window() {
                                                                 let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
                                                                     cb.as_ref().unchecked_ref(), 2000
@@ -284,7 +292,7 @@ pub fn Chat() -> impl IntoView {
                 </div>
 
                 {/* Mermaid canvas — desktop only */}
-                <div class="hidden lg:flex flex-col w-96 xl:w-[420px] border-l border-gray-100 dark:border-gray-900 bg-gray-50/30 dark:bg-gray-950/30 shrink-0">
+                <div class="hidden lg:flex flex-col w-[480px] xl:w-[560px] border-l border-gray-100 dark:border-gray-900 bg-gray-50/30 dark:bg-gray-950/30 shrink-0">
 
                     {/* Canvas header */}
                     <div class="px-5 py-4 border-b border-gray-100 dark:border-gray-900 flex items-center justify-between shrink-0">

@@ -140,11 +140,12 @@ async fn main() {
         .layer(CorsLayer::permissive())
         .layer(CompressionLayer::new());
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3001")
+    let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3001".to_string());
+    let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await
-        .expect("Failed to bind to port 3001");
+        .expect("Failed to bind");
 
-    tracing::info!("✨ pointe.dev listening on http://0.0.0.0:3001");
+    tracing::info!("✨ pointe.dev listening on http://{bind_addr}");
 
     axum::serve(listener, app)
         .await
