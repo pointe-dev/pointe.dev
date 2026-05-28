@@ -471,14 +471,93 @@ Emphasize time saved or errors eliminated. No fluff, no filler.",
     Ok(())
 }
 
-/// Deploys the workflow to n8n via REST API and activates it.
+/// Deploys the workflow to n8n (our instance or client's) and activates it.
 pub async fn run_deploy(app: &AppState, ctx: &mut PipelineContext) -> Result<(), AgentError> {
-    tracing::info!("[deploy] session={}", ctx.session_id);
-    // TODO: POST /api/v1/workflows to n8n (our instance or client's)
-    //       then POST /api/v1/workflows/:id/activate
-    let _n8n_url = std::env::var("N8N_URL").unwrap_or_else(|_| "http://localhost:5678".to_string());
-    let _n8n_key = std::env::var("N8N_API_KEY").unwrap_or_default();
-    let _ = app;
-    ctx.n8n_workflow_id = Some("stub-workflow-id".to_string());
+    tracing::info!("[deploy] session={} target={}", ctx.session_id,
+        ctx.deploy_target.as_deref().unwrap_or("own"));
+
+    let workflow = ctx.workflow_json.as_ref()
+        .ok_or_else(|| AgentError("deploy called with no workflow_json".to_string()))?;
+
+    // Resolve n8n endpoint and API key based on deploy target
+    let (n8n_url, n8n_key) = match ctx.deploy_target.as_deref().unwrap_or("own") {
+        "client" => {
+            let url = ctx.client_n8n_url.clone()
+                .ok_or_else(|| AgentError("deploy_target=client but client_n8n_url is unset".to_string()))?;
+            let key = ctx.client_n8n_key.clone()
+                .ok_or_else(|| AgentError("deploy_target=client but client_n8n_key is unset".to_string()))?;
+            (url, key)
+        }
+        _ => {
+            let url = std::env::var("N8N_URL")
+                .unwrap_or_else(|_| "http://localhost:5678".to_string());
+            let key = std::env::var("N8N_API_KEY")
+                .map_err(|_| AgentError("N8N_API_KEY not set".to_string()))?;
+            (url, key)
+        }
+    };
+
+    // n8n expects this top-level shape when creating a workflow
+    let mut body = workflow.clone();
+    let obj = body.as_object_mut()
+        .ok_or_else(|| AgentError("workflow_json is not a JSON object".to_string()))?;
+
+    // Ensure required top-level fields are present
+    obj.entry("settings").or_insert_with(|| serde_json::json!({ "executionOrder": "v1" }));
+    obj.entry("staticData").or_insert(serde_json::Value::Null);
+
+    // Use client need as workflow name if the builder didn't set one
+    obj.entry("name").or_insert_with(|| {
+        serde_json::Value::String(format!(
+            "pointe.dev — {}",
+            ctx.client_need.chars().take(60).collect::<String>()
+        ))
+    });
+
+    // --- 1. Create the workflow ---
+    #[derive(serde::Deserialize)]
+    struct CreateResp { id: String }
+
+    let create_resp = app.http
+        .post(format!("{n8n_url}/api/v1/workflows"))
+        .header("X-N8N-API-KEY", &n8n_key)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| AgentError(format!("n8n create request: {e}")))?;
+
+    if !create_resp.status().is_success() {
+        let s = create_resp.status();
+        let b = create_resp.text().await.unwrap_or_default();
+        return Err(AgentError(format!("n8n create {s}: {b}")));
+    }
+
+    let created: CreateResp = create_resp.json().await
+        .map_err(|e| AgentError(format!("n8n create parse: {e}")))?;
+
+    tracing::info!("[deploy] workflow created id={}", created.id);
+
+    // --- 2. Activate the workflow ---
+    let activate_resp = app.http
+        .post(format!("{n8n_url}/api/v1/workflows/{}/activate", created.id))
+        .header("X-N8N-API-KEY", &n8n_key)
+        .send()
+        .await
+        .map_err(|e| AgentError(format!("n8n activate request: {e}")))?;
+
+    if !activate_resp.status().is_success() {
+        // Activation failure is non-fatal — workflow exists, client can activate manually
+        tracing::warn!(
+            "[deploy] workflow {} created but activation failed: {}",
+            created.id,
+            activate_resp.status()
+        );
+    } else {
+        tracing::info!("[deploy] workflow {} activated", created.id);
+    }
+
+    ctx.n8n_workflow_id  = Some(created.id.clone());
+    ctx.n8n_workflow_url = Some(format!("{n8n_url}/workflow/{}", created.id));
     Ok(())
 }

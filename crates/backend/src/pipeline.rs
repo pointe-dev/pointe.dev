@@ -60,6 +60,14 @@ pub struct PipelineContext {
     pub price_justification: Option<String>,
     /// n8n workflow ID after deployment.
     pub n8n_workflow_id: Option<String>,
+    /// Direct URL to the workflow in the n8n editor.
+    pub n8n_workflow_url: Option<String>,
+    /// "own" (our instance) or "client" (client's own n8n). Defaults to "own".
+    pub deploy_target: Option<String>,
+    /// Client's n8n URL (only set when deploy_target = "client").
+    pub client_n8n_url: Option<String>,
+    /// Client's n8n API key (only set when deploy_target = "client").
+    pub client_n8n_key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
