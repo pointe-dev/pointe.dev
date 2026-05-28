@@ -3,6 +3,7 @@ use crate::langfuse::LangfuseClient;
 use crate::pipeline::PipelineStore;
 use crate::qdrant::QdrantStore;
 use crate::sessions::SessionStore;
+use crate::stripe::StripeClient;
 
 pub struct AppState {
     pub anthropic_key: String,
@@ -13,4 +14,5 @@ pub struct AppState {
     pub pipelines: PipelineStore,
     pub qdrant: Option<QdrantStore>,
     pub embeddings: Option<EmbeddingEngine>,
+    pub stripe: Option<StripeClient>,
 }

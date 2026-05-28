@@ -21,6 +21,7 @@ mod pipeline;
 mod qdrant;
 mod sessions;
 mod state;
+mod stripe;
 
 use embeddings::EmbeddingEngine;
 use langfuse::LangfuseClient;
@@ -28,6 +29,7 @@ use pipeline::PipelineStore;
 use qdrant::QdrantStore;
 use sessions::{SessionStore, FREE_MESSAGES};
 use state::AppState;
+use stripe::StripeClient;
 
 const FALLBACK_PROMPT: &str = "\
 Tu es l'assistant IA de pointe.dev, une agence d'automatisation sur mesure. \
@@ -226,6 +228,20 @@ async fn main() {
         tracing::info!("Embedding engine ready (BGE-M3, 1024 dims, local)");
     }
 
+    let stripe = match (
+        std::env::var("STRIPE_SECRET_KEY").ok(),
+        std::env::var("STRIPE_WEBHOOK_SECRET").ok(),
+    ) {
+        (Some(sk), Some(wh)) => {
+            tracing::info!("Stripe configured");
+            Some(StripeClient::new(http.clone(), sk, wh))
+        }
+        _ => {
+            tracing::warn!("STRIPE_SECRET_KEY or STRIPE_WEBHOOK_SECRET not set — payments disabled");
+            None
+        }
+    };
+
     let state = Arc::new(AppState {
         anthropic_key,
         http,
@@ -235,6 +251,7 @@ async fn main() {
         pipelines: PipelineStore::new(),
         qdrant,
         embeddings,
+        stripe,
     });
 
     let app = Router::new()
@@ -246,6 +263,8 @@ async fn main() {
         .route("/api/pipeline/:id", get(handlers::pipeline::status))
         .route("/api/pipeline/:id/resume", post(handlers::pipeline::resume))
         .route("/api/admin/ingest", post(handlers::ingest::ingest))
+        .route("/api/stripe/checkout", post(handlers::stripe::create_checkout))
+        .route("/api/stripe/webhook", post(handlers::stripe::webhook))
         .with_state(state)
         .nest(
             "/pkg",
