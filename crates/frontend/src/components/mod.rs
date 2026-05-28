@@ -1,4 +1,5 @@
 pub mod layout;
+pub mod workflow_canvas;
 pub mod behind_curtain;
 pub mod theme;
 pub mod theme_toggle;

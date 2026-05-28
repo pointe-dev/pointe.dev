@@ -16,6 +16,7 @@ console_log = "1.0"
 log = "0.4"
 gloo-net = "0.6"
 pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
+petgraph = { version = "0.6", default-features = false, features = ["stable_graph"] }
 
 shared = { path = "../shared" }
 

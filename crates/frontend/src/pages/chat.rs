@@ -5,6 +5,7 @@ use gloo_net::http::Request;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use crate::i18n::{Lang, t};
+use crate::components::workflow_canvas::{WorkflowCanvas, WorkflowGraph};
 
 #[derive(Serialize)]
 struct HistoryMsg {
@@ -23,12 +24,11 @@ struct ChatResponse {
     response: String,
 }
 
-// Split off ```mermaid ... ``` blocks from AI response text
-fn parse_mermaid(content: &str) -> (String, Option<String>) {
-    const OPEN: &str = "```mermaid";
+// Extract ```workflow JSON blocks from AI response
+fn parse_workflow(content: &str) -> (String, Option<WorkflowGraph>) {
+    const OPEN: &str = "```workflow";
     const CLOSE: &str = "\n```";
     if let Some(s) = content.find(OPEN) {
-        // skip the rest of the opening line (tolerates trailing spaces)
         let after_tag = &content[s + OPEN.len()..];
         let after = if let Some(nl) = after_tag.find('\n') {
             &after_tag[nl + 1..]
@@ -36,16 +36,17 @@ fn parse_mermaid(content: &str) -> (String, Option<String>) {
             return (content.to_string(), None);
         };
         if let Some(e) = after.find(CLOSE) {
-            let diagram = after[..e].trim().to_string();
-            let before  = content[..s].trim();
-            let rest    = after[e + CLOSE.len()..].trim();
+            let json = after[..e].trim();
+            let before = content[..s].trim();
+            let rest   = after[e + CLOSE.len()..].trim();
             let text = match (before.is_empty(), rest.is_empty()) {
                 (true,  true)  => String::new(),
                 (false, true)  => before.to_string(),
                 (true,  false) => rest.to_string(),
                 (false, false) => format!("{}\n\n{}", before, rest),
             };
-            return (text, Some(diagram));
+            let graph = serde_json::from_str::<WorkflowGraph>(json).ok();
+            return (text, graph);
         }
     }
     (content.to_string(), None)
@@ -84,7 +85,7 @@ pub fn Chat() -> impl IntoView {
     let input_text    = create_rw_signal(String::new());
     let is_loading    = create_rw_signal(false);
     let copied_idx: RwSignal<Option<usize>> = create_rw_signal(None);
-    let current_diagram: RwSignal<Option<String>> = create_rw_signal(None);
+    let current_graph: RwSignal<Option<WorkflowGraph>> = create_rw_signal(None);
 
     // Auto-scroll to end on new message
     create_effect(move |_| {
@@ -95,16 +96,6 @@ pub fn Chat() -> impl IntoView {
                     el.scroll_into_view();
                 }
             }
-        }
-    });
-
-    // Render mermaid diagram when it changes
-    create_effect(move |_| {
-        if let Some(ref code) = current_diagram.get() {
-            let _ = js_sys::Function::new_with_args(
-                "code",
-                "renderMermaidTo(code, 'mermaid-canvas')"
-            ).call1(&wasm_bindgen::JsValue::NULL, &wasm_bindgen::JsValue::from_str(code));
         }
     });
 
@@ -142,11 +133,11 @@ pub fn Chat() -> impl IntoView {
             match result {
                 Ok(resp) => match resp.json::<ChatResponse>().await {
                     Ok(data) => {
-                        let (text, diagram) = parse_mermaid(&data.response);
+                        let (text, graph) = parse_workflow(&data.response);
                         let html = render_markdown(&text);
                         batch(move || {
                             messages.update(|v| v.push((false, text, html)));
-                            if let Some(d) = diagram { current_diagram.set(Some(d)); }
+                            if let Some(g) = graph { current_graph.set(Some(g)); }
                             is_loading.set(false);
                         });
                     }
@@ -308,13 +299,13 @@ pub fn Chat() -> impl IntoView {
                     </div>
                 </div>
 
-                {/* Mermaid canvas — desktop only */}
+                {/* Workflow canvas — desktop only */}
                 <div class="hidden lg:flex flex-col w-[480px] xl:w-[560px] border-l border-gray-100 dark:border-gray-900 bg-gray-50/30 dark:bg-gray-950/30 shrink-0">
 
                     {/* Canvas header */}
                     <div class="px-5 py-4 border-b border-gray-100 dark:border-gray-900 flex items-center justify-between shrink-0">
                         <p class="text-xs text-gray-400 uppercase tracking-widest">"Votre workflow"</p>
-                        {move || current_diagram.get().map(|_| view! {
+                        {move || current_graph.get().map(|_| view! {
                             <span class="flex items-center gap-1.5">
                                 <span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span>
                                 <span class="text-xs text-gray-400">"Généré par IA"</span>
@@ -324,33 +315,28 @@ pub fn Chat() -> impl IntoView {
 
                     {/* Canvas body */}
                     <div class="chat-scroll flex-1 overflow-y-auto p-6 relative">
-
-                        {/* Mermaid SVG container — always in DOM so JS can inject */}
-                        <div
-                            id="mermaid-canvas"
-                            class=move || if current_diagram.get().is_some() {
-                                "w-full animate-canvas-in"
-                            } else {
-                                "hidden"
-                            }
-                        ></div>
-
-                        {/* Empty state */}
-                        {move || current_diagram.get().is_none().then(|| view! {
-                            <div class="flex flex-col items-center justify-center h-full min-h-48 text-center px-4 py-8">
-                                <div class="w-16 h-16 rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-800 flex items-center justify-center mb-5">
-                                    <svg class="w-7 h-7 text-gray-300 dark:text-gray-700" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
-                                    </svg>
+                        {move || match current_graph.get() {
+                            Some(g) => view! {
+                                <div class="w-full animate-canvas-in">
+                                    <WorkflowCanvas graph=g />
                                 </div>
-                                <p class="text-sm font-medium text-gray-400 dark:text-gray-600 mb-2">
-                                    "Workflow en attente"
-                                </p>
-                                <p class="text-xs text-gray-300 dark:text-gray-700 leading-relaxed max-w-[160px]">
-                                    "Décrivez votre processus — l'IA le visualisera ici en temps réel."
-                                </p>
-                            </div>
-                        })}
+                            }.into_view(),
+                            None => view! {
+                                <div class="flex flex-col items-center justify-center h-full min-h-48 text-center px-4 py-8">
+                                    <div class="w-16 h-16 rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-800 flex items-center justify-center mb-5">
+                                        <svg class="w-7 h-7 text-gray-300 dark:text-gray-700" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
+                                        </svg>
+                                    </div>
+                                    <p class="text-sm font-medium text-gray-400 dark:text-gray-600 mb-2">
+                                        "Workflow en attente"
+                                    </p>
+                                    <p class="text-xs text-gray-300 dark:text-gray-700 leading-relaxed max-w-[160px]">
+                                        "Décrivez votre processus — l'IA le visualisera ici en temps réel."
+                                    </p>
+                                </div>
+                            }.into_view(),
+                        }}
                     </div>
                 </div>
             </div>
