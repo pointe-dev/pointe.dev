@@ -7,6 +7,25 @@ use wasm_bindgen::closure::Closure;
 use crate::i18n::{Lang, t};
 use crate::components::workflow_canvas::{WorkflowCanvas, WorkflowGraph};
 
+const FREE_MESSAGES: u32 = 5;
+
+fn get_or_create_session_id() -> String {
+    let window = web_sys::window().unwrap();
+    let storage = window.local_storage().unwrap().unwrap();
+    if let Ok(Some(id)) = storage.get_item("_sid") {
+        return id;
+    }
+    // Generate a simple UUID-like ID via Math.random
+    let id = js_sys::eval(
+        "'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,\
+         function(c){var r=Math.random()*16|0,v=c=='x'?r:(r&0x3|0x8);return v.toString(16)})"
+    ).ok()
+     .and_then(|v| v.as_string())
+     .unwrap_or_else(|| format!("{}", js_sys::Date::now() as u64));
+    let _ = storage.set_item("_sid", &id);
+    id
+}
+
 #[derive(Serialize)]
 struct HistoryMsg {
     role: String,
@@ -17,11 +36,25 @@ struct HistoryMsg {
 struct ChatRequest {
     description: String,
     history: Vec<HistoryMsg>,
+    session_id: String,
 }
 
 #[derive(Deserialize)]
 struct ChatResponse {
     response: String,
+    messages_used: u32,
+    messages_free: u32,
+}
+
+#[derive(Serialize)]
+struct UnlockRequest {
+    session_id: String,
+    email: String,
+}
+
+#[derive(Deserialize)]
+struct UnlockResponse {
+    ok: bool,
 }
 
 // Extract ```workflow JSON blocks from AI response
@@ -77,6 +110,10 @@ pub fn Chat() -> impl IntoView {
     let lang = use_context::<RwSignal<Lang>>()
         .unwrap_or_else(|| create_rw_signal(Lang::Fr));
 
+    let session_id = get_or_create_session_id();
+    let session_id_send = session_id.clone();
+    let session_id_unlock = session_id.clone();
+
     let welcome_raw = t(lang.get_untracked(), "chat.welcome").to_string();
     let welcome_html = render_markdown(&welcome_raw);
 
@@ -86,6 +123,10 @@ pub fn Chat() -> impl IntoView {
     let is_loading    = create_rw_signal(false);
     let copied_idx: RwSignal<Option<usize>> = create_rw_signal(None);
     let current_graph: RwSignal<Option<WorkflowGraph>> = create_rw_signal(None);
+    let messages_used: RwSignal<u32> = create_rw_signal(0);
+    let show_unlock: RwSignal<bool> = create_rw_signal(false);
+    let email_input = create_rw_signal(String::new());
+    let unlock_error = create_rw_signal(false);
 
     // Auto-scroll to end on new message
     create_effect(move |_| {
@@ -117,6 +158,7 @@ pub fn Chat() -> impl IntoView {
             .collect();
 
         let msg_for_api = msg.clone();
+        let sid = session_id_send.clone();
         batch(move || {
             input_text.set(String::new());
             messages.update(|v| v.push((true, msg.clone(), msg.clone())));
@@ -125,28 +167,38 @@ pub fn Chat() -> impl IntoView {
 
         spawn_local(async move {
             let result = Request::post("/api/ai/chat")
-                .json(&ChatRequest { description: msg_for_api, history })
+                .json(&ChatRequest { description: msg_for_api, history, session_id: sid })
                 .unwrap()
                 .send()
                 .await;
 
             match result {
-                Ok(resp) => match resp.json::<ChatResponse>().await {
-                    Ok(data) => {
-                        let (text, graph) = parse_workflow(&data.response);
-                        let html = render_markdown(&text);
+                Ok(resp) => {
+                    if resp.status() == 402 {
                         batch(move || {
-                            messages.update(|v| v.push((false, text, html)));
-                            if let Some(g) = graph { current_graph.set(Some(g)); }
+                            show_unlock.set(true);
                             is_loading.set(false);
                         });
+                        return;
                     }
-                    Err(_) => {
-                        let html = render_markdown(&err_msg);
-                        batch(move || {
-                            messages.update(|v| v.push((false, err_msg, html)));
-                            is_loading.set(false);
-                        });
+                    match resp.json::<ChatResponse>().await {
+                        Ok(data) => {
+                            let (text, graph) = parse_workflow(&data.response);
+                            let html = render_markdown(&text);
+                            batch(move || {
+                                messages.update(|v| v.push((false, text, html)));
+                                if let Some(g) = graph { current_graph.set(Some(g)); }
+                                messages_used.set(data.messages_used);
+                                is_loading.set(false);
+                            });
+                        }
+                        Err(_) => {
+                            let html = render_markdown(&err_msg);
+                            batch(move || {
+                                messages.update(|v| v.push((false, err_msg, html)));
+                                is_loading.set(false);
+                            });
+                        }
                     }
                 },
                 Err(_) => {
@@ -160,6 +212,39 @@ pub fn Chat() -> impl IntoView {
         });
     };
 
+    // Email unlock submit
+    let on_unlock_submit = move |ev: web_sys::SubmitEvent| {
+        ev.prevent_default();
+        let email = email_input.get_untracked().trim().to_string();
+        if email.is_empty() { return; }
+        let sid = session_id_unlock.clone();
+        spawn_local(async move {
+            let resp = Request::post("/api/auth/unlock")
+                .json(&UnlockRequest { session_id: sid, email })
+                .unwrap()
+                .send()
+                .await;
+            match resp {
+                Ok(r) => {
+                    if let Ok(data) = r.json::<UnlockResponse>().await {
+                        if data.ok {
+                            batch(move || {
+                                show_unlock.set(false);
+                                unlock_error.set(false);
+                                messages_used.set(0);
+                            });
+                        } else {
+                            unlock_error.set(true);
+                        }
+                    }
+                }
+                Err(_) => unlock_error.set(true),
+            }
+        });
+    };
+
+    let on_unlock_submit = store_value(on_unlock_submit);
+
     let send_clone = send.clone();
     let on_keydown = move |ev: web_sys::KeyboardEvent| {
         if ev.key() == "Enter" && !ev.shift_key() {
@@ -169,7 +254,40 @@ pub fn Chat() -> impl IntoView {
     };
 
     view! {
-        <div class="flex flex-col bg-white dark:bg-black" style="height: calc(100vh - 65px);">
+        <div class="relative flex flex-col bg-white dark:bg-black" style="height: calc(100vh - 65px);">
+
+            {/* Email unlock modal */}
+            {move || show_unlock.get().then(|| view! {
+                <div class="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+                    <div class="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200 dark:border-gray-800 p-8 max-w-sm w-full mx-4 shadow-2xl">
+                        <p class="text-xs text-red-600 uppercase tracking-widest mb-3">"pointe.dev"</p>
+                        <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-2">
+                            "Continuez gratuitement"
+                        </h3>
+                        <p class="text-sm text-gray-500 dark:text-gray-400 mb-6 leading-relaxed">
+                            "Vous avez utilisé vos " {FREE_MESSAGES} " messages gratuits. Entrez votre email pour continuer — sans spam, promis."
+                        </p>
+                        <form on:submit=move |ev| on_unlock_submit.with_value(|f| f(ev)) class="flex flex-col gap-3">
+                            <input
+                                type="email"
+                                placeholder="votre@email.com"
+                                class="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:border-red-500 transition-colors"
+                                prop:value=move || email_input.get()
+                                on:input=move |ev| email_input.set(event_target_value(&ev))
+                            />
+                            {move || unlock_error.get().then(|| view! {
+                                <p class="text-xs text-red-500">"Email invalide, réessayez."</p>
+                            })}
+                            <button
+                                type="submit"
+                                class="w-full py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold transition-colors"
+                            >
+                                "Continuer la conversation →"
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            })}
 
             {/* Main: chat + canvas */}
             <div class="flex flex-1 overflow-hidden">
@@ -179,14 +297,29 @@ pub fn Chat() -> impl IntoView {
 
                     {/* Header */}
                     <div class="border-b border-gray-100 dark:border-gray-900 px-6 py-6 shrink-0">
-                        <div class="max-w-2xl mx-auto">
-                            <p class="text-xs text-gray-400 dark:text-gray-600 uppercase tracking-widest mb-2">"pointe.dev"</p>
-                            <h2 class="text-2xl font-bold text-gray-900 dark:text-white">
-                                {move || t(lang.get(), "chat.title")}
-                            </h2>
-                            <p class="text-sm text-gray-400 dark:text-gray-500 mt-1 font-light">
-                                {move || t(lang.get(), "chat.sub")}
-                            </p>
+                        <div class="max-w-2xl mx-auto flex items-start justify-between">
+                            <div>
+                                <p class="text-xs text-gray-400 dark:text-gray-600 uppercase tracking-widest mb-2">"pointe.dev"</p>
+                                <h2 class="text-2xl font-bold text-gray-900 dark:text-white">
+                                    {move || t(lang.get(), "chat.title")}
+                                </h2>
+                                <p class="text-sm text-gray-400 dark:text-gray-500 mt-1 font-light">
+                                    {move || t(lang.get(), "chat.sub")}
+                                </p>
+                            </div>
+                            {move || {
+                                let used = messages_used.get();
+                                let remaining = FREE_MESSAGES.saturating_sub(used);
+                                (used > 0).then(|| view! {
+                                    <span class=move || format!(
+                                        "text-xs px-2.5 py-1 rounded-full border shrink-0 mt-1 {}",
+                                        if remaining == 0 { "border-red-300 text-red-500 dark:border-red-800 dark:text-red-400" }
+                                        else { "border-gray-200 text-gray-400 dark:border-gray-800 dark:text-gray-500" }
+                                    )>
+                                        {format!("{remaining} message{} gratuit{}", if remaining > 1 { "s" } else { "" }, if remaining > 1 { "s" } else { "" })}
+                                    </span>
+                                })
+                            }}
                         </div>
                     </div>
 

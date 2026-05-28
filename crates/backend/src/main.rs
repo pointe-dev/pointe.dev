@@ -15,9 +15,11 @@ use tracing_subscriber;
 
 mod handlers;
 mod langfuse;
+mod sessions;
 mod state;
 
 use langfuse::LangfuseClient;
+use sessions::{SessionStore, FREE_MESSAGES};
 use state::AppState;
 
 const FALLBACK_PROMPT: &str = "\
@@ -52,11 +54,25 @@ struct ChatRequest {
     description: String,
     #[serde(default)]
     history: Vec<HistoryMsg>,
+    session_id: String,
 }
 
 #[derive(Serialize)]
 struct ChatResponse {
     response: String,
+    messages_used: u32,
+    messages_free: u32,
+}
+
+#[derive(Deserialize)]
+struct UnlockRequest {
+    session_id: String,
+    email: String,
+}
+
+#[derive(Serialize)]
+struct UnlockResponse {
+    ok: bool,
 }
 
 #[derive(Serialize)]
@@ -85,10 +101,28 @@ struct AnthropicContent {
     text: Option<String>,
 }
 
+async fn handle_unlock(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<UnlockRequest>,
+) -> Json<UnlockResponse> {
+    let email = payload.email.trim().to_lowercase();
+    let valid = email.contains('@') && email.contains('.');
+    if valid {
+        state.sessions.unlock_with_email(&payload.session_id, email).await;
+    }
+    Json(UnlockResponse { ok: valid })
+}
+
 async fn handle_ai_chat(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, StatusCode> {
+    let session_key = payload.session_id.clone();
+    if !state.sessions.check_and_increment(&session_key).await {
+        return Err(StatusCode::PAYMENT_REQUIRED);
+    }
+    let messages_used = state.sessions.message_count(&session_key).await;
+
     let start = Utc::now();
 
     let messages: Vec<AnthropicMessage> = payload.history.into_iter()
@@ -154,7 +188,7 @@ async fn handle_ai_chat(
         });
     }
 
-    Ok(Json(ChatResponse { response: text }))
+    Ok(Json(ChatResponse { response: text, messages_used, messages_free: FREE_MESSAGES }))
 }
 
 #[tokio::main]
@@ -167,12 +201,13 @@ async fn main() {
 
     let (system_prompt, langfuse) = init_langfuse(http.clone()).await;
 
-    let state = Arc::new(AppState { anthropic_key, http, system_prompt, langfuse });
+    let state = Arc::new(AppState { anthropic_key, http, system_prompt, langfuse, sessions: SessionStore::new() });
 
     let app = Router::new()
         .route("/api/health", get(handlers::health::health_check))
         .route("/api/services", get(handlers::services::get_services))
         .route("/api/ai/chat", post(handle_ai_chat))
+        .route("/api/auth/unlock", post(handle_unlock))
         .with_state(state)
         .nest(
             "/pkg",
