@@ -178,7 +178,12 @@ async fn main() {
                 .nest_service("/", ServeDir::new("./crates/frontend/pkg"))
                 .layer(middleware::from_fn(no_store)),
         )
-        .nest_service("/", ServeDir::new("./crates/frontend"))
+        .nest(
+            "/",
+            Router::new()
+                .nest_service("/", ServeDir::new("./crates/frontend"))
+                .layer(middleware::from_fn(no_store)),
+        )
         .layer(CorsLayer::permissive())
         .layer(CompressionLayer::new());
 
