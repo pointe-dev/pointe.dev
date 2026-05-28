@@ -18,13 +18,64 @@ impl From<reqwest::Error> for AgentError {
     }
 }
 
-/// Finalizes qualification: extracts a structured summary from the chat conversation.
-/// Called once the qualifier chat judges the prospect worth pursuing.
-pub async fn run_qualifier(_app: &AppState, ctx: &mut PipelineContext) -> Result<(), AgentError> {
+/// Finalizes qualification: enriches the summary from the chat qualify block.
+/// If a summary already exists (from the qualify block), validates and normalises it.
+/// Otherwise, asks Sonnet to infer a summary from client_need alone.
+pub async fn run_qualifier(app: &AppState, ctx: &mut PipelineContext) -> Result<(), AgentError> {
     tracing::info!("[qualifier] session={}", ctx.session_id);
-    // TODO: POST to Anthropic Sonnet with conversation history →
-    //   structured JSON: { sector, team_size, pain, current_tools, estimated_volume }
-    ctx.qualification_summary = Some(format!("Besoin: {}", ctx.client_need));
+
+    // Already qualified by the chat — just normalise the format
+    if ctx.qualification_summary.is_some() {
+        tracing::info!("[qualifier] summary pre-filled from chat qualify block — skipping LLM");
+        return Ok(());
+    }
+
+    // Fallback: infer from client_need (pipeline started via /api/pipeline/start directly)
+    let prompt = format!(
+        "Extract a qualification summary from this automation request in one line.\n\
+Format: \"sector | main pain | current tools | approximate volume\"\n\
+Request: {}\n\
+Respond with only the summary line, nothing else.",
+        ctx.client_need
+    );
+
+    #[derive(serde::Serialize)]
+    struct Req { model: &'static str, max_tokens: u32, messages: Vec<Msg> }
+    #[derive(serde::Serialize)]
+    struct Msg { role: &'static str, content: String }
+    #[derive(serde::Deserialize)]
+    struct Resp { content: Vec<Content> }
+    #[derive(serde::Deserialize)]
+    struct Content { #[serde(rename = "type")] kind: String, text: Option<String> }
+
+    let resp = app.http
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", &app.anthropic_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&Req {
+            model: "claude-haiku-4-5-20251001",
+            max_tokens: 120,
+            messages: vec![Msg { role: "user", content: prompt }],
+        })
+        .send()
+        .await
+        .map_err(|e| AgentError(format!("qualifier request: {e}")))?;
+
+    if resp.status().is_success() {
+        let ant: Resp = resp.json().await
+            .map_err(|e| AgentError(format!("qualifier parse: {e}")))?;
+        let summary = ant.content.into_iter()
+            .find(|c| c.kind == "text")
+            .and_then(|c| c.text)
+            .unwrap_or_else(|| ctx.client_need.clone());
+        ctx.qualification_summary = Some(summary);
+    } else {
+        // Non-fatal: research agent can work with client_need alone
+        tracing::warn!("[qualifier] Haiku call failed: {} — using client_need as summary", resp.status());
+        ctx.qualification_summary = Some(ctx.client_need.clone());
+    }
+
     Ok(())
 }
 

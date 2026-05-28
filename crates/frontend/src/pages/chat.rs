@@ -44,6 +44,8 @@ struct ChatResponse {
     response: String,
     messages_used: u32,
     messages_free: u32,
+    /// Present when the AI qualified the prospect and launched a pipeline.
+    pipeline_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -127,6 +129,7 @@ pub fn Chat() -> impl IntoView {
     let show_unlock: RwSignal<bool> = create_rw_signal(false);
     let email_input = create_rw_signal(String::new());
     let unlock_error = create_rw_signal(false);
+    let pipeline_id: RwSignal<Option<String>> = create_rw_signal(None);
 
     // Auto-scroll to end on new message
     create_effect(move |_| {
@@ -189,6 +192,7 @@ pub fn Chat() -> impl IntoView {
                                 messages.update(|v| v.push((false, text, html)));
                                 if let Some(g) = graph { current_graph.set(Some(g)); }
                                 messages_used.set(data.messages_used);
+                                if let Some(pid) = data.pipeline_id { pipeline_id.set(Some(pid)); }
                                 is_loading.set(false);
                             });
                         }
@@ -307,19 +311,27 @@ pub fn Chat() -> impl IntoView {
                                     {move || t(lang.get(), "chat.sub")}
                                 </p>
                             </div>
-                            {move || {
-                                let used = messages_used.get();
-                                let remaining = FREE_MESSAGES.saturating_sub(used);
-                                (used > 0).then(|| view! {
-                                    <span class=move || format!(
-                                        "text-xs px-2.5 py-1 rounded-full border shrink-0 mt-1 {}",
-                                        if remaining == 0 { "border-red-300 text-red-500 dark:border-red-800 dark:text-red-400" }
-                                        else { "border-gray-200 text-gray-400 dark:border-gray-800 dark:text-gray-500" }
-                                    )>
-                                        {format!("{remaining} message{} gratuit{}", if remaining > 1 { "s" } else { "" }, if remaining > 1 { "s" } else { "" })}
+                            <div class="flex flex-col items-end gap-2 shrink-0 mt-1">
+                                {move || {
+                                    let used = messages_used.get();
+                                    let remaining = FREE_MESSAGES.saturating_sub(used);
+                                    (used > 0).then(|| view! {
+                                        <span class=move || format!(
+                                            "text-xs px-2.5 py-1 rounded-full border {}",
+                                            if remaining == 0 { "border-red-300 text-red-500 dark:border-red-800 dark:text-red-400" }
+                                            else { "border-gray-200 text-gray-400 dark:border-gray-800 dark:text-gray-500" }
+                                        )>
+                                            {format!("{remaining} message{} gratuit{}", if remaining > 1 { "s" } else { "" }, if remaining > 1 { "s" } else { "" })}
+                                        </span>
+                                    })
+                                }}
+                                {move || pipeline_id.get().map(|_| view! {
+                                    <span class="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-red-200 text-red-500 dark:border-red-900 dark:text-red-400">
+                                        <span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span>
+                                        "Workflow en cours d'analyse"
                                     </span>
-                                })
-                            }}
+                                })}
+                            </div>
                         </div>
                     </div>
 

@@ -88,12 +88,23 @@ impl PipelineStore {
     }
 
     /// Creates a new pipeline, returns its ID.
-    pub async fn create(&self, session_id: String, client_need: String) -> Uuid {
+    /// `qualification_summary` is pre-filled from the chat qualify block when available.
+    pub async fn create(
+        &self,
+        session_id: String,
+        client_need: String,
+        qualification_summary: Option<String>,
+    ) -> Uuid {
         let id = Uuid::new_v4();
         self.0.write().await.insert(id, PipelineRecord {
             id,
             stage: PipelineStage::Qualifying,
-            ctx: PipelineContext { session_id, client_need, ..Default::default() },
+            ctx: PipelineContext {
+                session_id,
+                client_need,
+                qualification_summary,
+                ..Default::default()
+            },
             updated_at: Utc::now(),
         });
         id

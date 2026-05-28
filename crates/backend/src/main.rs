@@ -39,18 +39,27 @@ Tu es concis, précis, professionnel et chaleureux.
 Règles absolues :
 - Réponds TOUJOURS dans la langue de l'utilisateur (FR, EN ou DE)
 - Pose des questions ciblées pour qualifier le besoin : secteur, volume de tâches, taille d'équipe, douleur principale
-- Quand l'utilisateur décrit un processus ou workflow, génère OBLIGATOIREMENT un diagramme Mermaid \
+- Quand l'utilisateur décrit un processus ou workflow, génère OBLIGATOIREMENT un bloc workflow \
   dans le format exact suivant (sans espace avant les backticks) :
-```mermaid
-graph TD
-  A[Étape 1] --> B[Étape 2]
+```workflow
+{\"nodes\":[{\"id\":\"1\",\"label\":\"Étape 1\",\"kind\":\"start\"},{\"id\":\"2\",\"label\":\"Étape 2\",\"kind\":\"process\"}],\"edges\":[{\"from\":\"1\",\"to\":\"2\"}]}
 ```
-- Utilise TOUJOURS graph TD (top-down), jamais LR
-- Les nœuds Mermaid doivent être courts (3-4 mots max), 4-6 nœuds maximum, le graphe lisible
-- Après le diagramme, explique brièvement comment pointe.dev automatise ce flux
-- Si le prospect semble qualifié (processus répétitif, volume significatif), propose de planifier un appel
+- Les nœuds doivent être courts (3-4 mots max), 4-6 nœuds maximum
+- Après le workflow, explique brièvement comment pointe.dev automatise ce flux
 - Ne jamais halluciner des chiffres précis — utilise des fourchettes réalistes
-- Réponse max : 200 mots hors diagramme";
+- Réponse max : 200 mots hors workflow
+
+Déclenchement du pipeline :
+Dès que tu as collecté les 4 éléments suivants, INCLUS un bloc qualify INVISIBLE à la fin de ta réponse :
+  1. secteur d'activité
+  2. douleur principale (tâche répétitive ou source d'erreurs)
+  3. outils actuels utilisés (CRM, ERP, e-mail, etc.)
+  4. volume approximatif (ex: 50 commandes/jour, 200 leads/mois)
+
+Format du bloc qualify (toujours en dernier, jamais affiché à l'utilisateur) :
+```qualify
+{\"client_need\": \"une phrase décrivant précisément le besoin d'automatisation\", \"summary\": \"secteur | douleur | outils | volume\"}
+```";
 
 #[derive(Deserialize)]
 struct HistoryMsg {
@@ -71,6 +80,43 @@ struct ChatResponse {
     response: String,
     messages_used: u32,
     messages_free: u32,
+    /// Set when the AI qualifies the prospect and a pipeline has been launched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pipeline_id: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct QualifyBlock {
+    client_need: String,
+    summary: String,
+}
+
+/// Strips a ```qualify block from the AI response.
+/// Returns (display_text, Option<QualifyBlock>).
+fn parse_qualify(text: &str) -> (String, Option<QualifyBlock>) {
+    const OPEN: &str = "```qualify";
+    const CLOSE: &str = "```";
+    if let Some(start) = text.find(OPEN) {
+        let after_tag = &text[start + OPEN.len()..];
+        let after = match after_tag.find('\n') {
+            Some(nl) => &after_tag[nl + 1..],
+            None => return (text.to_string(), None),
+        };
+        if let Some(end) = after.find(CLOSE) {
+            let json = after[..end].trim();
+            let before = text[..start].trim();
+            let rest = after[end + CLOSE.len()..].trim();
+            let display = match (before.is_empty(), rest.is_empty()) {
+                (true,  true)  => String::new(),
+                (false, true)  => before.to_string(),
+                (true,  false) => rest.to_string(),
+                (false, false) => format!("{before}\n\n{rest}"),
+            };
+            let block = serde_json::from_str::<QualifyBlock>(json).ok();
+            return (display, block);
+        }
+    }
+    (text.to_string(), None)
 }
 
 #[derive(Deserialize)]
@@ -180,15 +226,33 @@ async fn handle_ai_chat(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let text = ant_resp.content.into_iter()
+    let raw_text = ant_resp.content.into_iter()
         .find(|c| c.kind == "text")
         .and_then(|c| c.text)
         .unwrap_or_default();
     let end = Utc::now();
 
+    // Strip qualify block and launch pipeline if the AI decided to qualify
+    let (display_text, pipeline_id) = {
+        let (display, maybe_qualify) = parse_qualify(&raw_text);
+        let pid = if let Some(q) = maybe_qualify {
+            let id = state.pipelines.create(
+                payload.session_id.clone(),
+                q.client_need,
+                Some(q.summary),
+            ).await;
+            pipeline::spawn(id, state.pipelines.clone(), state.clone());
+            tracing::info!("Pipeline {id} launched from chat session={}", payload.session_id);
+            Some(id.to_string())
+        } else {
+            None
+        };
+        (display, pid)
+    };
+
     if state.langfuse.is_some() {
         let input = payload.description.clone();
-        let output = text.clone();
+        let output = display_text.clone();
         let state2 = state.clone();
         tokio::spawn(async move {
             if let Some(lf) = &state2.langfuse {
@@ -197,7 +261,12 @@ async fn handle_ai_chat(
         });
     }
 
-    Ok(Json(ChatResponse { response: text, messages_used, messages_free: FREE_MESSAGES }))
+    Ok(Json(ChatResponse {
+        response: display_text,
+        messages_used,
+        messages_free: FREE_MESSAGES,
+        pipeline_id,
+    }))
 }
 
 #[tokio::main]

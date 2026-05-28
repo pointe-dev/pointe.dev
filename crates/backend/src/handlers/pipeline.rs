@@ -26,7 +26,7 @@ pub async fn start(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<StartRequest>,
 ) -> Json<StartResponse> {
-    let id = state.pipelines.create(payload.session_id, payload.client_need).await;
+    let id = state.pipelines.create(payload.session_id, payload.client_need, None).await;
     pipeline::spawn(id, state.pipelines.clone(), state.clone());
     Json(StartResponse { pipeline_id: id.to_string() })
 }
