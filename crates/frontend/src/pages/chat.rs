@@ -210,6 +210,14 @@ pub fn Chat() -> impl IntoView {
     let show_pitch: RwSignal<bool> = create_rw_signal(false);
     let pitch_page: RwSignal<usize> = create_rw_signal(0);
 
+    // Focus textarea on mount
+    create_effect(move |first| {
+        if first.is_none() { return; }
+        let _ = js_sys::Function::new_no_args(
+            "var t=document.querySelector('.chat-textarea');if(t)t.focus();"
+        ).call0(&wasm_bindgen::JsValue::NULL);
+    });
+
     create_effect(move |_| {
         let _ = messages.get();
         let _ = is_loading.get();
