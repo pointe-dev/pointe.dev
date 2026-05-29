@@ -7,10 +7,15 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com https://cdn.jsdelivr.net https://api.fontshare.com https://cdn.fontshare.com; script-src 'self' 'unsafe-eval' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://api.fontshare.com; img-src 'self' data: blob:; font-src 'self' data: https://fonts.gstatic.com https://cdn.fontshare.com;">
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <title>pointe.dev — Automatisation pointue.</title>
+    <!-- Critical CSS and WASM preloads — start fetching before parser hits the script -->
+    <link rel="preload" href="/pkg/frontend_bg.wasm" as="fetch" crossorigin>
+    <link rel="modulepreload" href="/pkg/frontend.js">
+    <link rel="stylesheet" href="/styles.css">
+    <!-- Fonts: non-blocking — content renders with system fonts first, swaps in -->
     <link rel="preconnect" href="https://api.fontshare.com">
     <link rel="preconnect" href="https://cdn.fontshare.com" crossorigin>
-    <link href="https://api.fontshare.com/v2/css?f[]=clash-display@600,700&f[]=satoshi@400,500,700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/styles.css">
+    <link rel="preload" href="https://api.fontshare.com/v2/css?f[]=clash-display@600,700&f[]=satoshi@400,500,700&display=swap" as="style" onload="this.onload=null;this.rel='stylesheet'">
+    <noscript><link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=clash-display@600,700&f[]=satoshi@400,500,700&display=swap"></noscript>
     <style>
         body { font-family: 'Satoshi', system-ui, sans-serif; font-weight: 400; }
         h1, h2, h3, h4, h5, h6 { font-family: 'Clash Display', system-ui, sans-serif; font-weight: 600; }
@@ -72,7 +77,14 @@
     </script>
 </head>
 <body class="bg-black text-white">
-    <div id="app"></div>
+    <div id="app">
+        <!-- Static LCP skeleton — replaced by Leptos on hydration -->
+        <div id="app-skeleton" style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f0c10;">
+            <h1 style="font-family:system-ui,sans-serif;font-size:clamp(2.5rem,7vw,4.5rem);font-weight:700;color:#f1f5f9;line-height:1.1;text-align:center;padding:1rem;margin:0;">
+                Automatisation<br>pointue.
+            </h1>
+        </div>
+    </div>
     <script type="module">
         import('/pkg/frontend.js').then(m => {
             if (m.default) m.default().catch(console.error);

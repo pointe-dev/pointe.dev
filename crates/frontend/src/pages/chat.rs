@@ -446,7 +446,6 @@ pub fn Chat() -> impl IntoView {
                 <div class="border-b border-subtle px-6 py-6 shrink-0">
                     <div class="max-w-2xl mx-auto flex items-start justify-between">
                         <div>
-                            <p class="eyebrow mb-2">"pointe.dev"</p>
                             <h2 class="text-2xl font-bold text-primary">
                                 {move || t(lang.get(), "chat.title")}
                             </h2>
