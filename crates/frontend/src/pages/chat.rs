@@ -221,13 +221,13 @@ pub fn Chat() -> impl IntoView {
     create_effect(move |_| {
         let _ = messages.get();
         let _ = is_loading.get();
-        if let Some(w) = web_sys::window() {
-            if let Some(doc) = w.document() {
-                if let Some(el) = doc.get_element_by_id("chat-end") {
-                    el.scroll_into_view();
-                }
-            }
-        }
+        // rAF ensures DOM is painted before we measure scrollHeight
+        let _ = js_sys::Function::new_no_args(
+            "requestAnimationFrame(function(){\
+               var c=document.querySelector('.chat-scroll');\
+               if(c)c.scrollTop=c.scrollHeight;\
+             });"
+        ).call0(&wasm_bindgen::JsValue::NULL);
     });
 
     let reset_textarea_height = move || {
