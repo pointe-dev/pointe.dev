@@ -492,7 +492,7 @@ pub fn Chat() -> impl IntoView {
 
                 {/* Header */}
                 <div class="border-b border-subtle px-6 py-6 shrink-0">
-                    <div class="max-w-2xl mx-auto flex items-start justify-between">
+                    <div class="max-w-3xl mx-auto flex items-start justify-between">
                         <div>
                             <h2 class="text-2xl font-bold text-primary">
                                 {move || t(lang.get(), "chat.title")}
@@ -537,7 +537,7 @@ pub fn Chat() -> impl IntoView {
 
                 {/* Messages */}
                 <div class="chat-scroll flex-1 overflow-y-auto px-6 py-6">
-                    <div class="max-w-2xl mx-auto space-y-5">
+                    <div class="max-w-3xl mx-auto space-y-5">
                         {move || {
                             messages.get().into_iter().enumerate().map(|(i, (is_user, raw, html))| {
                                 let (outer, inner) = if is_user {
@@ -616,7 +616,7 @@ pub fn Chat() -> impl IntoView {
                 {/* Continue on messaging apps — only shown after unlock */}
                 {move || is_unlocked.get().then(|| view! {
                     <div class="px-6 py-2 border-t border-subtle">
-                        <div class="max-w-2xl mx-auto flex items-center gap-3">
+                        <div class="max-w-3xl mx-auto flex items-center gap-3">
                             <span class="text-xs text-muted">"Continuer sur"</span>
                             <a
                                 href="https://wa.me/33600000000"
@@ -640,7 +640,7 @@ pub fn Chat() -> impl IntoView {
 
                 {/* Input */}
                 <div class="border-t border-subtle px-6 py-4">
-                    <div class="max-w-2xl mx-auto flex gap-3 items-center">
+                    <div class="max-w-3xl mx-auto flex gap-3 items-center">
                         <textarea
                             class="flex-1 resize-none bg-elevated border border-subtle rounded-xl px-4 py-3 text-base text-primary placeholder-gray-600 focus:outline-none focus:border-red-600 transition-colors leading-relaxed"
                             placeholder=move || t(lang.get(), "chat.placeholder")
