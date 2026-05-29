@@ -144,7 +144,7 @@ pub fn Layout() -> impl IntoView {
 
             {/* ── FOOTER (home only) ───────────────────────────── */}
             {move || (active_page.get() == Page::Home).then(|| view! {
-                <footer class="bg-surface border-t border-subtle py-14 px-6">
+                <footer class="bg-surface border-t border-subtle py-20 px-6">
                     <div class="max-w-7xl mx-auto">
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-8 mb-10">
                             <div>
