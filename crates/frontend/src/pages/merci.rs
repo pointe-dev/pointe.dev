@@ -64,13 +64,13 @@ pub fn Merci(#[prop(into)] on_home_click: Callback<()>) -> impl IntoView {
     }
 
     view! {
-        <div class="min-h-screen flex flex-col items-center justify-center px-6 py-16 bg-white dark:bg-black">
+        <div class="min-h-screen flex flex-col items-center justify-center px-6 py-16 bg-deep">
             <div class="max-w-lg w-full text-center space-y-8">
 
                 // Icon
                 <div class="flex justify-center">
-                    <div class="w-20 h-20 rounded-full bg-green-50 dark:bg-green-950 flex items-center justify-center">
-                        <svg class="w-10 h-10 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div class="w-20 h-20 rounded-full glass-cyan flex items-center justify-center shadow-cyan-glow">
+                        <svg class="w-10 h-10 text-cyan" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                 d="M5 13l4 4L19 7"/>
                         </svg>
@@ -79,10 +79,10 @@ pub fn Merci(#[prop(into)] on_home_click: Callback<()>) -> impl IntoView {
 
                 // Title
                 <div class="space-y-2">
-                    <h1 class="text-3xl font-bold text-gray-900 dark:text-white">
+                    <h1 class="text-3xl font-bold text-primary">
                         "Paiement confirmé"
                     </h1>
-                    <p class="text-gray-500 dark:text-gray-400">
+                    <p class="text-secondary">
                         "Votre workflow est en cours de déploiement."
                     </p>
                 </div>
@@ -91,37 +91,37 @@ pub fn Merci(#[prop(into)] on_home_click: Callback<()>) -> impl IntoView {
                 {move || status.get().map(|s| {
                     let stage = s.stage["stage"].as_str().unwrap_or("").to_string();
                     view! {
-                        <div class="rounded-2xl border border-gray-100 dark:border-gray-800 p-6 text-left space-y-4">
+                        <div class="glass rounded-2xl p-6 text-left space-y-4">
 
                             // Stage indicator
                             <div class="flex items-center gap-3">
                                 {match stage.as_str() {
                                     "live" => view! {
-                                        <span class="w-2.5 h-2.5 rounded-full bg-green-500"></span>
-                                        <span class="text-sm font-medium text-green-600 dark:text-green-400">"Workflow actif"</span>
+                                        <span class="w-2.5 h-2.5 rounded-full bg-green-400"></span>
+                                        <span class="text-sm font-medium text-green-400">"Workflow actif"</span>
                                     }.into_view(),
                                     "failed" => view! {
                                         <span class="w-2.5 h-2.5 rounded-full bg-red-500"></span>
-                                        <span class="text-sm font-medium text-red-600">"Déploiement échoué — notre équipe a été notifiée"</span>
+                                        <span class="text-sm font-medium text-red-400">"Déploiement échoué — notre équipe a été notifiée"</span>
                                     }.into_view(),
                                     _ => view! {
                                         <span class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
-                                        <span class="text-sm font-medium text-amber-600 dark:text-amber-400">"Déploiement en cours…"</span>
+                                        <span class="text-sm font-medium text-amber-400">"Déploiement en cours…"</span>
                                     }.into_view(),
                                 }}
                             </div>
 
                             // Pricing recap
                             {s.price_quote.map(|setup| view! {
-                                <div class="border-t border-gray-100 dark:border-gray-800 pt-4 space-y-1">
+                                <div class="border-t border-subtle pt-4 space-y-1">
                                     <div class="flex justify-between text-sm">
-                                        <span class="text-gray-500">"Mise en place (one-time)"</span>
-                                        <span class="font-semibold text-gray-900 dark:text-white">{format!("{}€", setup)}</span>
+                                        <span class="text-secondary">"Mise en place (one-time)"</span>
+                                        <span class="font-semibold text-primary">{format!("{}€", setup)}</span>
                                     </div>
                                     {s.price_monthly.map(|mo| view! {
                                         <div class="flex justify-between text-sm">
-                                            <span class="text-gray-500">"Abonnement mensuel"</span>
-                                            <span class="font-semibold text-gray-900 dark:text-white">{format!("{}€/mois", mo)}</span>
+                                            <span class="text-secondary">"Abonnement mensuel"</span>
+                                            <span class="font-semibold text-primary">{format!("{}€/mois", mo)}</span>
                                         </div>
                                     })}
                                 </div>
@@ -129,7 +129,7 @@ pub fn Merci(#[prop(into)] on_home_click: Callback<()>) -> impl IntoView {
 
                             // Justification
                             {s.price_justification.map(|j| view! {
-                                <p class="text-xs text-gray-400 dark:text-gray-500 leading-relaxed">{j}</p>
+                                <p class="text-xs text-muted leading-relaxed">{j}</p>
                             })}
 
                             // Workflow link when live
@@ -138,7 +138,7 @@ pub fn Merci(#[prop(into)] on_home_click: Callback<()>) -> impl IntoView {
                                     href=url
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    class="inline-flex items-center gap-2 text-sm font-medium text-red-600 hover:text-red-700 transition-colors"
+                                    class="inline-flex items-center gap-2 text-sm font-medium text-cyan hover:text-cyan-mid transition-colors"
                                 >
                                     "Voir le workflow dans n8n"
                                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -153,23 +153,23 @@ pub fn Merci(#[prop(into)] on_home_click: Callback<()>) -> impl IntoView {
 
                 // No pipeline ID fallback
                 {pipeline_id.is_none().then(|| view! {
-                    <p class="text-sm text-gray-400">"Votre workflow sera actif sous quelques minutes."</p>
+                    <p class="text-sm text-muted">"Votre workflow sera actif sous quelques minutes."</p>
                 })}
 
                 // Next steps
-                <div class="rounded-2xl bg-gray-50 dark:bg-gray-950 p-6 text-left space-y-3">
-                    <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300">"Prochaines étapes"</h3>
-                    <ul class="space-y-2 text-sm text-gray-500 dark:text-gray-400">
+                <div class="glass rounded-2xl p-6 text-left space-y-3">
+                    <h3 class="text-sm font-semibold text-primary">"Prochaines étapes"</h3>
+                    <ul class="space-y-2 text-sm text-secondary">
                         <li class="flex items-start gap-2">
-                            <span class="text-red-500 mt-0.5">"→"</span>
+                            <span class="text-red-400 mt-0.5">"→"</span>
                             "Vous recevrez une facture par email."
                         </li>
                         <li class="flex items-start gap-2">
-                            <span class="text-red-500 mt-0.5">"→"</span>
+                            <span class="text-red-400 mt-0.5">"→"</span>
                             "Notre équipe vous contactera pour finaliser les accès et tester le workflow."
                         </li>
                         <li class="flex items-start gap-2">
-                            <span class="text-red-500 mt-0.5">"→"</span>
+                            <span class="text-red-400 mt-0.5">"→"</span>
                             "Votre workflow sera opérationnel sous 24h."
                         </li>
                     </ul>
@@ -183,7 +183,7 @@ pub fn Merci(#[prop(into)] on_home_click: Callback<()>) -> impl IntoView {
                             "window.history.pushState(null,'','/');window.scrollTo({top:0})"
                         ).call0(&wasm_bindgen::JsValue::NULL);
                     }
-                    class="text-sm text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors underline underline-offset-4"
+                    class="text-sm text-muted hover:text-secondary transition-colors underline underline-offset-4"
                 >
                     "← Retour à l'accueil"
                 </button>

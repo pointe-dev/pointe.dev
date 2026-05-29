@@ -258,33 +258,33 @@ pub fn Chat() -> impl IntoView {
     };
 
     view! {
-        <div class="relative flex flex-col bg-white dark:bg-black" style="height: calc(100vh - 65px);">
+        <div class="relative flex flex-col bg-deep" style="height: calc(100vh - 65px);">
 
             {/* Email unlock modal */}
             {move || show_unlock.get().then(|| view! {
-                <div class="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-                    <div class="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200 dark:border-gray-800 p-8 max-w-sm w-full mx-4 shadow-2xl">
-                        <p class="text-xs text-red-600 uppercase tracking-widest mb-3">"pointe.dev"</p>
-                        <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-2">
+                <div class="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+                    <div class="glass rounded-2xl p-8 max-w-sm w-full mx-4 shadow-card">
+                        <p class="eyebrow mb-3">"pointe.dev"</p>
+                        <h3 class="text-lg font-bold text-primary mb-2">
                             "Continuez gratuitement"
                         </h3>
-                        <p class="text-sm text-gray-500 dark:text-gray-400 mb-6 leading-relaxed">
+                        <p class="text-sm text-secondary mb-6 leading-relaxed">
                             "Vous avez utilisé vos " {FREE_MESSAGES} " messages gratuits. Entrez votre email pour continuer — sans spam, promis."
                         </p>
                         <form on:submit=move |ev| on_unlock_submit.with_value(|f| f(ev)) class="flex flex-col gap-3">
                             <input
                                 type="email"
                                 placeholder="votre@email.com"
-                                class="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-sm text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:border-red-500 transition-colors"
+                                class="w-full px-4 py-3 rounded-xl border border-subtle bg-elevated text-sm text-primary placeholder-gray-600 focus:outline-none focus:border-red-500 transition-colors"
                                 prop:value=move || email_input.get()
                                 on:input=move |ev| email_input.set(event_target_value(&ev))
                             />
                             {move || unlock_error.get().then(|| view! {
-                                <p class="text-xs text-red-500">"Email invalide, réessayez."</p>
+                                <p class="text-xs text-red-400">"Email invalide, réessayez."</p>
                             })}
                             <button
                                 type="submit"
-                                class="w-full py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold transition-colors"
+                                class="btn-primary w-full"
                             >
                                 "Continuer la conversation →"
                             </button>
@@ -300,14 +300,14 @@ pub fn Chat() -> impl IntoView {
                 <div class="flex flex-col flex-1 min-w-0 overflow-hidden">
 
                     {/* Header */}
-                    <div class="border-b border-gray-100 dark:border-gray-900 px-6 py-6 shrink-0">
+                    <div class="border-b border-subtle px-6 py-6 shrink-0">
                         <div class="max-w-2xl mx-auto flex items-start justify-between">
                             <div>
-                                <p class="text-xs text-gray-400 dark:text-gray-600 uppercase tracking-widest mb-2">"pointe.dev"</p>
-                                <h2 class="text-2xl font-bold text-gray-900 dark:text-white">
+                                <p class="eyebrow mb-2">"pointe.dev"</p>
+                                <h2 class="text-2xl font-bold text-primary">
                                     {move || t(lang.get(), "chat.title")}
                                 </h2>
-                                <p class="text-sm text-gray-400 dark:text-gray-500 mt-1 font-light">
+                                <p class="text-sm text-muted mt-1 font-light">
                                     {move || t(lang.get(), "chat.sub")}
                                 </p>
                             </div>
@@ -318,15 +318,15 @@ pub fn Chat() -> impl IntoView {
                                     (used > 0).then(|| view! {
                                         <span class=move || format!(
                                             "text-xs px-2.5 py-1 rounded-full border {}",
-                                            if remaining == 0 { "border-red-300 text-red-500 dark:border-red-800 dark:text-red-400" }
-                                            else { "border-gray-200 text-gray-400 dark:border-gray-800 dark:text-gray-500" }
+                                            if remaining == 0 { "border-red-800 text-red-400" }
+                                            else { "border-subtle text-muted" }
                                         )>
                                             {format!("{remaining} message{} gratuit{}", if remaining > 1 { "s" } else { "" }, if remaining > 1 { "s" } else { "" })}
                                         </span>
                                     })
                                 }}
                                 {move || pipeline_id.get().map(|_| view! {
-                                    <span class="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-red-200 text-red-500 dark:border-red-900 dark:text-red-400">
+                                    <span class="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-red-900 text-red-400">
                                         <span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span>
                                         "Workflow en cours d'analyse"
                                     </span>
@@ -348,7 +348,7 @@ pub fn Chat() -> impl IntoView {
                                     } else {
                                         (
                                             "flex justify-start flex-col items-start gap-1",
-                                            "chat-md max-w-[80%] px-5 py-3 bg-gray-50 dark:bg-gray-950 text-gray-800 dark:text-gray-200 border border-gray-100 dark:border-gray-900 rounded-2xl rounded-tl-sm text-sm leading-relaxed",
+                                            "chat-md max-w-[80%] px-5 py-3 glass text-secondary rounded-2xl rounded-tl-sm text-sm leading-relaxed",
                                         )
                                     };
                                     view! {
@@ -372,7 +372,7 @@ pub fn Chat() -> impl IntoView {
                                                             }
                                                             cb.forget();
                                                         }
-                                                        class="text-base leading-none text-gray-300 hover:text-red-500 transition-colors pl-1"
+                                                        class="text-base leading-none text-muted hover:text-red-400 transition-colors pl-1"
                                                     >
                                                         {move || if copied_idx.get() == Some(i) { "✓" } else { "📋" }}
                                                     </button>
@@ -385,7 +385,7 @@ pub fn Chat() -> impl IntoView {
 
                             {move || is_loading.get().then(|| view! {
                                 <div class="flex justify-start">
-                                    <div class="px-5 py-3 bg-gray-50 dark:bg-gray-950 border border-gray-100 dark:border-gray-900 rounded-2xl rounded-tl-sm">
+                                    <div class="px-5 py-3 glass rounded-2xl rounded-tl-sm">
                                         <div class="flex gap-1.5 items-center h-4">
                                             <span class="w-1.5 h-1.5 rounded-full bg-red-400 animate-bounce" style="animation-delay:0ms"></span>
                                             <span class="w-1.5 h-1.5 rounded-full bg-red-400 animate-bounce" style="animation-delay:140ms"></span>
@@ -400,33 +400,33 @@ pub fn Chat() -> impl IntoView {
                     </div>
 
                     {/* Continue on messaging apps */}
-                    <div class="px-6 py-2 border-t border-gray-50 dark:border-gray-900/50">
+                    <div class="px-6 py-2 border-t border-subtle/50">
                         <div class="max-w-2xl mx-auto flex items-center gap-3">
-                        <span class="text-xs text-gray-300 dark:text-gray-700">"Continuer sur"</span>
-                        <a
-                            href="https://wa.me/33600000000"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            class="text-xs px-2.5 py-1 rounded-full border border-gray-200 dark:border-gray-800 text-gray-400 hover:border-green-400 hover:text-green-600 dark:hover:text-green-400 transition-colors"
-                        >
-                            "WhatsApp"
-                        </a>
-                        <a
-                            href="https://t.me/pointedev"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            class="text-xs px-2.5 py-1 rounded-full border border-gray-200 dark:border-gray-800 text-gray-400 hover:border-sky-400 hover:text-sky-500 dark:hover:text-sky-400 transition-colors"
-                        >
-                            "Telegram"
-                        </a>
+                            <span class="text-xs text-muted">"Continuer sur"</span>
+                            <a
+                                href="https://wa.me/33600000000"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                class="text-xs px-2.5 py-1 rounded-full border border-subtle text-muted hover:border-green-500 hover:text-green-400 transition-colors"
+                            >
+                                "WhatsApp"
+                            </a>
+                            <a
+                                href="https://t.me/pointedev"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                class="text-xs px-2.5 py-1 rounded-full border border-subtle text-muted hover:border-sky-500 hover:text-sky-400 transition-colors"
+                            >
+                                "Telegram"
+                            </a>
                         </div>
                     </div>
 
                     {/* Input */}
-                    <div class="border-t border-gray-100 dark:border-gray-900 px-6 py-4">
+                    <div class="border-t border-subtle px-6 py-4">
                         <div class="max-w-2xl mx-auto flex gap-3 items-center">
                             <textarea
-                                class="flex-1 resize-none bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-600 focus:outline-none focus:border-red-600 dark:focus:border-red-600 transition-colors leading-relaxed"
+                                class="flex-1 resize-none bg-elevated border border-subtle rounded-xl px-4 py-3 text-sm text-primary placeholder-gray-600 focus:outline-none focus:border-red-600 transition-colors leading-relaxed"
                                 placeholder=move || t(lang.get(), "chat.placeholder")
                                 rows="2"
                                 prop:value=move || input_text.get()
@@ -435,7 +435,7 @@ pub fn Chat() -> impl IntoView {
                             ></textarea>
                             <button
                                 on:click=move |_| send()
-                                class="flex items-center justify-center px-5 py-3 bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors text-sm font-semibold shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                                class="btn-primary shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
                                 disabled=move || is_loading.get()
                             >
                                 {move || t(lang.get(), "chat.send")}
@@ -445,15 +445,15 @@ pub fn Chat() -> impl IntoView {
                 </div>
 
                 {/* Workflow canvas — desktop only */}
-                <div class="hidden lg:flex flex-col w-[480px] xl:w-[560px] border-l border-gray-100 dark:border-gray-900 bg-gray-50/30 dark:bg-gray-950/30 shrink-0">
+                <div class="hidden lg:flex flex-col w-[480px] xl:w-[560px] border-l border-subtle bg-surface/30 shrink-0">
 
                     {/* Canvas header */}
-                    <div class="px-5 py-4 border-b border-gray-100 dark:border-gray-900 flex items-center justify-between shrink-0">
-                        <p class="text-xs text-gray-400 uppercase tracking-widest">"Votre workflow"</p>
+                    <div class="px-5 py-4 border-b border-subtle flex items-center justify-between shrink-0">
+                        <p class="eyebrow">"Votre workflow"</p>
                         {move || current_graph.get().map(|_| view! {
                             <span class="flex items-center gap-1.5">
                                 <span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span>
-                                <span class="text-xs text-gray-400">"Généré par IA"</span>
+                                <span class="text-xs text-muted">"Généré par IA"</span>
                             </span>
                         })}
                     </div>
@@ -468,15 +468,15 @@ pub fn Chat() -> impl IntoView {
                             }.into_view(),
                             None => view! {
                                 <div class="flex flex-col items-center justify-center h-full min-h-48 text-center px-4 py-8">
-                                    <div class="w-16 h-16 rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-800 flex items-center justify-center mb-5">
-                                        <svg class="w-7 h-7 text-gray-300 dark:text-gray-700" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                                    <div class="w-16 h-16 rounded-2xl border-2 border-dashed border-subtle flex items-center justify-center mb-5">
+                                        <svg class="w-7 h-7 text-muted" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
                                             <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
                                         </svg>
                                     </div>
-                                    <p class="text-sm font-medium text-gray-400 dark:text-gray-600 mb-2">
+                                    <p class="text-sm font-medium text-secondary mb-2">
                                         "Workflow en attente"
                                     </p>
-                                    <p class="text-xs text-gray-300 dark:text-gray-700 leading-relaxed max-w-[160px]">
+                                    <p class="text-xs text-muted leading-relaxed max-w-[160px]">
                                         "Décrivez votre processus — l'IA le visualisera ici en temps réel."
                                     </p>
                                 </div>
