@@ -238,6 +238,7 @@ pub fn Chat() -> impl IntoView {
             .collect();
 
         let msg_for_api = msg.clone();
+        let msg_restore = msg.clone();
         let sid = session_id_send.clone();
         batch(move || {
             input_text.set(String::new());
@@ -256,7 +257,10 @@ pub fn Chat() -> impl IntoView {
             match result {
                 Ok(resp) => {
                     if resp.status() == 402 {
+                        // Undo optimistic update — restore text to textarea, remove from chat
+                        messages.update(|v| { v.pop(); });
                         batch(move || {
+                            input_text.set(msg_restore);
                             show_unlock.set(true);
                             is_loading.set(false);
                         });
@@ -501,13 +505,18 @@ pub fn Chat() -> impl IntoView {
                             {move || {
                                 let used = messages_used.get();
                                 let remaining = FREE_MESSAGES.saturating_sub(used);
-                                (used > 0).then(|| view! {
+                                // Show only when there are messages left (1–N); at 0 the modal handles it
+                                (used > 0 && remaining > 0).then(|| view! {
                                     <span class=move || format!(
                                         "text-xs px-2.5 py-1 rounded-full border {}",
-                                        if remaining == 0 { "border-red-800 text-red-400" }
-                                        else { "border-subtle text-muted" }
+                                        if remaining == 1 { "border-subtle text-muted" }
+                                        else { "border-subtle text-muted opacity-60" }
                                     )>
-                                        {format!("{remaining} message{} gratuit{}", if remaining > 1 { "s" } else { "" }, if remaining > 1 { "s" } else { "" })}
+                                        {if remaining == 1 {
+                                            "Dernier message gratuit".to_string()
+                                        } else {
+                                            format!("{remaining} messages gratuits")
+                                        }}
                                     </span>
                                 })
                             }}
