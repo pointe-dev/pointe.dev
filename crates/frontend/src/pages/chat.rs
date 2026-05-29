@@ -651,10 +651,13 @@ pub fn Chat() -> impl IntoView {
                         ></textarea>
                         <button
                             on:click=move |_| send()
-                            class="btn-primary shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                            class="chat-send-btn shrink-0"
                             disabled=move || is_loading.get()
+                            aria-label="Envoyer"
                         >
-                            {move || t(lang.get(), "chat.send")}
+                            <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M8 13V3M8 3L3.5 7.5M8 3L12.5 7.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
                         </button>
                     </div>
                 </div>

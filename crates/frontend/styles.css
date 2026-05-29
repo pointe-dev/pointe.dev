@@ -2536,6 +2536,38 @@ html:not(.dark) .nav-glass {
   height: 15px;
 }
 
+/* ── Chat send button ────────────────────────────────────────────────── */
+
+.chat-send-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--red-bright);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s, opacity 0.15s;
+  flex-shrink: 0;
+}
+.chat-send-btn svg {
+  width: 16px;
+  height: 16px;
+}
+.chat-send-btn:hover:not(:disabled) {
+  background: #a50f27;
+  transform: scale(1.06);
+}
+.chat-send-btn:active:not(:disabled) {
+  transform: scale(0.96);
+}
+.chat-send-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
 /* ── Chat quota indicator ────────────────────────────────────────────── */
 
 @keyframes quota-border-pulse {
