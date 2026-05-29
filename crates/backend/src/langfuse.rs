@@ -28,6 +28,7 @@ impl LangfuseClient {
 
     pub async fn fetch_prompt(&mut self, name: &str) -> Result<String, String> {
         let url = format!("{}/api/public/v2/prompts/{}?label=production", self.base_url, name);
+        tracing::info!("Fetching Langfuse prompt: {url}");
         let resp = self.http
             .get(&url)
             .basic_auth(&self.public_key, Some(&self.secret_key))
@@ -41,7 +42,9 @@ impl LangfuseClient {
             return Err(format!("Langfuse {status}: {body}"));
         }
 
-        let pr: PromptResp = resp.json().await.map_err(|e| e.to_string())?;
+        let body = resp.text().await.map_err(|e| e.to_string())?;
+        tracing::debug!("Langfuse raw response: {body}");
+        let pr: PromptResp = serde_json::from_str(&body).map_err(|e| e.to_string())?;
         self.prompt_version = pr.version;
         self.prompt_name = name.to_string();
 
