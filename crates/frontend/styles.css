@@ -569,6 +569,16 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Clash Display needs extra word-spacing at display sizes */
+h1, h2, h3, h4, h5, h6 {
+  word-spacing: 0.1em;
+  letter-spacing: 0.02em;
+}
+h1 {
+  word-spacing: 0.14em;
+  letter-spacing: 0.025em;
+}
+
 /* Clean text selection with golden ratio spacing */
 
 ::-moz-selection {
@@ -1879,6 +1889,10 @@ html.dark {
 .text-3xl  { font-size: 1.875rem; line-height: 2.25rem; }
 .flex-row  { flex-direction: row; }
 .leading-loose { line-height: 2; }
+.mb-20 { margin-bottom: 5rem; }
+.mb-24 { margin-bottom: 6rem; }
+.mb-6  { margin-bottom: 1.5rem; }
+.gap-8 { gap: 2rem; }     /* ensure exists */
 
 /* ── Text / border utilities ─────────────────────────────────────────── */
 

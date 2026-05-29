@@ -29,7 +29,7 @@ pub fn Home(on_chat_click: impl Fn() + Clone + 'static) -> impl IntoView {
                     <h2 class="section-title text-center mb-4">
                         {move || t(lang.get(), "process.title")}
                     </h2>
-                    <p class="section-sub text-center mb-16 max-w-xl mx-auto">
+                    <p class="section-sub text-center mb-20 max-w-xl mx-auto">
                         {move || t(lang.get(), "process.sub")}
                     </p>
 
@@ -135,7 +135,7 @@ pub fn Home(on_chat_click: impl Fn() + Clone + 'static) -> impl IntoView {
                     <h2 class="section-title text-center mb-4">
                         {move || t(lang.get(), "approach.title")}
                     </h2>
-                    <p class="section-sub text-center mb-16">
+                    <p class="section-sub text-center mb-20">
                         {move || t(lang.get(), "approach.sub")}
                     </p>
 
@@ -181,7 +181,7 @@ pub fn Home(on_chat_click: impl Fn() + Clone + 'static) -> impl IntoView {
                     <p class="eyebrow text-center mb-3">
                         {move || t(lang.get(), "svc.eyebrow")}
                     </p>
-                    <h2 class="section-title text-center mb-16">
+                    <h2 class="section-title text-center mb-20">
                         {move || t(lang.get(), "svc.title")}
                     </h2>
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -218,7 +218,7 @@ pub fn Home(on_chat_click: impl Fn() + Clone + 'static) -> impl IntoView {
 
             {/* ── SOLUTIONS TICKER ──────────────────────────────── */}
             <section id="solutions" class="bg-surface border-t border-subtle py-20 px-6 overflow-hidden">
-                <div class="max-w-6xl mx-auto mb-12">
+                <div class="max-w-6xl mx-auto mb-20">
                     <p class="eyebrow text-center mb-3">
                         {move || t(lang.get(), "gal.eyebrow")}
                     </p>
