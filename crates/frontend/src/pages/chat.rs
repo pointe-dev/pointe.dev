@@ -221,6 +221,13 @@ pub fn Chat() -> impl IntoView {
         }
     });
 
+    let reset_textarea_height = move || {
+        let _ = js_sys::Function::new_no_args(
+            "var t=document.querySelector('.chat-textarea');\
+             if(t){t.style.height='auto';}"
+        ).call0(&wasm_bindgen::JsValue::NULL);
+    };
+
     let send = move || {
         let msg = input_text.get_untracked().trim().to_string();
         if msg.is_empty() || is_loading.get_untracked() { return; }
@@ -240,6 +247,7 @@ pub fn Chat() -> impl IntoView {
         let msg_for_api = msg.clone();
         let msg_restore = msg.clone();
         let sid = session_id_send.clone();
+        reset_textarea_height();
         batch(move || {
             input_text.set(String::new());
             messages.update(|v| v.push((true, msg.clone(), msg.clone())));
@@ -642,11 +650,19 @@ pub fn Chat() -> impl IntoView {
                 <div class="border-t border-subtle px-6 py-4">
                     <div class="max-w-3xl mx-auto flex gap-3 items-center">
                         <textarea
-                            class="flex-1 resize-none bg-elevated border border-subtle rounded-xl px-4 py-3 text-base text-primary placeholder-gray-600 focus:outline-none focus:border-red-600 transition-colors leading-relaxed"
+                            class="chat-textarea flex-1 bg-elevated border border-subtle rounded-xl px-4 py-3 text-base text-primary placeholder-gray-600 focus:outline-none focus:border-red-600 transition-colors leading-relaxed"
                             placeholder=move || t(lang.get(), "chat.placeholder")
-                            rows="2"
+                            rows="1"
                             prop:value=move || input_text.get()
-                            on:input=move |ev| input_text.set(event_target_value(&ev))
+                            on:input=move |ev| {
+                                input_text.set(event_target_value(&ev));
+                                if let Some(target) = ev.target() {
+                                    let _ = js_sys::Function::new_with_args(
+                                        "t",
+                                        "t.style.height='auto';t.style.height=t.scrollHeight+'px';"
+                                    ).call1(&wasm_bindgen::JsValue::NULL, &target);
+                                }
+                            }
                             on:keydown=on_keydown
                         ></textarea>
                         <button

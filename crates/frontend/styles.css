@@ -2536,6 +2536,21 @@ html:not(.dark) .nav-glass {
   height: 15px;
 }
 
+/* ── Chat textarea — auto-grow, single-line start ────────────────────── */
+
+.chat-textarea {
+  resize: none;
+  overflow-y: auto;
+  min-height: 44px;
+  max-height: 160px;
+  line-height: 1.5;
+  transition: border-color 0.15s;
+}
+.chat-textarea::-webkit-scrollbar       { width: 3px; }
+.chat-textarea::-webkit-scrollbar-track { background: transparent; }
+.chat-textarea::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: 2px; }
+.chat-textarea                          { scrollbar-width: thin; scrollbar-color: var(--border-subtle) transparent; }
+
 /* ── Chat send button ────────────────────────────────────────────────── */
 
 .chat-send-btn {
