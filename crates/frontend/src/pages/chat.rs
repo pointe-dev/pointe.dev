@@ -505,14 +505,16 @@ pub fn Chat() -> impl IntoView {
                             {move || {
                                 let used = messages_used.get();
                                 let remaining = FREE_MESSAGES.saturating_sub(used);
-                                // Show only when there are messages left (1–N); at 0 the modal handles it
-                                (used > 0 && remaining > 0).then(|| view! {
+                                (used > 0).then(|| view! {
                                     <span class=move || format!(
-                                        "text-xs px-2.5 py-1 rounded-full border {}",
-                                        if remaining == 1 { "border-subtle text-muted" }
-                                        else { "border-subtle text-muted opacity-60" }
+                                        "text-xs px-2.5 py-1 rounded-full border border-subtle text-muted {}",
+                                        if remaining == 0 { "chat-quota-empty" }
+                                        else if remaining > 1 { "opacity-60" }
+                                        else { "" }
                                     )>
-                                        {if remaining == 1 {
+                                        {if remaining == 0 {
+                                            "Quota atteint".to_string()
+                                        } else if remaining == 1 {
                                             "Dernier message gratuit".to_string()
                                         } else {
                                             format!("{remaining} messages gratuits")

@@ -2536,6 +2536,16 @@ html:not(.dark) .nav-glass {
   height: 15px;
 }
 
+/* ── Chat quota indicator ────────────────────────────────────────────── */
+
+@keyframes quota-border-pulse {
+  0%, 100% { border-color: var(--border-subtle); opacity: 0.65; }
+  50%       { border-color: var(--text-muted);   opacity: 1;    }
+}
+.chat-quota-empty {
+  animation: quota-border-pulse 2.8s ease-in-out infinite;
+}
+
 /* ── Pitch modal ─────────────────────────────────────────────────────── */
 
 .pitch-trigger-btn {
