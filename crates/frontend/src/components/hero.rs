@@ -153,33 +153,15 @@ pub fn Hero(on_chat_click: impl Fn() + 'static) -> impl IntoView {
                     </div>
                 </div>
 
-                {/* CTAs */}
-                <div class="flex flex-col gap-4 justify-center items-center animate-fade-up stagger-3">
+                {/* CTA */}
+                <div class="flex justify-center animate-fade-up stagger-3">
                     <button
                         on:click=move |_| (on_chat_click)()
                         class="btn-primary w-full max-w-xs"
                     >
                         {move || t(lang.get(), "hero.cta")}
                     </button>
-                    <button
-                        on:click=move |_| {
-                            let _ = js_sys::Function::new_no_args(
-                                "document.getElementById('solutions')?.scrollIntoView({behavior:'smooth'})"
-                            ).call0(&wasm_bindgen::JsValue::NULL);
-                        }
-                        class="btn-ghost w-full max-w-xs"
-                    >
-                        {move || t(lang.get(), "hero.alt")}
-                    </button>
                 </div>
-            </div>
-
-            {/* Scroll indicator */}
-            <div class="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 animate-fade-up stagger-4">
-                <span class="text-xs text-muted tracking-widest uppercase font-medium">
-                    {move || t(lang.get(), "hero.scroll")}
-                </span>
-                <div class="w-px h-8 bg-gradient-to-b from-gray-600 to-transparent animate-scroll-bounce"></div>
             </div>
         </section>
     }
