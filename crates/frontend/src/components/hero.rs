@@ -71,12 +71,12 @@ pub fn Hero(on_chat_click: impl Fn() + 'static) -> impl IntoView {
 
                 {/* Headline */}
                 <h1 class="font-bold tracking-tight leading-none mb-4 animate-fade-up stagger-1">
-                    <span class="text-5xl md:text-7xl text-primary block">
+                    <span class="text-5xl md:text-7xl text-gradient block">
                         {move || t(lang.get(), "hero.line1")}
                     </span>
                     <span
-                        class="text-5xl md:text-7xl text-gradient relative block overflow-hidden"
-                        style="height: 1.15em; margin-top: 0.05em;"
+                        class="text-5xl md:text-7xl relative block overflow-hidden"
+                        style="height: 1.15em; margin-top: 0.05em; color: var(--red-bright); -webkit-text-fill-color: var(--red-bright);"
                     >
                         <span class="word-slot word-slot-1">{move || t(lang.get(), "hero.w1")}</span>
                         <span class="word-slot word-slot-2">{move || t(lang.get(), "hero.w2")}</span>
