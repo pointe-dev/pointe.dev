@@ -27,7 +27,7 @@ impl LangfuseClient {
     }
 
     pub async fn fetch_prompt(&mut self, name: &str) -> Result<String, String> {
-        let url = format!("{}/api/public/prompts?name={}", self.base_url, name);
+        let url = format!("{}/api/public/v2/prompts/{}?label=production", self.base_url, name);
         let resp = self.http
             .get(&url)
             .basic_auth(&self.public_key, Some(&self.secret_key))
