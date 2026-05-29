@@ -197,10 +197,7 @@ pub fn Chat() -> impl IntoView {
     let session_id_unlock = session_id.clone();
     let is_unlocked: RwSignal<bool> = create_rw_signal(is_token_session);
 
-    let welcome_raw = t(lang.get_untracked(), "chat.welcome").to_string();
-    let welcome_html = render_markdown(&welcome_raw);
-
-    let messages = create_rw_signal::<Vec<(bool, String, String)>>(vec![(false, welcome_raw, welcome_html)]);
+    let messages = create_rw_signal::<Vec<(bool, String, String)>>(vec![]);
     let input_text    = create_rw_signal(String::new());
     let is_loading    = create_rw_signal(false);
     let copied_idx: RwSignal<Option<usize>> = create_rw_signal(None);
@@ -354,9 +351,18 @@ pub fn Chat() -> impl IntoView {
 
             {/* Email unlock modal */}
             {move || show_unlock.get().then(|| view! {
-                <div class="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
-                    <div class="glass rounded-2xl p-8 max-w-sm w-full mx-4 shadow-card">
-                        <p class="eyebrow mb-3">"pointe.dev"</p>
+                <div class="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm animate-overlay-in">
+                    <div class="glass rounded-2xl p-8 shadow-card animate-modal-enter" style="width: min(440px, calc(100vw - 3rem))">
+                        {/* Close */}
+                        <div class="flex items-start justify-between mb-3">
+                            <p class="eyebrow">"pointe.dev"</p>
+                            <button
+                                on:click=move |_| show_unlock.set(false)
+                                class="pitch-close"
+                                style="position: static; width: 28px; height: 28px; font-size: 14px;"
+                                aria-label="Fermer"
+                            >"✕"</button>
+                        </div>
                         <h3 class="text-lg font-bold text-primary mb-2">
                             "Continuez gratuitement"
                         </h3>

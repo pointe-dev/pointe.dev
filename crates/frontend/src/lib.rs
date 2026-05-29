@@ -24,11 +24,22 @@ pub fn App() -> impl IntoView {
 pub fn main() {
     _ = console_log::init_with_level(log::Level::Debug);
     info!("🚀 Leptos WASM initializing...");
-    
+
     leptos::mount_to_body(|| {
         info!("📦 Mounting App component...");
         App()
     });
-    
+
+    // Remove LCP skeleton — it was only needed before WASM mounted
+    if let Some(w) = web_sys::window() {
+        if let Some(doc) = w.document() {
+            if let Some(el) = doc.get_element_by_id("app-skeleton") {
+                if let Some(parent) = el.parent_node() {
+                    let _ = parent.remove_child(&el);
+                }
+            }
+        }
+    }
+
     info!("✅ Leptos mounted!");
 }
