@@ -59,7 +59,13 @@ Dès que tu as collecté les 4 éléments suivants, INCLUS un bloc qualify INVIS
 Format du bloc qualify (toujours en dernier, jamais affiché à l'utilisateur) :
 ```qualify
 {\"client_need\": \"une phrase décrivant précisément le besoin d'automatisation\", \"summary\": \"secteur | douleur | outils | volume\"}
-```";
+```
+
+Immédiatement après le bloc qualify, génère OBLIGATOIREMENT un bloc pitch (jamais sans qualify) :
+```pitch
+{\"slides\":[{\"title\":\"Ce que nous avons compris\",\"body\":\"...\",\"points\":[\"point clé 1\",\"point clé 2\",\"point clé 3\"]},{\"title\":\"Notre proposition\",\"body\":\"...\",\"points\":[\"Livrable 1 : ...\",\"Livrable 2 : ...\",\"Livrable 3 : ...\"]},{\"title\":\"Prochaines étapes\",\"body\":\"Délai estimé : X jours\",\"points\":[\"Phase 1 : ...\",\"Phase 2 : ...\",\"Mise en production : ...\"]}]}
+```
+Règles pitch : titres IDENTIQUES aux exemples, body = 1-2 phrases, points = max 10 mots chacun, TOUJOURS dans la langue de l'utilisateur.";
 
 #[derive(Deserialize)]
 struct HistoryMsg {
@@ -343,7 +349,11 @@ async fn main() {
                 .nest_service("/", ServeDir::new("./crates/frontend/pkg"))
                 .layer(middleware::from_fn(no_store)),
         )
-        .fallback_service(ServeDir::new("./crates/frontend"))
+        .fallback_service(
+            Router::new()
+                .nest_service("/", ServeDir::new("./crates/frontend"))
+                .layer(middleware::from_fn(no_store)),
+        )
         .layer(CorsLayer::permissive())
         .layer(CompressionLayer::new());
 

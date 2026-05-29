@@ -21,7 +21,7 @@ pub fn Home(on_chat_click: impl Fn() + Clone + 'static) -> impl IntoView {
             <Hero on_chat_click=move || c_hero() />
 
             {/* ── PROCESS STRIP ─────────────────────────────────── */}
-            <section class="section-deep border-t border-subtle py-20 px-6">
+            <section class="section-deep border-t border-subtle py-28 px-6">
                 <div class="max-w-6xl mx-auto">
                     <p class="eyebrow text-center mb-3">
                         {move || t(lang.get(), "process.eyebrow")}
@@ -29,7 +29,7 @@ pub fn Home(on_chat_click: impl Fn() + Clone + 'static) -> impl IntoView {
                     <h2 class="section-title text-center mb-4">
                         {move || t(lang.get(), "process.title")}
                     </h2>
-                    <p class="section-sub text-center mb-20 max-w-xl mx-auto">
+                    <p class="section-sub text-center mb-32 max-w-xl mx-auto">
                         {move || t(lang.get(), "process.sub")}
                     </p>
 
@@ -127,7 +127,7 @@ pub fn Home(on_chat_click: impl Fn() + Clone + 'static) -> impl IntoView {
             </section>
 
             {/* ── APPROCHE B2B ──────────────────────────────────── */}
-            <section class="bg-surface border-t border-subtle py-20 px-6">
+            <section class="bg-surface border-t border-subtle py-28 px-6">
                 <div class="max-w-6xl mx-auto">
                     <p class="eyebrow text-center mb-3">
                         {move || t(lang.get(), "approach.eyebrow")}
@@ -135,7 +135,7 @@ pub fn Home(on_chat_click: impl Fn() + Clone + 'static) -> impl IntoView {
                     <h2 class="section-title text-center mb-4">
                         {move || t(lang.get(), "approach.title")}
                     </h2>
-                    <p class="section-sub text-center mb-20">
+                    <p class="section-sub text-center mb-32">
                         {move || t(lang.get(), "approach.sub")}
                     </p>
 
@@ -176,12 +176,12 @@ pub fn Home(on_chat_click: impl Fn() + Clone + 'static) -> impl IntoView {
             </section>
 
             {/* ── SERVICES ──────────────────────────────────────── */}
-            <section class="section-deep border-t border-subtle py-20 px-6">
+            <section class="section-deep border-t border-subtle py-28 px-6">
                 <div class="max-w-6xl mx-auto">
                     <p class="eyebrow text-center mb-3">
                         {move || t(lang.get(), "svc.eyebrow")}
                     </p>
-                    <h2 class="section-title text-center mb-20">
+                    <h2 class="section-title text-center mb-32">
                         {move || t(lang.get(), "svc.title")}
                     </h2>
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -217,8 +217,8 @@ pub fn Home(on_chat_click: impl Fn() + Clone + 'static) -> impl IntoView {
             </section>
 
             {/* ── SOLUTIONS TICKER ──────────────────────────────── */}
-            <section id="solutions" class="bg-surface border-t border-subtle py-20 px-6 overflow-hidden">
-                <div class="max-w-6xl mx-auto mb-20">
+            <section id="solutions" class="bg-surface border-t border-subtle py-28 px-6 overflow-hidden">
+                <div class="max-w-6xl mx-auto mb-32">
                     <p class="eyebrow text-center mb-3">
                         {move || t(lang.get(), "gal.eyebrow")}
                     </p>
@@ -283,7 +283,7 @@ pub fn Home(on_chat_click: impl Fn() + Clone + 'static) -> impl IntoView {
             </section>
 
             {/* ── CTA FINALE ────────────────────────────────────── */}
-            <section class="cta-section border-t border-subtle py-24 px-6 text-center">
+            <section class="cta-section border-t border-subtle py-28 px-6 text-center">
                 <div class="max-w-2xl mx-auto">
                     <p class="eyebrow mb-4">
                         {move || t(lang.get(), "cta.eyebrow")}

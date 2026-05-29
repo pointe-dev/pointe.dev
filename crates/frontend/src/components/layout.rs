@@ -13,6 +13,19 @@ enum Page {
     Merci,
 }
 
+fn detect_initial_lang() -> Lang {
+    web_sys::window()
+        .and_then(|w| w.navigator().language())
+        .map(|l| {
+            let l = l.to_lowercase();
+            if l.starts_with("fr") { Lang::Fr }
+            else if l.starts_with("en") { Lang::En }
+            else if l.starts_with("de") { Lang::De }
+            else { Lang::Fr }
+        })
+        .unwrap_or(Lang::Fr)
+}
+
 fn detect_initial_page() -> Page {
     web_sys::window()
         .and_then(|w| w.location().pathname().ok())
@@ -39,7 +52,7 @@ fn scroll_to_solutions() {
 pub fn Layout() -> impl IntoView {
     let is_contact_open = create_rw_signal(false);
     let active_page = create_rw_signal(detect_initial_page());
-    let lang = create_rw_signal(Lang::Fr);
+    let lang = create_rw_signal(detect_initial_lang());
 
     provide_context(lang);
 

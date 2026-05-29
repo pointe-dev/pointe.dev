@@ -87,9 +87,71 @@ pub fn Hero(on_chat_click: impl Fn() + 'static) -> impl IntoView {
                 </h1>
 
                 {/* Sub-copy */}
-                <p class="text-xl md:text-2xl text-secondary mb-12 mt-8 max-w-2xl mx-auto font-light leading-relaxed animate-fade-up stagger-2">
+                <p class="text-xl md:text-2xl text-secondary mt-8 max-w-2xl mx-auto font-light leading-relaxed animate-fade-up stagger-2">
                     {move || t(lang.get(), "hero.sub")}
                 </p>
+
+                {/* Use-case ticker */}
+                <div class="hero-use-case-strip animate-fade-up stagger-2">
+                    <span class="hero-use-case-label">
+                        {move || t(lang.get(), "hero.cases.label")}
+                    </span>
+                    <div class="hero-use-case-track-wrap">
+                        <div class="hero-use-case-track">
+                            <span class="hero-use-case-pill">
+                                <span class="hero-use-case-dot"></span>
+                                {move || t(lang.get(), "hero.case1.name")}
+                                <span class="hero-use-case-time">{move || t(lang.get(), "hero.case1.time")}</span>
+                            </span>
+                            <span class="hero-use-case-pill">
+                                <span class="hero-use-case-dot"></span>
+                                {move || t(lang.get(), "hero.case2.name")}
+                                <span class="hero-use-case-time">{move || t(lang.get(), "hero.case2.time")}</span>
+                            </span>
+                            <span class="hero-use-case-pill">
+                                <span class="hero-use-case-dot"></span>
+                                {move || t(lang.get(), "hero.case3.name")}
+                                <span class="hero-use-case-time">{move || t(lang.get(), "hero.case3.time")}</span>
+                            </span>
+                            <span class="hero-use-case-pill">
+                                <span class="hero-use-case-dot"></span>
+                                {move || t(lang.get(), "hero.case4.name")}
+                                <span class="hero-use-case-time">{move || t(lang.get(), "hero.case4.time")}</span>
+                            </span>
+                            <span class="hero-use-case-pill">
+                                <span class="hero-use-case-dot"></span>
+                                {move || t(lang.get(), "hero.case5.name")}
+                                <span class="hero-use-case-time">{move || t(lang.get(), "hero.case5.time")}</span>
+                            </span>
+                            {/* duplicate for seamless loop */}
+                            <span class="hero-use-case-pill">
+                                <span class="hero-use-case-dot"></span>
+                                {move || t(lang.get(), "hero.case1.name")}
+                                <span class="hero-use-case-time">{move || t(lang.get(), "hero.case1.time")}</span>
+                            </span>
+                            <span class="hero-use-case-pill">
+                                <span class="hero-use-case-dot"></span>
+                                {move || t(lang.get(), "hero.case2.name")}
+                                <span class="hero-use-case-time">{move || t(lang.get(), "hero.case2.time")}</span>
+                            </span>
+                            <span class="hero-use-case-pill">
+                                <span class="hero-use-case-dot"></span>
+                                {move || t(lang.get(), "hero.case3.name")}
+                                <span class="hero-use-case-time">{move || t(lang.get(), "hero.case3.time")}</span>
+                            </span>
+                            <span class="hero-use-case-pill">
+                                <span class="hero-use-case-dot"></span>
+                                {move || t(lang.get(), "hero.case4.name")}
+                                <span class="hero-use-case-time">{move || t(lang.get(), "hero.case4.time")}</span>
+                            </span>
+                            <span class="hero-use-case-pill">
+                                <span class="hero-use-case-dot"></span>
+                                {move || t(lang.get(), "hero.case5.name")}
+                                <span class="hero-use-case-time">{move || t(lang.get(), "hero.case5.time")}</span>
+                            </span>
+                        </div>
+                    </div>
+                </div>
 
                 {/* CTAs */}
                 <div class="flex flex-col gap-4 justify-center items-center animate-fade-up stagger-3">

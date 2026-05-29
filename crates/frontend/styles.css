@@ -1451,6 +1451,14 @@ h1, h2, h3, h4, h5, h6 {
   padding-top: 6rem;
   padding-bottom: 6rem;
 }
+.py-28 {
+  padding-top: 7rem;
+  padding-bottom: 7rem;
+}
+.py-32 {
+  padding-top: 8rem;
+  padding-bottom: 8rem;
+}
 
 .py-3 {
   padding-top: 0.75rem;
@@ -1814,6 +1822,34 @@ html:not(.dark) {
   --border-color: rgba(15, 23, 42, 0.1);
 }
 
+/* Light mode — hero background: warm cream gradient */
+html:not(.dark) .hero-ambient {
+  background: linear-gradient(168deg, #fef7ec 0%, #fafbfc 52%, #f4f3ff 100%) !important;
+}
+
+/* Light mode — ambient glow pseudo-elements: soft warm honey instead of red/cyan */
+html:not(.dark) .hero-ambient::before {
+  background: radial-gradient(ellipse 60% 50% at 28% 38%, rgba(210, 165, 90, 0.13) 0%, transparent 68%);
+}
+html:not(.dark) .hero-ambient::after {
+  background: radial-gradient(ellipse 50% 45% at 72% 68%, rgba(195, 155, 100, 0.09) 0%, transparent 68%);
+}
+
+/* Light mode — hide animated RGBA blurs (they're hardcoded with dark colors) */
+html:not(.dark) .animate-pointe-rise,
+html:not(.dark) .animate-arabesque {
+  opacity: 0 !important;
+  animation-play-state: paused !important;
+}
+
+/* Light mode — text-gradient: charcoal → crimson (readable on light bg) */
+html:not(.dark) .text-gradient {
+  background: linear-gradient(130deg, #0f172a 0%, var(--red-bright) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
 html.dark {
   --bg-primary:    #0f0c10;
   --bg-secondary:  #140f15;
@@ -1891,6 +1927,8 @@ html.dark {
 .leading-loose { line-height: 2; }
 .mb-20 { margin-bottom: 5rem; }
 .mb-24 { margin-bottom: 6rem; }
+.mb-28 { margin-bottom: 7rem; }
+.mb-32 { margin-bottom: 8rem; }
 .mb-6  { margin-bottom: 1.5rem; }
 .gap-8 { gap: 2rem; }     /* ensure exists */
 
@@ -2099,6 +2137,81 @@ html.dark {
   background: linear-gradient(90deg, var(--border-subtle), var(--cyan-mid), var(--border-subtle));
   margin-top: 24px;
   opacity: 0.5;
+}
+
+/* ── Hero use-case strip ─────────────────────────────────────────────── */
+
+.hero-use-case-strip {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 2.5rem;
+  margin-bottom: 2.5rem;
+  min-width: 0;
+}
+.hero-use-case-label {
+  flex-shrink: 0;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.hero-use-case-track-wrap {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 8%, #000 92%, transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0%, #000 8%, #000 92%, transparent 100%);
+}
+@keyframes use-case-scroll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+.hero-use-case-track {
+  display: inline-flex;
+  gap: 0.625rem;
+  animation: use-case-scroll 22s linear infinite;
+  white-space: nowrap;
+}
+.hero-use-case-strip:hover .hero-use-case-track {
+  animation-play-state: paused;
+}
+.hero-use-case-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  transition: border-color 0.2s, color 0.2s;
+  cursor: default;
+}
+.hero-use-case-pill:hover {
+  border-color: rgba(196, 18, 47, 0.35);
+  color: var(--text-primary);
+}
+.hero-use-case-dot {
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--red-bright);
+  opacity: 0.7;
+}
+.hero-use-case-time {
+  margin-left: 0.1rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--cyan-bright);
+  opacity: 0.85;
 }
 
 /* ── Solutions ticker ────────────────────────────────────────────────── */
@@ -2380,6 +2493,196 @@ html:not(.dark) .nav-glass {
 .btn-sm {
   padding: 0.5rem 1.25rem;
   font-size: 0.875rem;
+}
+
+/* ── Copy button ─────────────────────────────────────────────────────── */
+
+.copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: color 0.15s;
+  margin-left: 0.25rem;
+  border-radius: 4px;
+}
+.copy-btn:hover { color: var(--red-bright); }
+.copy-btn svg { width: 13px; height: 13px; display: block; }
+
+/* ── Theme icon button ───────────────────────────────────────────────── */
+
+.theme-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.theme-icon-btn:hover { color: var(--text-primary); }
+.theme-icon-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* ── Pitch modal ─────────────────────────────────────────────────────── */
+
+.pitch-trigger-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.875rem;
+  border-radius: 999px;
+  border: 1px solid rgba(196, 18, 47, 0.4);
+  background: rgba(196, 18, 47, 0.08);
+  color: var(--red-bright);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s, transform 0.15s;
+}
+.pitch-trigger-btn:hover {
+  border-color: var(--red-bright);
+  background: rgba(196, 18, 47, 0.14);
+  transform: translateY(-1px);
+}
+.pitch-card {
+  position: relative;
+  width: 100%;
+  max-width: 600px;
+  margin: 1.5rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 20px;
+  padding: 2.5rem 2.5rem 2rem;
+  box-shadow: 0 32px 80px rgba(0,0,0,0.5);
+  animation: pitch-in 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes pitch-in {
+  from { opacity: 0; transform: scale(0.94) translateY(12px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0); }
+}
+.pitch-close {
+  position: absolute;
+  top: 1.25rem;
+  right: 1.25rem;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, background 0.15s;
+}
+.pitch-close:hover { color: var(--text-primary); background: rgba(255,255,255,0.06); }
+.pitch-slide {
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.pitch-page-indicator {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+.pitch-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.15);
+  transition: background 0.2s, transform 0.2s;
+}
+.pitch-dot-active {
+  background: var(--red-bright);
+  transform: scale(1.2);
+}
+.pitch-title {
+  font-family: 'Clash Display', system-ui, sans-serif;
+  font-size: 1.375rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.03em;
+  word-spacing: 0.08em;
+  line-height: 1.25;
+}
+.pitch-body {
+  font-size: 0.9375rem;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}
+.pitch-points {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+.pitch-point {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.pitch-point-dot {
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--cyan-bright);
+  margin-top: 0.45em;
+  opacity: 0.8;
+}
+.pitch-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 2rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border-subtle);
+}
+.pitch-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 1rem;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.pitch-nav-btn:hover { border-color: var(--text-primary); color: var(--text-primary); }
+.pitch-nav-btn-ghost { opacity: 0.3; cursor: not-allowed; }
+.pitch-nav-btn-ghost:hover { border-color: var(--border-subtle); color: var(--text-secondary); }
+.pitch-nav-count {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
 }
 
 /* Custom pointe.dev styles */

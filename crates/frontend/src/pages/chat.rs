@@ -5,7 +5,6 @@ use gloo_net::http::Request;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use crate::i18n::{Lang, t};
-use crate::components::workflow_canvas::{WorkflowCanvas, WorkflowGraph};
 
 const FREE_MESSAGES: u32 = 5;
 
@@ -15,7 +14,6 @@ fn get_or_create_session_id() -> String {
     if let Ok(Some(id)) = storage.get_item("_sid") {
         return id;
     }
-    // Generate a simple UUID-like ID via Math.random
     let id = js_sys::eval(
         "'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,\
          function(c){var r=Math.random()*16|0,v=c=='x'?r:(r&0x3|0x8);return v.toString(16)})"
@@ -44,7 +42,6 @@ struct ChatResponse {
     response: String,
     messages_used: u32,
     messages_free: u32,
-    /// Present when the AI qualified the prospect and launched a pipeline.
     pipeline_id: Option<String>,
 }
 
@@ -59,32 +56,88 @@ struct UnlockResponse {
     ok: bool,
 }
 
-// Extract ```workflow JSON blocks from AI response
-fn parse_workflow(content: &str) -> (String, Option<WorkflowGraph>) {
-    const OPEN: &str = "```workflow";
-    const CLOSE: &str = "\n```";
-    if let Some(s) = content.find(OPEN) {
-        let after_tag = &content[s + OPEN.len()..];
-        let after = if let Some(nl) = after_tag.find('\n') {
-            &after_tag[nl + 1..]
-        } else {
-            return (content.to_string(), None);
-        };
-        if let Some(e) = after.find(CLOSE) {
-            let json = after[..e].trim();
-            let before = content[..s].trim();
-            let rest   = after[e + CLOSE.len()..].trim();
-            let text = match (before.is_empty(), rest.is_empty()) {
-                (true,  true)  => String::new(),
-                (false, true)  => before.to_string(),
-                (true,  false) => rest.to_string(),
-                (false, false) => format!("{}\n\n{}", before, rest),
-            };
-            let graph = serde_json::from_str::<WorkflowGraph>(json).ok();
-            return (text, graph);
+#[derive(Deserialize, Clone)]
+struct PitchSlide {
+    title: String,
+    body: String,
+    #[serde(default)]
+    points: Vec<String>,
+}
+
+#[derive(Deserialize, Clone)]
+struct PitchData {
+    slides: Vec<PitchSlide>,
+}
+
+fn strip_block<'a>(content: &'a str, tag: &str) -> (&'a str, Option<&'a str>) {
+    let open = Box::leak(format!("```{}", tag).into_boxed_str()) as &str;
+    let close = "\n```";
+    if let Some(s) = content.find(open) {
+        let after_tag = &content[s + open.len()..];
+        if let Some(nl) = after_tag.find('\n') {
+            let after = &after_tag[nl + 1..];
+            if let Some(e) = after.find(close) {
+                let block = &after[..e];
+                return (&content[..s], Some(block));
+            }
         }
     }
-    (content.to_string(), None)
+    (content, None)
+}
+
+fn parse_response(content: &str) -> (String, Option<PitchData>) {
+    // Strip pitch block
+    let (without_pitch, pitch_json) = {
+        const OPEN: &str = "```pitch";
+        const CLOSE: &str = "\n```";
+        if let Some(s) = content.find(OPEN) {
+            let after_tag = &content[s + OPEN.len()..];
+            let after = after_tag.find('\n').map(|nl| &after_tag[nl + 1..]).unwrap_or("");
+            if let Some(e) = after.find(CLOSE) {
+                let json = &after[..e];
+                let before = content[..s].trim_end();
+                let rest = after[e + CLOSE.len()..].trim_start();
+                let text = match (before.is_empty(), rest.is_empty()) {
+                    (true,  true)  => String::new(),
+                    (false, true)  => before.to_string(),
+                    (true,  false) => rest.to_string(),
+                    (false, false) => format!("{}\n\n{}", before, rest),
+                };
+                let pitch = serde_json::from_str::<PitchData>(json).ok();
+                (text, pitch)
+            } else {
+                (content.to_string(), None)
+            }
+        } else {
+            (content.to_string(), None)
+        }
+    };
+
+    // Strip workflow block from remaining text (kept for future use, display suppressed)
+    let display_text = {
+        const OPEN: &str = "```workflow";
+        const CLOSE: &str = "\n```";
+        if let Some(s) = without_pitch.find(OPEN) {
+            let after_tag = &without_pitch[s + OPEN.len()..];
+            let after = after_tag.find('\n').map(|nl| &after_tag[nl + 1..]).unwrap_or("");
+            if let Some(e) = after.find(CLOSE) {
+                let before = without_pitch[..s].trim_end();
+                let rest = after[e + CLOSE.len()..].trim_start();
+                match (before.is_empty(), rest.is_empty()) {
+                    (true,  true)  => String::new(),
+                    (false, true)  => before.to_string(),
+                    (true,  false) => rest.to_string(),
+                    (false, false) => format!("{}\n\n{}", before, rest),
+                }
+            } else {
+                without_pitch
+            }
+        } else {
+            without_pitch
+        }
+    };
+
+    (display_text, pitch_json)
 }
 
 fn render_markdown(input: &str) -> String {
@@ -119,19 +172,19 @@ pub fn Chat() -> impl IntoView {
     let welcome_raw = t(lang.get_untracked(), "chat.welcome").to_string();
     let welcome_html = render_markdown(&welcome_raw);
 
-    // (is_user, raw_text_for_copy, pre-rendered_html)
     let messages = create_rw_signal::<Vec<(bool, String, String)>>(vec![(false, welcome_raw, welcome_html)]);
     let input_text    = create_rw_signal(String::new());
     let is_loading    = create_rw_signal(false);
     let copied_idx: RwSignal<Option<usize>> = create_rw_signal(None);
-    let current_graph: RwSignal<Option<WorkflowGraph>> = create_rw_signal(None);
+    let current_pitch: RwSignal<Option<PitchData>> = create_rw_signal(None);
     let messages_used: RwSignal<u32> = create_rw_signal(0);
     let show_unlock: RwSignal<bool> = create_rw_signal(false);
     let email_input = create_rw_signal(String::new());
     let unlock_error = create_rw_signal(false);
     let pipeline_id: RwSignal<Option<String>> = create_rw_signal(None);
+    let show_pitch: RwSignal<bool> = create_rw_signal(false);
+    let pitch_page: RwSignal<usize> = create_rw_signal(0);
 
-    // Auto-scroll to end on new message
     create_effect(move |_| {
         let _ = messages.get();
         if let Some(w) = web_sys::window() {
@@ -150,7 +203,6 @@ pub fn Chat() -> impl IntoView {
         let err_msg     = t(lang.get_untracked(), "chat.error").to_string();
         let offline_msg = t(lang.get_untracked(), "chat.offline").to_string();
 
-        // Capture history before adding current message (skip index 0 = welcome)
         let history: Vec<HistoryMsg> = messages.get_untracked()
             .into_iter()
             .skip(1)
@@ -186,11 +238,14 @@ pub fn Chat() -> impl IntoView {
                     }
                     match resp.json::<ChatResponse>().await {
                         Ok(data) => {
-                            let (text, graph) = parse_workflow(&data.response);
+                            let (text, pitch) = parse_response(&data.response);
                             let html = render_markdown(&text);
                             batch(move || {
                                 messages.update(|v| v.push((false, text, html)));
-                                if let Some(g) = graph { current_graph.set(Some(g)); }
+                                if let Some(p) = pitch {
+                                    current_pitch.set(Some(p));
+                                    pitch_page.set(0);
+                                }
                                 messages_used.set(data.messages_used);
                                 if let Some(pid) = data.pipeline_id { pipeline_id.set(Some(pid)); }
                                 is_loading.set(false);
@@ -216,7 +271,6 @@ pub fn Chat() -> impl IntoView {
         });
     };
 
-    // Email unlock submit
     let on_unlock_submit = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
         let email = email_input.get_untracked().trim().to_string();
@@ -282,10 +336,7 @@ pub fn Chat() -> impl IntoView {
                             {move || unlock_error.get().then(|| view! {
                                 <p class="text-xs text-red-400">"Email invalide, réessayez."</p>
                             })}
-                            <button
-                                type="submit"
-                                class="btn-primary w-full"
-                            >
+                            <button type="submit" class="btn-primary w-full">
                                 "Continuer la conversation →"
                             </button>
                         </form>
@@ -293,195 +344,262 @@ pub fn Chat() -> impl IntoView {
                 </div>
             })}
 
-            {/* Main: chat + canvas */}
-            <div class="flex flex-1 overflow-hidden">
-
-                {/* Chat column */}
-                <div class="flex flex-col flex-1 min-w-0 overflow-hidden">
-
-                    {/* Header */}
-                    <div class="border-b border-subtle px-6 py-6 shrink-0">
-                        <div class="max-w-2xl mx-auto flex items-start justify-between">
-                            <div>
-                                <p class="eyebrow mb-2">"pointe.dev"</p>
-                                <h2 class="text-2xl font-bold text-primary">
-                                    {move || t(lang.get(), "chat.title")}
-                                </h2>
-                                <p class="text-base text-muted mt-1 font-light">
-                                    {move || t(lang.get(), "chat.sub")}
-                                </p>
-                            </div>
-                            <div class="flex flex-col items-end gap-2 shrink-0 mt-1">
-                                {move || {
-                                    let used = messages_used.get();
-                                    let remaining = FREE_MESSAGES.saturating_sub(used);
-                                    (used > 0).then(|| view! {
-                                        <span class=move || format!(
-                                            "text-xs px-2.5 py-1 rounded-full border {}",
-                                            if remaining == 0 { "border-red-800 text-red-400" }
-                                            else { "border-subtle text-muted" }
-                                        )>
-                                            {format!("{remaining} message{} gratuit{}", if remaining > 1 { "s" } else { "" }, if remaining > 1 { "s" } else { "" })}
-                                        </span>
-                                    })
-                                }}
-                                {move || pipeline_id.get().map(|_| view! {
-                                    <span class="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border border-red-900 text-red-400">
-                                        <span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span>
-                                        "Workflow en cours d'analyse"
-                                    </span>
-                                })}
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Messages */}
-                    <div class="chat-scroll flex-1 overflow-y-auto px-6 py-6">
-                        <div class="max-w-2xl mx-auto space-y-5">
-                            {move || {
-                                messages.get().into_iter().enumerate().map(|(i, (is_user, raw, html))| {
-                                    let (outer, inner) = if is_user {
-                                        (
-                                            "flex justify-end flex-col items-end gap-1",
-                                            "max-w-[80%] px-5 py-4 bg-red-600 text-white rounded-2xl rounded-tr-sm text-base leading-relaxed",
-                                        )
-                                    } else {
-                                        (
-                                            "flex justify-start flex-col items-start gap-1",
-                                            "chat-md max-w-[80%] px-5 py-4 glass text-secondary rounded-2xl rounded-tl-sm text-base leading-relaxed",
-                                        )
-                                    };
-                                    view! {
-                                        <div class=outer>
-                                            <div class=inner inner_html=html></div>
-                                            {(!is_user).then(|| {
-                                                let text = raw.clone();
-                                                view! {
-                                                    <button
-                                                        on:click=move |_| {
-                                                            copy_text(&text);
-                                                            copied_idx.set(Some(i));
-                                                            let ci = copied_idx;
-                                                            let cb = Closure::<dyn Fn()>::wrap(Box::new(move || {
-                                                                let _ = ci.try_update(|v| *v = None);
-                                                            }));
-                                                            if let Some(w) = web_sys::window() {
-                                                                let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
-                                                                    cb.as_ref().unchecked_ref(), 2000
-                                                                );
-                                                            }
-                                                            cb.forget();
-                                                        }
-                                                        class="text-base leading-none text-muted hover:text-red-400 transition-colors pl-1"
-                                                    >
-                                                        {move || if copied_idx.get() == Some(i) { "✓" } else { "📋" }}
-                                                    </button>
-                                                }
-                                            })}
-                                        </div>
+            {/* Pitch modal */}
+            {move || show_pitch.get().then(|| {
+                let pitch = current_pitch.get().unwrap_or_else(|| PitchData { slides: vec![] });
+                let total = pitch.slides.len();
+                view! {
+                    <div
+                        class="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md"
+                        on:click=move |ev| {
+                            if let Some(target) = ev.target() {
+                                if let Ok(el) = target.dyn_into::<web_sys::HtmlElement>() {
+                                    if el.class_list().contains("pitch-backdrop") {
+                                        show_pitch.set(false);
                                     }
-                                }).collect_view()
+                                }
+                            }
+                        }
+                    >
+                        <div class="pitch-card" style="pointer-events: auto;">
+
+                            {/* Close */}
+                            <button
+                                class="pitch-close"
+                                on:click=move |_| show_pitch.set(false)
+                            >"✕"</button>
+
+                            {/* Slide content */}
+                            {move || {
+                                let page = pitch_page.get().min(total.saturating_sub(1));
+                                let slide = pitch.slides.get(page).cloned().unwrap_or_else(|| PitchSlide {
+                                    title: String::new(),
+                                    body: String::new(),
+                                    points: vec![],
+                                });
+                                view! {
+                                    <div class="pitch-slide">
+                                        {/* Page indicator */}
+                                        <div class="pitch-page-indicator">
+                                            {(0..total).map(|i| view! {
+                                                <span class=move || if pitch_page.get() == i { "pitch-dot pitch-dot-active" } else { "pitch-dot" }></span>
+                                            }).collect_view()}
+                                        </div>
+
+                                        <h2 class="pitch-title">{slide.title.clone()}</h2>
+                                        <p class="pitch-body">{slide.body.clone()}</p>
+
+                                        {(!slide.points.is_empty()).then(|| view! {
+                                            <ul class="pitch-points">
+                                                {slide.points.iter().map(|p| view! {
+                                                    <li class="pitch-point">
+                                                        <span class="pitch-point-dot"></span>
+                                                        {p.clone()}
+                                                    </li>
+                                                }).collect_view()}
+                                            </ul>
+                                        })}
+                                    </div>
+                                }
                             }}
 
-                            {move || is_loading.get().then(|| view! {
-                                <div class="flex justify-start">
-                                    <div class="px-5 py-3 glass rounded-2xl rounded-tl-sm">
-                                        <div class="flex gap-1.5 items-center h-4">
-                                            <span class="w-1.5 h-1.5 rounded-full bg-red-400 animate-bounce" style="animation-delay:0ms"></span>
-                                            <span class="w-1.5 h-1.5 rounded-full bg-red-400 animate-bounce" style="animation-delay:140ms"></span>
-                                            <span class="w-1.5 h-1.5 rounded-full bg-red-400 animate-bounce" style="animation-delay:280ms"></span>
-                                        </div>
-                                    </div>
-                                </div>
+                            {/* Navigation */}
+                            <div class="pitch-nav">
+                                <button
+                                    class=move || if pitch_page.get() == 0 { "pitch-nav-btn pitch-nav-btn-ghost" } else { "pitch-nav-btn" }
+                                    disabled=move || pitch_page.get() == 0
+                                    on:click=move |_| pitch_page.update(|p| *p = p.saturating_sub(1))
+                                >"←"</button>
+
+                                <span class="pitch-nav-count">
+                                    {move || pitch_page.get() + 1}" / "{total}
+                                </span>
+
+                                {move || {
+                                    let page = pitch_page.get();
+                                    if page + 1 < total {
+                                        view! {
+                                            <button
+                                                class="pitch-nav-btn"
+                                                on:click=move |_| pitch_page.update(|p| *p += 1)
+                                            >"→"</button>
+                                        }.into_view()
+                                    } else {
+                                        view! {
+                                            <button
+                                                class="btn-primary btn-sm"
+                                                on:click=move |_| show_pitch.set(false)
+                                            >"Parlons-en →"</button>
+                                        }.into_view()
+                                    }
+                                }}
+                            </div>
+                        </div>
+                    </div>
+                }
+            })}
+
+            {/* Chat */}
+            <div class="flex flex-col flex-1 min-w-0 overflow-hidden">
+
+                {/* Header */}
+                <div class="border-b border-subtle px-6 py-6 shrink-0">
+                    <div class="max-w-2xl mx-auto flex items-start justify-between">
+                        <div>
+                            <p class="eyebrow mb-2">"pointe.dev"</p>
+                            <h2 class="text-2xl font-bold text-primary">
+                                {move || t(lang.get(), "chat.title")}
+                            </h2>
+                            <p class="text-base text-muted mt-1 font-light">
+                                {move || t(lang.get(), "chat.sub")}
+                            </p>
+                        </div>
+                        <div class="flex flex-col items-end gap-2 shrink-0 mt-1">
+                            {move || {
+                                let used = messages_used.get();
+                                let remaining = FREE_MESSAGES.saturating_sub(used);
+                                (used > 0).then(|| view! {
+                                    <span class=move || format!(
+                                        "text-xs px-2.5 py-1 rounded-full border {}",
+                                        if remaining == 0 { "border-red-800 text-red-400" }
+                                        else { "border-subtle text-muted" }
+                                    )>
+                                        {format!("{remaining} message{} gratuit{}", if remaining > 1 { "s" } else { "" }, if remaining > 1 { "s" } else { "" })}
+                                    </span>
+                                })
+                            }}
+                            {move || current_pitch.get().map(|_| view! {
+                                <button
+                                    class="pitch-trigger-btn"
+                                    on:click=move |_| { pitch_page.set(0); show_pitch.set(true); }
+                                >
+                                    <span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse shrink-0"></span>
+                                    "Notre proposition"
+                                </button>
                             })}
-
-                            <div id="chat-end"></div>
-                        </div>
-                    </div>
-
-                    {/* Continue on messaging apps */}
-                    <div class="px-6 py-2 border-t border-subtle/50">
-                        <div class="max-w-2xl mx-auto flex items-center gap-3">
-                            <span class="text-xs text-muted">"Continuer sur"</span>
-                            <a
-                                href="https://wa.me/33600000000"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                class="text-xs px-2.5 py-1 rounded-full border border-subtle text-muted hover:border-green-500 hover:text-green-400 transition-colors"
-                            >
-                                "WhatsApp"
-                            </a>
-                            <a
-                                href="https://t.me/pointedev"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                class="text-xs px-2.5 py-1 rounded-full border border-subtle text-muted hover:border-sky-500 hover:text-sky-400 transition-colors"
-                            >
-                                "Telegram"
-                            </a>
-                        </div>
-                    </div>
-
-                    {/* Input */}
-                    <div class="border-t border-subtle px-6 py-4">
-                        <div class="max-w-2xl mx-auto flex gap-3 items-center">
-                            <textarea
-                                class="flex-1 resize-none bg-elevated border border-subtle rounded-xl px-4 py-3 text-base text-primary placeholder-gray-600 focus:outline-none focus:border-red-600 transition-colors leading-relaxed"
-                                placeholder=move || t(lang.get(), "chat.placeholder")
-                                rows="2"
-                                prop:value=move || input_text.get()
-                                on:input=move |ev| input_text.set(event_target_value(&ev))
-                                on:keydown=on_keydown
-                            ></textarea>
-                            <button
-                                on:click=move |_| send()
-                                class="btn-primary shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
-                                disabled=move || is_loading.get()
-                            >
-                                {move || t(lang.get(), "chat.send")}
-                            </button>
                         </div>
                     </div>
                 </div>
 
-                {/* Workflow canvas — desktop only */}
-                <div class="hidden lg:flex flex-col w-[480px] xl:w-[560px] border-l border-subtle bg-surface/30 shrink-0">
-
-                    {/* Canvas header */}
-                    <div class="px-5 py-4 border-b border-subtle flex items-center justify-between shrink-0">
-                        <p class="eyebrow">"Votre workflow"</p>
-                        {move || current_graph.get().map(|_| view! {
-                            <span class="flex items-center gap-1.5">
-                                <span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span>
-                                <span class="text-xs text-muted">"Généré par IA"</span>
-                            </span>
-                        })}
-                    </div>
-
-                    {/* Canvas body */}
-                    <div class="chat-scroll flex-1 overflow-y-auto p-6 relative">
-                        {move || match current_graph.get() {
-                            Some(g) => view! {
-                                <div class="w-full animate-canvas-in">
-                                    <WorkflowCanvas graph=g />
-                                </div>
-                            }.into_view(),
-                            None => view! {
-                                <div class="flex flex-col items-center justify-center h-full min-h-48 text-center px-4 py-8">
-                                    <div class="w-16 h-16 rounded-2xl border-2 border-dashed border-subtle flex items-center justify-center mb-5">
-                                        <svg class="w-7 h-7 text-muted" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
-                                        </svg>
+                {/* Messages */}
+                <div class="chat-scroll flex-1 overflow-y-auto px-6 py-6">
+                    <div class="max-w-2xl mx-auto space-y-5">
+                        {move || {
+                            messages.get().into_iter().enumerate().map(|(i, (is_user, raw, html))| {
+                                let (outer, inner) = if is_user {
+                                    (
+                                        "flex justify-end flex-col items-end gap-1",
+                                        "max-w-[80%] px-5 py-4 bg-red-600 text-white rounded-2xl rounded-tr-sm text-base leading-relaxed",
+                                    )
+                                } else {
+                                    (
+                                        "flex justify-start flex-col items-start gap-1",
+                                        "chat-md max-w-[80%] px-5 py-4 glass text-secondary rounded-2xl rounded-tl-sm text-base leading-relaxed",
+                                    )
+                                };
+                                view! {
+                                    <div class=outer>
+                                        <div class=inner inner_html=html></div>
+                                        {(!is_user).then(|| {
+                                            let text = raw.clone();
+                                            view! {
+                                                <button
+                                                    on:click=move |_| {
+                                                        copy_text(&text);
+                                                        copied_idx.set(Some(i));
+                                                        let ci = copied_idx;
+                                                        let cb = Closure::<dyn Fn()>::wrap(Box::new(move || {
+                                                            let _ = ci.try_update(|v| *v = None);
+                                                        }));
+                                                        if let Some(w) = web_sys::window() {
+                                                            let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
+                                                                cb.as_ref().unchecked_ref(), 2000
+                                                            );
+                                                        }
+                                                        cb.forget();
+                                                    }
+                                                    class="copy-btn"
+                                                    title="Copier"
+                                                >
+                                                    {move || if copied_idx.get() == Some(i) {
+                                                        view! {
+                                                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                                <polyline points="2.5 8.5 6 12 13.5 4"/>
+                                                            </svg>
+                                                        }.into_view()
+                                                    } else {
+                                                        view! {
+                                                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                                                <rect x="5" y="1" width="9" height="9" rx="1.5"/>
+                                                                <rect x="1" y="5" width="9" height="9" rx="1.5"/>
+                                                            </svg>
+                                                        }.into_view()
+                                                    }}
+                                                </button>
+                                            }
+                                        })}
                                     </div>
-                                    <p class="text-sm font-medium text-secondary mb-2">
-                                        "Workflow en attente"
-                                    </p>
-                                    <p class="text-xs text-muted leading-relaxed max-w-[160px]">
-                                        "Décrivez votre processus — l'IA le visualisera ici en temps réel."
-                                    </p>
-                                </div>
-                            }.into_view(),
+                                }
+                            }).collect_view()
                         }}
+
+                        {move || is_loading.get().then(|| view! {
+                            <div class="flex justify-start">
+                                <div class="px-5 py-3 glass rounded-2xl rounded-tl-sm">
+                                    <div class="flex gap-1.5 items-center h-4">
+                                        <span class="w-1.5 h-1.5 rounded-full bg-red-400 animate-bounce" style="animation-delay:0ms"></span>
+                                        <span class="w-1.5 h-1.5 rounded-full bg-red-400 animate-bounce" style="animation-delay:140ms"></span>
+                                        <span class="w-1.5 h-1.5 rounded-full bg-red-400 animate-bounce" style="animation-delay:280ms"></span>
+                                    </div>
+                                </div>
+                            </div>
+                        })}
+
+                        <div id="chat-end"></div>
+                    </div>
+                </div>
+
+                {/* Continue on messaging apps */}
+                <div class="px-6 py-2 border-t border-subtle/50">
+                    <div class="max-w-2xl mx-auto flex items-center gap-3">
+                        <span class="text-xs text-muted">"Continuer sur"</span>
+                        <a
+                            href="https://wa.me/33600000000"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="text-xs px-2.5 py-1 rounded-full border border-subtle text-muted hover:border-green-500 hover:text-green-400 transition-colors"
+                        >
+                            "WhatsApp"
+                        </a>
+                        <a
+                            href="https://t.me/pointedev"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="text-xs px-2.5 py-1 rounded-full border border-subtle text-muted hover:border-sky-500 hover:text-sky-400 transition-colors"
+                        >
+                            "Telegram"
+                        </a>
+                    </div>
+                </div>
+
+                {/* Input */}
+                <div class="border-t border-subtle px-6 py-4">
+                    <div class="max-w-2xl mx-auto flex gap-3 items-center">
+                        <textarea
+                            class="flex-1 resize-none bg-elevated border border-subtle rounded-xl px-4 py-3 text-base text-primary placeholder-gray-600 focus:outline-none focus:border-red-600 transition-colors leading-relaxed"
+                            placeholder=move || t(lang.get(), "chat.placeholder")
+                            rows="2"
+                            prop:value=move || input_text.get()
+                            on:input=move |ev| input_text.set(event_target_value(&ev))
+                            on:keydown=on_keydown
+                        ></textarea>
+                        <button
+                            on:click=move |_| send()
+                            class="btn-primary shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                            disabled=move || is_loading.get()
+                        >
+                            {move || t(lang.get(), "chat.send")}
+                        </button>
                     </div>
                 </div>
             </div>
