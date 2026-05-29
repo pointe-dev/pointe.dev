@@ -1,12 +1,13 @@
 use axum::{
-    extract::State,
-    http::{header, HeaderValue, StatusCode},
+    extract::{ConnectInfo, State},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     routing::{get, post},
     Json, Router,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
@@ -79,6 +80,10 @@ struct ChatRequest {
     #[serde(default)]
     history: Vec<HistoryMsg>,
     session_id: String,
+    /// SHA-256 hex of browser signals (UA+lang+tz+screen). Used as secondary
+    /// rate-limit bucket alongside IP to prevent localStorage-clearing abuse.
+    #[serde(default)]
+    fingerprint: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -86,7 +91,6 @@ struct ChatResponse {
     response: String,
     messages_used: u32,
     messages_free: u32,
-    /// Set when the AI qualifies the prospect and a pipeline has been launched.
     #[serde(skip_serializing_if = "Option::is_none")]
     pipeline_id: Option<String>,
 }
@@ -134,6 +138,11 @@ struct UnlockRequest {
 #[derive(Serialize)]
 struct UnlockResponse {
     ok: bool,
+    /// Signed token to store in localStorage — used as session_id on future visits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    email: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -168,18 +177,34 @@ async fn handle_unlock(
 ) -> Json<UnlockResponse> {
     let email = payload.email.trim().to_lowercase();
     let valid = email.contains('@') && email.contains('.');
-    if valid {
-        state.sessions.unlock_with_email(&payload.session_id, email).await;
+    if !valid {
+        return Json(UnlockResponse { ok: false, token: None, email: None });
     }
-    Json(UnlockResponse { ok: valid })
+    let token = SessionStore::sign_token(&email, &state.session_secret);
+    state.sessions.unlock_with_email(&payload.session_id, email.clone(), &token).await;
+    Json(UnlockResponse { ok: true, token: Some(token), email: Some(email) })
+}
+
+/// Extract the best-guess real IP from the request.
+fn real_ip(addr: SocketAddr, headers: &HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| addr.ip().to_string())
 }
 
 async fn handle_ai_chat(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     State(state): State<Arc<AppState>>,
     Json(payload): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, StatusCode> {
     let session_key = payload.session_id.clone();
-    if !state.sessions.check_and_increment(&session_key).await {
+    let ip = real_ip(addr, &headers);
+    let fp_key = payload.fingerprint.as_deref().map(|fp| SessionStore::fp_bucket(&ip, fp));
+    if !state.sessions.check_and_increment(&session_key, fp_key.as_deref()).await {
         return Err(StatusCode::PAYMENT_REQUIRED);
     }
     let messages_used = state.sessions.message_count(&session_key).await;
@@ -317,6 +342,13 @@ async fn main() {
         }
     };
 
+    let session_secret = std::env::var("SESSION_SECRET")
+        .unwrap_or_else(|_| {
+            tracing::warn!("SESSION_SECRET not set — using insecure default (set it in production)");
+            "pointe-dev-default-secret-change-in-prod".to_string()
+        })
+        .into_bytes();
+
     let state = Arc::new(AppState {
         anthropic_key,
         http,
@@ -327,6 +359,7 @@ async fn main() {
         qdrant,
         embeddings,
         stripe,
+        session_secret,
     });
 
     let app = Router::new()
@@ -364,7 +397,7 @@ async fn main() {
 
     tracing::info!("✨ pointe.dev listening on http://{bind_addr}");
 
-    axum::serve(listener, app)
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .expect("Server error");
 }

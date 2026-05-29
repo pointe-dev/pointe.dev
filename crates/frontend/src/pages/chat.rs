@@ -8,11 +8,14 @@ use crate::i18n::{Lang, t};
 
 const FREE_MESSAGES: u32 = 5;
 
-fn get_or_create_session_id() -> String {
+/// Returns (session_id, is_token_session).
+/// If `_sid` is a 64-char hex token the user is already authenticated.
+fn get_or_create_session_id() -> (String, bool) {
     let window = web_sys::window().unwrap();
     let storage = window.local_storage().unwrap().unwrap();
     if let Ok(Some(id)) = storage.get_item("_sid") {
-        return id;
+        let is_token = id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit());
+        return (id, is_token);
     }
     let id = js_sys::eval(
         "'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,\
@@ -21,7 +24,28 @@ fn get_or_create_session_id() -> String {
      .and_then(|v| v.as_string())
      .unwrap_or_else(|| format!("{}", js_sys::Date::now() as u64));
     let _ = storage.set_item("_sid", &id);
-    id
+    (id, false)
+}
+
+/// Collect browser signals and produce a simple djb2 hex hash.
+/// Sent as `fingerprint` with each chat request for IP+fingerprint rate limiting.
+fn compute_fingerprint() -> String {
+    let fp_str = js_sys::eval(
+        "(function(){\
+           var ua=navigator.userAgent||'';\
+           var lang=navigator.language||'';\
+           var tz='';\
+           try{tz=Intl.DateTimeFormat().resolvedOptions().timeZone||'';}catch(e){}\
+           var sw=screen.width||0,sh=screen.height||0;\
+           return ua+'|'+lang+'|'+tz+'|'+sw+'x'+sh;\
+         })()"
+    ).ok().and_then(|v| v.as_string()).unwrap_or_default();
+    // djb2 hash — good enough for a non-crypto bucket key
+    let mut h: u64 = 5381;
+    for b in fp_str.bytes() {
+        h = h.wrapping_mul(33).wrapping_add(b as u64);
+    }
+    format!("{:016x}", h)
 }
 
 #[derive(Serialize)]
@@ -35,6 +59,8 @@ struct ChatRequest {
     description: String,
     history: Vec<HistoryMsg>,
     session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fingerprint: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -54,6 +80,7 @@ struct UnlockRequest {
 #[derive(Deserialize)]
 struct UnlockResponse {
     ok: bool,
+    token: Option<String>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -165,9 +192,10 @@ pub fn Chat() -> impl IntoView {
     let lang = use_context::<RwSignal<Lang>>()
         .unwrap_or_else(|| create_rw_signal(Lang::Fr));
 
-    let session_id = get_or_create_session_id();
+    let (session_id, is_token_session) = get_or_create_session_id();
     let session_id_send = session_id.clone();
     let session_id_unlock = session_id.clone();
+    let is_unlocked: RwSignal<bool> = create_rw_signal(is_token_session);
 
     let welcome_raw = t(lang.get_untracked(), "chat.welcome").to_string();
     let welcome_html = render_markdown(&welcome_raw);
@@ -221,8 +249,9 @@ pub fn Chat() -> impl IntoView {
         });
 
         spawn_local(async move {
+            let fp = compute_fingerprint();
             let result = Request::post("/api/ai/chat")
-                .json(&ChatRequest { description: msg_for_api, history, session_id: sid })
+                .json(&ChatRequest { description: msg_for_api, history, session_id: sid, fingerprint: Some(fp) })
                 .unwrap()
                 .send()
                 .await;
@@ -286,10 +315,19 @@ pub fn Chat() -> impl IntoView {
                 Ok(r) => {
                     if let Ok(data) = r.json::<UnlockResponse>().await {
                         if data.ok {
+                            // Persist signed token so next visit skips email gate
+                            if let Some(token) = data.token {
+                                if let Some(w) = web_sys::window() {
+                                    if let Ok(Some(storage)) = w.local_storage() {
+                                        let _ = storage.set_item("_sid", &token);
+                                    }
+                                }
+                            }
                             batch(move || {
                                 show_unlock.set(false);
                                 unlock_error.set(false);
                                 messages_used.set(0);
+                                is_unlocked.set(true);
                             });
                         } else {
                             unlock_error.set(true);
@@ -558,28 +596,30 @@ pub fn Chat() -> impl IntoView {
                     </div>
                 </div>
 
-                {/* Continue on messaging apps */}
-                <div class="px-6 py-2 border-t border-subtle/50">
-                    <div class="max-w-2xl mx-auto flex items-center gap-3">
-                        <span class="text-xs text-muted">"Continuer sur"</span>
-                        <a
-                            href="https://wa.me/33600000000"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            class="text-xs px-2.5 py-1 rounded-full border border-subtle text-muted hover:border-green-500 hover:text-green-400 transition-colors"
-                        >
-                            "WhatsApp"
-                        </a>
-                        <a
-                            href="https://t.me/pointedev"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            class="text-xs px-2.5 py-1 rounded-full border border-subtle text-muted hover:border-sky-500 hover:text-sky-400 transition-colors"
-                        >
-                            "Telegram"
-                        </a>
+                {/* Continue on messaging apps — only shown after unlock */}
+                {move || is_unlocked.get().then(|| view! {
+                    <div class="px-6 py-2 border-t border-subtle">
+                        <div class="max-w-2xl mx-auto flex items-center gap-3">
+                            <span class="text-xs text-muted">"Continuer sur"</span>
+                            <a
+                                href="https://wa.me/33600000000"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                class="text-xs px-2.5 py-1 rounded-full border border-subtle text-muted hover:border-green-500 hover:text-green-400 transition-colors"
+                            >
+                                "WhatsApp"
+                            </a>
+                            <a
+                                href="https://t.me/pointedev"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                class="text-xs px-2.5 py-1 rounded-full border border-subtle text-muted hover:border-sky-500 hover:text-sky-400 transition-colors"
+                            >
+                                "Telegram"
+                            </a>
+                        </div>
                     </div>
-                </div>
+                })}
 
                 {/* Input */}
                 <div class="border-t border-subtle px-6 py-4">

@@ -15,4 +15,6 @@ pub struct AppState {
     pub qdrant: Option<QdrantStore>,
     pub embeddings: Option<EmbeddingEngine>,
     pub stripe: Option<StripeClient>,
+    /// HMAC secret for signing persistent session tokens.
+    pub session_secret: Vec<u8>,
 }
