@@ -126,81 +126,51 @@ pub fn Home(on_chat_click: impl Fn() + Clone + 'static) -> impl IntoView {
                 </div>
             </section>
 
-            {/* ── CONSOLE / MCP SECTION ─────────────────────────── */}
+            {/* ── APPROCHE B2B ──────────────────────────────────── */}
             <section class="bg-surface border-t border-subtle py-20 px-6">
-                <div class="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+                <div class="max-w-6xl mx-auto">
+                    <p class="eyebrow text-center mb-3">
+                        {move || t(lang.get(), "approach.eyebrow")}
+                    </p>
+                    <h2 class="section-title text-center mb-4">
+                        {move || t(lang.get(), "approach.title")}
+                    </h2>
+                    <p class="section-sub text-center mb-16">
+                        {move || t(lang.get(), "approach.sub")}
+                    </p>
 
-                    {/* Text side */}
-                    <div>
-                        <p class="eyebrow mb-3">
-                            {move || t(lang.get(), "console.eyebrow")}
-                        </p>
-                        <h2 class="section-title mb-4">
-                            {move || t(lang.get(), "console.title")}
-                        </h2>
-                        <p class="section-sub mb-6 leading-relaxed">
-                            {move || t(lang.get(), "console.sub")}
-                        </p>
-                        <ul class="space-y-3">
-                            <li class="flex items-start gap-3 text-sm text-secondary">
-                                <span class="text-cyan mt-0.5 shrink-0">"▸"</span>
-                                {move || t(lang.get(), "console.feat1")}
-                            </li>
-                            <li class="flex items-start gap-3 text-sm text-secondary">
-                                <span class="text-cyan mt-0.5 shrink-0">"▸"</span>
-                                {move || t(lang.get(), "console.feat2")}
-                            </li>
-                            <li class="flex items-start gap-3 text-sm text-secondary">
-                                <span class="text-cyan mt-0.5 shrink-0">"▸"</span>
-                                {move || t(lang.get(), "console.feat3")}
-                            </li>
-                        </ul>
-                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
 
-                    {/* Console terminal */}
-                    <div class="console-window">
-                        <div class="console-bar">
-                            <span class="console-dot console-dot-red"></span>
-                            <span class="console-dot console-dot-yellow"></span>
-                            <span class="console-dot console-dot-green"></span>
-                            <span class="ml-2 text-xs text-muted font-mono">"pointe.dev — MCP"</span>
+                        <div class="approach-card">
+                            <div class="approach-metric">"72h"</div>
+                            <h3 class="approach-name">
+                                {move || t(lang.get(), "approach.01.name")}
+                            </h3>
+                            <p class="approach-desc">
+                                {move || t(lang.get(), "approach.01.desc")}
+                            </p>
                         </div>
-                        <div class="p-5 font-mono text-xs leading-relaxed space-y-1">
-                            <div class="c-line">
-                                <span class="c-prompt">"❯"</span>
-                                <span class="c-cmd">" qualify"</span>
-                                <span class="c-arg">" --sector=ecommerce --pain=manual-orders"</span>
-                            </div>
-                            <div class="c-line">
-                                <span class="c-ok">"✓"</span>
-                                <span class="c-detail">" Prospect qualifié — démarrage pipeline"</span>
-                            </div>
-                            <div class="c-line">
-                                <span class="c-stage">"[research]"</span>
-                                <span class="c-detail">" Analyse des outils existants…"</span>
-                            </div>
-                            <div class="c-line">
-                                <span class="c-stage">"[build]"</span>
-                                <span class="c-detail">" Génération workflow n8n…"</span>
-                            </div>
-                            <div class="c-line">
-                                <span class="c-ok">"✓"</span>
-                                <span class="c-detail">" 7 nœuds, 3 intégrations (Shopify → Slack → ERP)"</span>
-                            </div>
-                            <div class="c-line">
-                                <span class="c-stage">"[deploy]"</span>
-                                <span class="c-url">" POST n8n.pointe.dev/api/v1/workflows"</span>
-                            </div>
-                            <div class="c-line">
-                                <span class="c-ok">"✓"</span>
-                                <span class="c-live">" Workflow actif — 200 OK"</span>
-                            </div>
-                            <div class="c-line">
-                                <span class="c-prompt">"❯"</span>
-                                <span class="c-cmd">" _"</span>
-                                <span class="c-cursor"></span>
-                            </div>
+
+                        <div class="approach-card approach-card-featured">
+                            <div class="approach-metric approach-metric-crimson">"0"</div>
+                            <h3 class="approach-name">
+                                {move || t(lang.get(), "approach.02.name")}
+                            </h3>
+                            <p class="approach-desc">
+                                {move || t(lang.get(), "approach.02.desc")}
+                            </p>
                         </div>
+
+                        <div class="approach-card">
+                            <div class="approach-metric">"99.9%"</div>
+                            <h3 class="approach-name">
+                                {move || t(lang.get(), "approach.03.name")}
+                            </h3>
+                            <p class="approach-desc">
+                                {move || t(lang.get(), "approach.03.desc")}
+                            </p>
+                        </div>
+
                     </div>
                 </div>
             </section>

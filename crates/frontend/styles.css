@@ -1752,17 +1752,17 @@ h1, h2, h3, h4, h5, h6 {
   --text-xl: calc(16px * var(--phi) * var(--phi));
   --text-2xl: calc(16px * var(--phi) * var(--phi) * var(--phi));
 
-  /* Backgrounds — dark navy */
-  --bg-deep:     #080d14;
-  --bg-surface:  #0d1420;
-  --bg-elevated: #131b2a;
-  --bg-card:     rgba(13, 20, 32, 0.65);
+  /* Backgrounds — onyx chaud */
+  --bg-deep:     #0f0c10;
+  --bg-surface:  #140f15;
+  --bg-elevated: #1a1320;
+  --bg-card:     rgba(20, 15, 21, 0.72);
 
-  /* Red accent */
-  --red-bright: #ef4444;
-  --red-mid:    #dc2626;
-  --red-dark:   #991b1b;
-  --red-glow:   rgba(239, 68, 68, 0.35);
+  /* Crimson accent */
+  --red-bright: #e8163c;
+  --red-mid:    #c4122f;
+  --red-dark:   #8b0a1e;
+  --red-glow:   rgba(220, 20, 60, 0.4);
 
   /* Cyan accent */
   --cyan-bright: #00e5cc;
@@ -1780,12 +1780,12 @@ h1, h2, h3, h4, h5, h6 {
   --border-cyan:   rgba(0, 229, 204, 0.2);
 
   /* Legacy compat */
-  --bg-primary:    #080d14;
-  --bg-secondary:  #0d1420;
-  --bg-tertiary:   #131b2a;
+  --bg-primary:    #0f0c10;
+  --bg-secondary:  #140f15;
+  --bg-tertiary:   #1a1320;
   --border-color:  rgba(148, 163, 184, 0.12);
-  --accent-primary:   #dc2626;
-  --accent-secondary: #ef4444;
+  --accent-primary:   #c4122f;
+  --accent-secondary: #e8163c;
 }
 
 /* Light mode overrides */
@@ -1805,15 +1805,15 @@ html:not(.dark) {
 }
 
 html.dark {
-  --bg-primary:    #080d14;
-  --bg-secondary:  #0d1420;
-  --bg-tertiary:   #131b2a;
+  --bg-primary:    #0f0c10;
+  --bg-secondary:  #140f15;
+  --bg-tertiary:   #1a1320;
   --text-primary:  #f1f5f9;
   --text-secondary: #94a3b8;
   --text-tertiary:  #475569;
   --border-color:   rgba(148, 163, 184, 0.12);
-  --accent-primary:   #dc2626;
-  --accent-secondary: #ef4444;
+  --accent-primary:   #c4122f;
+  --accent-secondary: #e8163c;
 }
 
 /* ── Fonts ───────────────────────────────────────────────────────────── */
@@ -1854,6 +1854,21 @@ html.dark {
   backdrop-filter: blur(40px);
   -webkit-backdrop-filter: blur(40px);
 }
+
+/* ── Crimson overrides (replace Tailwind red with brand crimson) ─────── */
+
+.bg-red-600    { background-color: #c4122f !important; }
+.bg-red-700, .hover\:bg-red-700:hover { background-color: #a00e26 !important; }
+.bg-red-500    { background-color: #e8163c !important; }
+.text-red-600  { color: #c4122f !important; }
+.text-red-500  { color: #e8163c !important; }
+.text-red-400  { color: #f0406a !important; }
+.border-red-600{ border-color: #c4122f !important; }
+.hover\:border-red-600:hover { border-color: #c4122f !important; }
+.hover\:text-red-600:hover   { color: #c4122f !important; }
+.hover\:text-red-500:hover   { color: #e8163c !important; }
+.focus\:border-red-600:focus { border-color: #c4122f !important; }
+.animate-pulse[class*="bg-red"] { background-color: #e8163c !important; }
 
 /* ── Missing Tailwind utilities ──────────────────────────────────────── */
 
@@ -2056,11 +2071,12 @@ html.dark {
   text-align: center;
 }
 .process-desc {
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: 0.875rem;
+  color: var(--text-secondary);
   text-align: center;
-  line-height: 1.5;
-  max-width: 120px;
+  line-height: 1.6;
+  max-width: 130px;
+  letter-spacing: 0.01em;
 }
 .process-connector {
   flex: 0 0 auto;
@@ -2106,16 +2122,18 @@ html.dark {
 }
 .ticker-name {
   font-family: 'Clash Display', system-ui, sans-serif;
-  font-size: 0.9rem;
+  font-size: 1rem;
   font-weight: 600;
   color: var(--text-primary);
-  margin-bottom: 0.25rem;
+  margin-bottom: 0.35rem;
   line-height: 1.3;
+  letter-spacing: 0.03em;
 }
 .ticker-desc {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  line-height: 1.5;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  letter-spacing: 0.01em;
 }
 .ticker-card-cyan {
   border-color: var(--border-cyan);
@@ -2147,6 +2165,54 @@ html.dark {
 }
 .ticker-track:hover .ticker-left {
   animation-play-state: paused;
+}
+
+/* ── Approach B2B cards ──────────────────────────────────────────────── */
+
+.approach-card {
+  padding: 2.5rem 2rem;
+  border-radius: 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  transition: border-color 0.25s, transform 0.25s;
+}
+.approach-card:hover {
+  border-color: rgba(220, 20, 60, 0.3);
+  transform: translateY(-3px);
+}
+.approach-card-featured {
+  border-color: rgba(220, 20, 60, 0.2);
+  background: linear-gradient(160deg, var(--bg-elevated) 0%, rgba(139, 10, 30, 0.12) 100%);
+}
+.approach-metric {
+  font-family: 'Clash Display', system-ui, sans-serif;
+  font-size: clamp(2.5rem, 6vw, 3.5rem);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+.approach-metric-crimson {
+  background: linear-gradient(135deg, var(--red-bright), var(--red-dark));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.approach-name {
+  font-family: 'Clash Display', system-ui, sans-serif;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.03em;
+}
+.approach-desc {
+  font-size: 0.9375rem;
+  color: var(--text-secondary);
+  line-height: 1.7;
+  letter-spacing: 0.015em;
 }
 
 /* ── Service card hover lift ─────────────────────────────────────────── */
@@ -2192,15 +2258,16 @@ html.dark {
   margin-bottom: 0.75rem;
 }
 .svc-desc {
-  font-size: 0.875rem;
+  font-size: 1rem;
   color: var(--text-secondary);
-  line-height: 1.65;
+  line-height: 1.7;
+  letter-spacing: 0.015em;
 }
 
 /* ── Nav glass ───────────────────────────────────────────────────────── */
 
 .nav-glass {
-  background: rgba(8, 13, 20, 0.85);
+  background: rgba(15, 12, 16, 0.88);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--border-subtle);
@@ -2225,17 +2292,18 @@ html:not(.dark) .nav-glass {
   font-weight: 700;
   color: var(--text-primary);
   line-height: 1.15;
-  letter-spacing: -0.025em;
+  letter-spacing: 0.04em;   /* Clash Display needs space to breathe */
+  word-spacing: 0.12em;
   margin-bottom: 1rem;
 }
 .section-sub {
   font-size: 1.0625rem;
   color: var(--text-secondary);
-  line-height: 1.764;        /* φ × 1.09 ≈ 1.764 */
+  line-height: 1.764;
   max-width: 38rem;
   margin: 0 auto;
-  letter-spacing: 0.012em;
-  word-spacing: 0.04em;
+  letter-spacing: 0.02em;
+  word-spacing: 0.06em;
 }
 
 /* ── CTA finale ──────────────────────────────────────────────────────── */
@@ -2257,6 +2325,7 @@ html:not(.dark) .nav-glass {
 .btn-primary {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 0.5rem;
   padding: 0.875rem 2rem;
   border-radius: 10px;
@@ -2267,6 +2336,7 @@ html:not(.dark) .nav-glass {
   border: none;
   cursor: pointer;
   transition: transform 0.2s, box-shadow 0.2s;
+  text-align: center;
 }
 .btn-primary:hover {
   transform: translateY(-2px);
@@ -2275,6 +2345,7 @@ html:not(.dark) .nav-glass {
 .btn-ghost {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 0.5rem;
   padding: 0.875rem 2rem;
   border-radius: 10px;
@@ -2285,6 +2356,7 @@ html:not(.dark) .nav-glass {
   border: 1px solid var(--border-subtle);
   cursor: pointer;
   transition: border-color 0.2s, color 0.2s, transform 0.2s;
+  text-align: center;
 }
 .btn-ghost:hover {
   border-color: var(--red-bright);
