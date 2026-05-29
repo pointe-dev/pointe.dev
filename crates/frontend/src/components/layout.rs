@@ -14,16 +14,14 @@ enum Page {
 }
 
 fn detect_initial_lang() -> Lang {
-    web_sys::window()
-        .and_then(|w| w.navigator().language())
-        .map(|l| {
-            let l = l.to_lowercase();
-            if l.starts_with("fr") { Lang::Fr }
-            else if l.starts_with("en") { Lang::En }
-            else if l.starts_with("de") { Lang::De }
-            else { Lang::Fr }
-        })
-        .unwrap_or(Lang::Fr)
+    let lang = js_sys::eval("(navigator.language || navigator.userLanguage || '')")
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_default()
+        .to_lowercase();
+    if lang.starts_with("en") { Lang::En }
+    else if lang.starts_with("de") { Lang::De }
+    else { Lang::Fr }
 }
 
 fn detect_initial_page() -> Page {
