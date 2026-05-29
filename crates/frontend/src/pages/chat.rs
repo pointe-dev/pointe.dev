@@ -238,7 +238,6 @@ pub fn Chat() -> impl IntoView {
 
         let history: Vec<HistoryMsg> = messages.get_untracked()
             .into_iter()
-            .skip(1)
             .map(|(is_user, raw, _)| HistoryMsg {
                 role: if is_user { "user" } else { "assistant" }.to_string(),
                 content: raw,
@@ -514,7 +513,7 @@ pub fn Chat() -> impl IntoView {
                             {move || {
                                 let used = messages_used.get();
                                 let remaining = FREE_MESSAGES.saturating_sub(used);
-                                (used > 0).then(|| view! {
+                                (used > 0 && !is_unlocked.get()).then(|| view! {
                                     <span class=move || format!(
                                         "text-xs px-2.5 py-1 rounded-full border border-subtle text-muted {}",
                                         if remaining == 0 { "chat-quota-empty" }
