@@ -307,7 +307,7 @@ pub fn Chat() -> impl IntoView {
                                 <h2 class="text-2xl font-bold text-primary">
                                     {move || t(lang.get(), "chat.title")}
                                 </h2>
-                                <p class="text-sm text-muted mt-1 font-light">
+                                <p class="text-base text-muted mt-1 font-light">
                                     {move || t(lang.get(), "chat.sub")}
                                 </p>
                             </div>
@@ -343,12 +343,12 @@ pub fn Chat() -> impl IntoView {
                                     let (outer, inner) = if is_user {
                                         (
                                             "flex justify-end flex-col items-end gap-1",
-                                            "max-w-[80%] px-5 py-3 bg-red-600 text-white rounded-2xl rounded-tr-sm text-sm leading-relaxed",
+                                            "max-w-[80%] px-5 py-4 bg-red-600 text-white rounded-2xl rounded-tr-sm text-base leading-relaxed",
                                         )
                                     } else {
                                         (
                                             "flex justify-start flex-col items-start gap-1",
-                                            "chat-md max-w-[80%] px-5 py-3 glass text-secondary rounded-2xl rounded-tl-sm text-sm leading-relaxed",
+                                            "chat-md max-w-[80%] px-5 py-4 glass text-secondary rounded-2xl rounded-tl-sm text-base leading-relaxed",
                                         )
                                     };
                                     view! {
@@ -426,7 +426,7 @@ pub fn Chat() -> impl IntoView {
                     <div class="border-t border-subtle px-6 py-4">
                         <div class="max-w-2xl mx-auto flex gap-3 items-center">
                             <textarea
-                                class="flex-1 resize-none bg-elevated border border-subtle rounded-xl px-4 py-3 text-sm text-primary placeholder-gray-600 focus:outline-none focus:border-red-600 transition-colors leading-relaxed"
+                                class="flex-1 resize-none bg-elevated border border-subtle rounded-xl px-4 py-3 text-base text-primary placeholder-gray-600 focus:outline-none focus:border-red-600 transition-colors leading-relaxed"
                                 placeholder=move || t(lang.get(), "chat.placeholder")
                                 rows="2"
                                 prop:value=move || input_text.get()

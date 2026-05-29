@@ -72,7 +72,7 @@ pub fn Layout() -> impl IntoView {
                         <span class="text-primary">"dev"</span>
                     </button>
 
-                    <div class="flex items-center gap-5">
+                    <div class="flex items-center gap-6">
                         {/* Nav links */}
                         <button
                             on:click=move |_| { active_page.set(Page::Home); scroll_to_top(); }
@@ -97,7 +97,7 @@ pub fn Layout() -> impl IntoView {
                         </button>
                         <button
                             on:click=move |_| active_page.set(Page::Chat)
-                            class="btn-primary !px-5 !py-2 !text-sm"
+                            class="btn-primary btn-sm"
                         >
                             {move || t(lang.get(), "nav.talk")}
                         </button>
