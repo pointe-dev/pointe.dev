@@ -15,6 +15,10 @@ pub struct AppState {
     pub qdrant: Option<QdrantStore>,
     pub embeddings: Option<EmbeddingEngine>,
     pub stripe: Option<StripeClient>,
-    /// HMAC secret for signing persistent session tokens.
+    /// HMAC secret for signing persistent session tokens and confirm links.
     pub session_secret: Vec<u8>,
+    /// Resend API key for transactional email. None → log link to console.
+    pub resend_api_key: Option<String>,
+    /// Public base URL used to build confirmation links (e.g. "https://pointe.dev").
+    pub base_url: String,
 }

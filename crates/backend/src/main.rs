@@ -1,7 +1,8 @@
 use axum::{
-    extract::{ConnectInfo, State},
+    extract::{ConnectInfo, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
+    response::Redirect,
     routing::{get, post},
     Json, Router,
 };
@@ -138,11 +139,6 @@ struct UnlockRequest {
 #[derive(Serialize)]
 struct UnlockResponse {
     ok: bool,
-    /// Signed token to store in localStorage — used as session_id on future visits.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    token: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    email: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -178,11 +174,115 @@ async fn handle_unlock(
     let email = payload.email.trim().to_lowercase();
     let valid = email.contains('@') && email.contains('.');
     if !valid {
-        return Json(UnlockResponse { ok: false, token: None, email: None });
+        return Json(UnlockResponse { ok: false });
     }
-    let token = SessionStore::sign_token(&email, &state.session_secret);
-    state.sessions.unlock_with_email(&payload.session_id, email.clone(), &token).await;
-    Json(UnlockResponse { ok: true, token: Some(token), email: Some(email) })
+
+    let confirm_token = SessionStore::sign_confirm_token(&email, &payload.session_id, &state.session_secret);
+    let encoded_email = urlencoding::encode(&email);
+    let confirm_url = format!(
+        "{}/api/auth/confirm?e={}&s={}&t={}",
+        state.base_url, encoded_email, payload.session_id, confirm_token
+    );
+
+    match &state.resend_api_key {
+        Some(api_key) => {
+            if let Err(e) = send_confirm_email(&state.http, api_key, &email, &confirm_url).await {
+                tracing::error!("Failed to send confirmation email to {email}: {e}");
+                return Json(UnlockResponse { ok: false });
+            }
+        }
+        None => {
+            // Dev mode: log the link so you can test without a mail provider
+            tracing::warn!("RESEND_API_KEY not set — confirm link for {email}: {confirm_url}");
+        }
+    }
+
+    Json(UnlockResponse { ok: true })
+}
+
+#[derive(Deserialize)]
+struct ConfirmParams {
+    e: String,
+    s: String,
+    t: String,
+}
+
+async fn handle_confirm(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<ConfirmParams>,
+) -> Redirect {
+    let email = params.e.trim().to_lowercase();
+    let session_id = params.s.trim().to_string();
+    let token = params.t.trim().to_string();
+
+    if email.is_empty() || session_id.is_empty() || token.is_empty() {
+        return Redirect::to("/");
+    }
+    if !email.contains('@') {
+        return Redirect::to("/");
+    }
+
+    if !SessionStore::verify_confirm_token(&email, &session_id, &token, &state.session_secret) {
+        tracing::warn!("Invalid confirmation token for email: {email}");
+        return Redirect::to("/");
+    }
+
+    let signed = SessionStore::sign_token(&email, &state.session_secret);
+    state.sessions.unlock_with_email(&session_id, email.clone(), &signed).await;
+    tracing::info!("Email confirmed — session unlocked for: {email}");
+
+    let redirect_url = format!("/?_sid={}", signed);
+    Redirect::to(&redirect_url)
+}
+
+async fn send_confirm_email(
+    http: &reqwest::Client,
+    api_key: &str,
+    to_email: &str,
+    confirm_url: &str,
+) -> Result<(), String> {
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html><body style="font-family:sans-serif;background:#0a0a0a;margin:0;padding:40px 20px">
+<div style="max-width:480px;margin:auto;background:#111;border-radius:16px;padding:40px;border:1px solid #222">
+  <p style="color:#dc2626;font-size:20px;font-weight:700;margin:0 0 20px">pointe.dev</p>
+  <h1 style="color:#f3f4f6;font-size:20px;font-weight:600;margin:0 0 12px">Confirmez votre accès</h1>
+  <p style="color:#9ca3af;font-size:14px;line-height:1.7;margin:0 0 28px">
+    Cliquez sur le bouton ci-dessous pour continuer votre conversation et accéder à notre analyse d'automatisation personnalisée.
+  </p>
+  <a href="{confirm_url}" style="display:inline-block;background:#dc2626;color:white;padding:14px 28px;border-radius:10px;text-decoration:none;font-weight:600;font-size:15px">
+    Continuer la conversation →
+  </a>
+  <p style="color:#4b5563;font-size:12px;margin-top:32px;line-height:1.6">
+    Si vous n'avez pas demandé cet accès, ignorez simplement cet email.
+  </p>
+</div>
+</body></html>"#
+    );
+
+    let payload = serde_json::json!({
+        "from": "pointe.dev <noreply@pointe.dev>",
+        "to": [to_email],
+        "subject": "Continuez votre conversation avec pointe.dev",
+        "html": html,
+    });
+
+    let resp = http
+        .post("https://api.resend.com/emails")
+        .header("Authorization", format!("Bearer {api_key}"))
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if resp.status().is_success() {
+        tracing::info!("Confirmation email sent to {to_email}");
+        Ok(())
+    } else {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        Err(format!("Resend {status}: {body}"))
+    }
 }
 
 /// Extract the best-guess real IP from the request.
@@ -349,6 +449,15 @@ async fn main() {
         })
         .into_bytes();
 
+    let resend_api_key = std::env::var("RESEND_API_KEY").ok();
+    if resend_api_key.is_none() {
+        tracing::warn!("RESEND_API_KEY not set — confirmation links will be logged instead of emailed");
+    }
+
+    let base_url = std::env::var("BASE_URL")
+        .unwrap_or_else(|_| "http://localhost:3001".to_string());
+    tracing::info!("Base URL: {base_url}");
+
     let state = Arc::new(AppState {
         anthropic_key,
         http,
@@ -360,6 +469,8 @@ async fn main() {
         embeddings,
         stripe,
         session_secret,
+        resend_api_key,
+        base_url,
     });
 
     let app = Router::new()
@@ -367,6 +478,7 @@ async fn main() {
         .route("/api/services", get(handlers::services::get_services))
         .route("/api/ai/chat", post(handle_ai_chat))
         .route("/api/auth/unlock", post(handle_unlock))
+        .route("/api/auth/confirm", get(handle_confirm))
         .route("/api/pipeline/start", post(handlers::pipeline::start))
         .route("/api/pipeline/:id", get(handlers::pipeline::status))
         .route("/api/pipeline/:id/resume", post(handlers::pipeline::resume))

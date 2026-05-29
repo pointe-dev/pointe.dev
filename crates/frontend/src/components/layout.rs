@@ -50,6 +50,20 @@ pub fn Layout() -> impl IntoView {
 
     log::info!("Layout rendering...");
 
+    // If the URL has ?_sid=... the user arrived from the email confirmation link.
+    // Auto-navigate to Chat so they land directly in the unlocked conversation.
+    create_effect(move |first| {
+        if first.is_none() { return; }
+        let has_sid = js_sys::eval(
+            "(function(){\
+               try{return new URLSearchParams(window.location.search).has('_sid');}catch(e){return false;}\
+             })()"
+        ).ok().and_then(|v| v.as_bool()).unwrap_or(false);
+        if has_sid {
+            active_page.set(Page::Chat);
+        }
+    });
+
     let lang_btn_class = move |l: Lang| {
         if lang.get() == l {
             "text-xs font-semibold text-red-400"

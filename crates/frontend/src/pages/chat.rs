@@ -9,8 +9,28 @@ use crate::i18n::{Lang, t};
 const FREE_MESSAGES: u32 = 5;
 
 /// Returns (session_id, is_token_session).
-/// If `_sid` is a 64-char hex token the user is already authenticated.
+/// Checks URL ?_sid param first (set by email confirmation redirect), then localStorage.
 fn get_or_create_session_id() -> (String, bool) {
+    // Email confirmation redirect: ?_sid=<64-hex-token>
+    let url_sid = js_sys::eval(
+        "(function(){\
+           try{\
+             var p=new URLSearchParams(window.location.search);\
+             var sid=p.get('_sid');\
+             if(sid&&sid.length===64&&/^[0-9a-f]+$/.test(sid)){\
+               localStorage.setItem('_sid',sid);\
+               history.replaceState(null,'',window.location.pathname);\
+               return sid;\
+             }\
+           }catch(e){}\
+           return '';\
+         })()"
+    ).ok().and_then(|v| v.as_string()).filter(|s| !s.is_empty());
+
+    if let Some(sid) = url_sid {
+        return (sid, true);
+    }
+
     let window = web_sys::window().unwrap();
     let storage = window.local_storage().unwrap().unwrap();
     if let Ok(Some(id)) = storage.get_item("_sid") {
@@ -80,7 +100,6 @@ struct UnlockRequest {
 #[derive(Deserialize)]
 struct UnlockResponse {
     ok: bool,
-    token: Option<String>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -206,6 +225,7 @@ pub fn Chat() -> impl IntoView {
     let show_unlock: RwSignal<bool> = create_rw_signal(false);
     let email_input = create_rw_signal(String::new());
     let unlock_error = create_rw_signal(false);
+    let email_pending = create_rw_signal(false);
     let pipeline_id: RwSignal<Option<String>> = create_rw_signal(None);
     let show_pitch: RwSignal<bool> = create_rw_signal(false);
     let pitch_page: RwSignal<usize> = create_rw_signal(0);
@@ -330,25 +350,14 @@ pub fn Chat() -> impl IntoView {
                 .await;
             match resp {
                 Ok(r) => {
-                    if let Ok(data) = r.json::<UnlockResponse>().await {
-                        if data.ok {
-                            // Persist signed token so next visit skips email gate
-                            if let Some(token) = data.token {
-                                if let Some(w) = web_sys::window() {
-                                    if let Ok(Some(storage)) = w.local_storage() {
-                                        let _ = storage.set_item("_sid", &token);
-                                    }
-                                }
-                            }
+                    match r.json::<UnlockResponse>().await {
+                        Ok(data) if data.ok => {
                             batch(move || {
-                                show_unlock.set(false);
                                 unlock_error.set(false);
-                                messages_used.set(0);
-                                is_unlocked.set(true);
+                                email_pending.set(true);
                             });
-                        } else {
-                            unlock_error.set(true);
                         }
+                        _ => unlock_error.set(true),
                     }
                 }
                 Err(_) => unlock_error.set(true),
@@ -373,7 +382,7 @@ pub fn Chat() -> impl IntoView {
             {move || show_unlock.get().then(|| view! {
                 <div class="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm animate-overlay-in">
                     <div class="glass rounded-2xl p-8 shadow-card animate-modal-enter" style="width: min(440px, calc(100vw - 3rem))">
-                        {/* Close */}
+                        {/* Header row */}
                         <div class="flex items-start justify-between mb-3">
                             <p class="eyebrow">"pointe.dev"</p>
                             <button
@@ -383,27 +392,62 @@ pub fn Chat() -> impl IntoView {
                                 aria-label="Fermer"
                             >"✕"</button>
                         </div>
-                        <h3 class="text-lg font-bold text-primary mb-2">
-                            "Continuez gratuitement"
-                        </h3>
-                        <p class="text-sm text-secondary mb-6 leading-relaxed">
-                            "Vous avez utilisé vos " {FREE_MESSAGES} " messages gratuits. Entrez votre email pour continuer — sans spam, promis."
-                        </p>
-                        <form on:submit=move |ev| on_unlock_submit.with_value(|f| f(ev)) class="flex flex-col gap-3">
-                            <input
-                                type="email"
-                                placeholder="votre@email.com"
-                                class="w-full px-4 py-3 rounded-xl border border-subtle bg-elevated text-sm text-primary placeholder-gray-600 focus:outline-none focus:border-red-500 transition-colors"
-                                prop:value=move || email_input.get()
-                                on:input=move |ev| email_input.set(event_target_value(&ev))
-                            />
-                            {move || unlock_error.get().then(|| view! {
-                                <p class="text-xs text-red-400">"Email invalide, réessayez."</p>
-                            })}
-                            <button type="submit" class="btn-primary w-full">
-                                "Continuer la conversation →"
-                            </button>
-                        </form>
+
+                        {move || if email_pending.get() {
+                            // ── Pending state ─────────────────────────────
+                            view! {
+                                <div class="text-center py-2">
+                                    <div class="w-14 h-14 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-5">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="w-7 h-7 text-red-400" stroke-linecap="round" stroke-linejoin="round">
+                                            <rect x="2" y="4" width="20" height="16" rx="2"/>
+                                            <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>
+                                        </svg>
+                                    </div>
+                                    <h3 class="text-lg font-bold text-primary mb-2">"Vérifiez votre email"</h3>
+                                    <p class="text-sm text-secondary leading-relaxed">
+                                        "Un lien de confirmation a été envoyé à "
+                                        <strong class="text-primary">{move || email_input.get()}</strong>
+                                        "."
+                                    </p>
+                                    <p class="text-xs text-muted mt-3 leading-relaxed">
+                                        "Cliquez sur le lien pour déverrouiller la conversation."
+                                    </p>
+                                    <button
+                                        on:click=move |_| email_pending.set(false)
+                                        class="text-xs text-red-400 hover:text-red-300 transition-colors mt-5"
+                                    >
+                                        "Changer d'adresse →"
+                                    </button>
+                                </div>
+                            }.into_view()
+                        } else {
+                            // ── Email form ────────────────────────────────
+                            view! {
+                                <div>
+                                    <h3 class="text-lg font-bold text-primary mb-2">
+                                        "Continuez gratuitement"
+                                    </h3>
+                                    <p class="text-sm text-secondary mb-6 leading-relaxed">
+                                        "Vous avez utilisé vos " {FREE_MESSAGES} " messages gratuits. Entrez votre email pour continuer — sans spam, promis."
+                                    </p>
+                                    <form on:submit=move |ev| on_unlock_submit.with_value(|f| f(ev)) class="flex flex-col gap-3">
+                                        <input
+                                            type="email"
+                                            placeholder="votre@email.com"
+                                            class="w-full px-4 py-3 rounded-xl border border-subtle bg-elevated text-sm text-primary placeholder-gray-600 focus:outline-none focus:border-red-500 transition-colors"
+                                            prop:value=move || email_input.get()
+                                            on:input=move |ev| email_input.set(event_target_value(&ev))
+                                        />
+                                        {move || unlock_error.get().then(|| view! {
+                                            <p class="text-xs text-red-400">"Email invalide ou erreur réseau, réessayez."</p>
+                                        })}
+                                        <button type="submit" class="btn-primary w-full">
+                                            "Envoyer le lien →"
+                                        </button>
+                                    </form>
+                                </div>
+                            }.into_view()
+                        }}
                     </div>
                 </div>
             })}

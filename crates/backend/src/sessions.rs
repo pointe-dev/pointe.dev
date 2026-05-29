@@ -35,6 +35,7 @@ impl SessionStore {
     // ── Token auth ───────────────────────────────────────────────────────
 
     /// Produce a deterministic HMAC-SHA256 token for an email address.
+    /// Used as the persistent localStorage session key after confirmation.
     pub fn sign_token(email: &str, secret: &[u8]) -> String {
         let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
         mac.update(email.as_bytes());
@@ -44,6 +45,28 @@ impl SessionStore {
     /// Constant-time comparison against the expected token for an email.
     pub fn verify_token(email: &str, candidate: &str, secret: &[u8]) -> bool {
         let expected = Self::sign_token(email, secret);
+        if expected.len() != candidate.len() {
+            return false;
+        }
+        expected
+            .bytes()
+            .zip(candidate.bytes())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+            == 0
+    }
+
+    /// One-time confirmation token: HMAC(email + "|" + session_id, secret).
+    /// Ties the confirm link to a specific session so it can't be replayed.
+    pub fn sign_confirm_token(email: &str, session_id: &str, secret: &[u8]) -> String {
+        let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
+        mac.update(email.as_bytes());
+        mac.update(b"|");
+        mac.update(session_id.as_bytes());
+        hex::encode(mac.finalize().into_bytes())
+    }
+
+    pub fn verify_confirm_token(email: &str, session_id: &str, candidate: &str, secret: &[u8]) -> bool {
+        let expected = Self::sign_confirm_token(email, session_id, secret);
         if expected.len() != candidate.len() {
             return false;
         }
