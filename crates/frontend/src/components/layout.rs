@@ -37,14 +37,6 @@ fn scroll_to_top() {
     ).call0(&wasm_bindgen::JsValue::NULL);
 }
 
-fn scroll_to_solutions() {
-    let _ = web_sys::window().and_then(|w| {
-        let f = js_sys::Function::new_no_args(
-            "document.getElementById('solutions')?.scrollIntoView({behavior:'smooth'})"
-        );
-        w.set_timeout_with_callback_and_timeout_and_arguments_0(&f, 50).ok()
-    });
-}
 
 #[component]
 pub fn Layout() -> impl IntoView {
@@ -96,15 +88,6 @@ pub fn Layout() -> impl IntoView {
                             }
                         >
                             {move || t(lang.get(), "nav.home")}
-                        </button>
-                        <button
-                            on:click=move |_| {
-                                active_page.set(Page::Home);
-                                scroll_to_solutions();
-                            }
-                            class="text-sm font-medium text-secondary hover:text-primary transition-colors"
-                        >
-                            {move || t(lang.get(), "nav.solutions")}
                         </button>
                         <button
                             on:click=move |_| active_page.set(Page::Chat)
@@ -178,17 +161,6 @@ pub fn Layout() -> impl IntoView {
                                     {move || t(lang.get(), "footer.product")}
                                 </h4>
                                 <ul class="space-y-2 text-sm text-secondary">
-                                    <li>
-                                        <button
-                                            on:click=move |_| {
-                                                active_page.set(Page::Home);
-                                                scroll_to_solutions();
-                                            }
-                                            class="hover:text-red-400 transition-colors"
-                                        >
-                                            {move || t(lang.get(), "footer.solutions")}
-                                        </button>
-                                    </li>
                                     <li>
                                         <button class="hover:text-red-400 transition-colors" on:click=on_contact>
                                             {move || t(lang.get(), "footer.contact")}
