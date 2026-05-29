@@ -212,6 +212,7 @@ pub fn Chat() -> impl IntoView {
 
     create_effect(move |_| {
         let _ = messages.get();
+        let _ = is_loading.get();
         if let Some(w) = web_sys::window() {
             if let Some(doc) = w.document() {
                 if let Some(el) = doc.get_element_by_id("chat-end") {
