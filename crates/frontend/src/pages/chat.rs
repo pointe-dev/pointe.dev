@@ -628,8 +628,7 @@ pub fn Chat() -> impl IntoView {
                                     class="pitch-trigger-btn"
                                     on:click=move |_| { pitch_page.set(0); show_pitch.set(true); }
                                 >
-                                    <span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse shrink-0"></span>
-                                    "Notre proposition"
+                                    "✨ Voir notre proposition"
                                 </button>
                             })}
                         </div>

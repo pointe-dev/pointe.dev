@@ -2599,21 +2599,27 @@ html:not(.dark) .nav-glass {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.4rem 0.875rem;
+  padding: 0.45rem 1.1rem;
   border-radius: 999px;
-  border: 1px solid rgba(196, 18, 47, 0.4);
-  background: rgba(196, 18, 47, 0.08);
-  color: var(--red-bright);
+  border: none;
+  background: linear-gradient(135deg, #dc2626 0%, #c2185b 100%);
+  color: #fff;
   font-size: 0.78rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-weight: 700;
+  letter-spacing: 0.03em;
   cursor: pointer;
-  transition: border-color 0.2s, background 0.2s, transform 0.15s;
+  transition: transform 0.15s, box-shadow 0.2s;
+  box-shadow: 0 2px 14px rgba(220, 38, 38, 0.4);
+  animation: pitch-btn-breathe 2.8s ease-in-out infinite;
+}
+@keyframes pitch-btn-breathe {
+  0%, 100% { box-shadow: 0 2px 14px rgba(220, 38, 38, 0.4); }
+  50%       { box-shadow: 0 2px 22px rgba(220, 38, 38, 0.65); }
 }
 .pitch-trigger-btn:hover {
-  border-color: var(--red-bright);
-  background: rgba(196, 18, 47, 0.14);
-  transform: translateY(-1px);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 24px rgba(220, 38, 38, 0.55);
+  animation: none;
 }
 .pitch-card {
   position: relative;
