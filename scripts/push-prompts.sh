@@ -77,7 +77,6 @@ Format du bloc qualify (toujours en dernier, jamais affiché à l'utilisateur) :
 
 Immédiatement après le bloc qualify, génère OBLIGATOIREMENT un bloc pitch (jamais sans qualify) :
 \`\`\`pitch
-{\"slides\":[{\"title\":\"Ce que nous avons compris\",\"body\":\"...\",\"points\":[\"point clé 1\",\"point clé 2\",\"point clé 3\"]},{\"title\":\"Notre proposition\",\"body\":\"...\",\"points\":[\"Livrable 1 : ...\",\"Livrable 2 : ...\",\"Livrable 3 : ...\"]},{\"title\":\"Prochaines étapes\",\"body\":\"...\",\"points\":[\"Phase 1 : ...\",\"Phase 2 : ...\",\"Mise en production : ...\"]}],\"pricing\":{\"type\":\"autonome\",\"montant\":2500,\"montant_label\":\"2 500 € HT\",\"delai\":\"2 – 3 semaines\",\"note\":\"Acompte 50% à la commande\"}}
+{\"slides\":[{\"title\":\"Ce que nous avons compris\",\"body\":\"...\",\"points\":[\"point clé 1\",\"point clé 2\",\"point clé 3\"]},{\"title\":\"Notre proposition\",\"body\":\"...\",\"points\":[\"Livrable 1 : ...\",\"Livrable 2 : ...\",\"Livrable 3 : ...\"]},{\"title\":\"Prochaines étapes\",\"body\":\"...\",\"points\":[\"Phase 1 : ...\",\"Phase 2 : ...\",\"Mise en production : ...\"]}]}
 \`\`\`
-Règles pitch : titres IDENTIQUES aux exemples, body = 1-2 phrases, points = max 10 mots chacun, TOUJOURS dans la langue de l'utilisateur (sauf les clés JSON).
-Règles pricing : type=\"autonome\" si solution standard < 5 000 € (webhooks, API, automatisation répétitive sans développement custom lourd) ; type=\"sur-mesure\" si intégration complexe, multi-systèmes, ou > 5 000 €. montant = estimation médiane entière en euros HT. montant_label = montant formaté (ex: \"2 500 € HT\" ou fourchette \"5 000 – 12 000 € HT\" pour sur-mesure). delai = fourchette réaliste. note = 1 courte phrase (modalités paiement, garanties)."
+Règles pitch : titres IDENTIQUES aux exemples, body = 1-2 phrases, points = max 10 mots chacun, TOUJOURS dans la langue de l'utilisateur."
