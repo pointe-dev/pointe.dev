@@ -3610,6 +3610,75 @@ html.dark {
   }
 }
 
+/* ── Pitch pricing card ──────────────────────────────────────────── */
+.pitch-pricing-card {
+  margin-top: 20px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 14px;
+  padding: 18px 20px;
+}
+.pitch-pricing-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 4px;
+}
+.pitch-pricing-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0 0 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.pitch-pricing-amount {
+  font-size: 22px;
+  font-weight: 700;
+  color: #f3f4f6;
+  margin: 0;
+}
+.pitch-pricing-delay {
+  font-size: 14px;
+  font-weight: 600;
+  color: #d1d5db;
+  margin: 0;
+}
+.pitch-pricing-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 8px 0 0;
+}
+.pitch-quote-form {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pitch-quote-input {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.04);
+  color: #f3f4f6;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+}
+.pitch-quote-input:focus {
+  border-color: rgba(220,38,38,0.5);
+}
+.pitch-quote-input::placeholder {
+  color: #6b7280;
+}
+.pitch-quote-sent {
+  margin-top: 12px;
+  font-size: 13px;
+  color: #4ade80;
+  text-align: center;
+}
+
 /* ── Consent banner ──────────────────────────────────────────────── */
 .consent-banner {
   position: fixed;

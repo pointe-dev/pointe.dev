@@ -179,6 +179,10 @@ impl SessionStore {
         true
     }
 
+    pub async fn get_email(&self, key: &str) -> Option<String> {
+        self.sessions.read().await.get(key).and_then(|s| s.email.clone())
+    }
+
     pub async fn message_count(&self, key: &str) -> u32 {
         self.sessions
             .read()

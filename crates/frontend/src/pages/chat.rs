@@ -112,8 +112,47 @@ struct PitchSlide {
 }
 
 #[derive(Deserialize, Clone)]
+struct PricingData {
+    #[serde(rename = "type")]
+    kind: String,          // "autonome" | "sur-mesure"
+    #[serde(default)]
+    montant: u32,          // median euros HT (for Stripe)
+    #[serde(default)]
+    montant_label: String, // display string e.g. "2 500 € HT"
+    #[serde(default)]
+    delai: String,
+    #[serde(default)]
+    note: String,
+}
+
+#[derive(Deserialize, Clone)]
 struct PitchData {
     slides: Vec<PitchSlide>,
+    #[serde(default)]
+    pricing: Option<PricingData>,
+}
+
+#[derive(Serialize)]
+struct PitchCheckoutRequest {
+    montant: u32,
+    label: String,
+    note: String,
+}
+
+#[derive(Deserialize)]
+struct PitchCheckoutResponse {
+    checkout_url: String,
+}
+
+#[derive(Serialize)]
+struct SendQuoteRequest {
+    session_id: String,
+    email: String,
+    summary: String,
+    montant_label: String,
+    delai: String,
+    note: String,
+    slides: Vec<serde_json::Value>,
 }
 
 fn strip_block<'a>(content: &'a str, tag: &str) -> (&'a str, Option<&'a str>) {
@@ -265,6 +304,9 @@ pub fn Chat() -> impl IntoView {
     let pipeline_id: RwSignal<Option<String>> = create_rw_signal(None);
     let show_pitch: RwSignal<bool> = create_rw_signal(false);
     let pitch_page: RwSignal<usize> = create_rw_signal(0);
+    let quote_email = create_rw_signal(String::new());
+    let quote_sent  = create_rw_signal(false);
+    let quote_error = create_rw_signal(false);
 
     // Focus textarea on mount
     create_effect(move |first| {
@@ -495,8 +537,9 @@ pub fn Chat() -> impl IntoView {
 
             {/* Pitch modal */}
             {move || show_pitch.get().then(|| {
-                let pitch = current_pitch.get().unwrap_or_else(|| PitchData { slides: vec![] });
+                let pitch = current_pitch.get().unwrap_or_else(|| PitchData { slides: vec![], pricing: None });
                 let total = pitch.slides.len();
+                let slides_for_pricing = pitch.slides.clone();
                 view! {
                     <div
                         class="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md"
@@ -565,24 +608,153 @@ pub fn Chat() -> impl IntoView {
                                 </span>
 
                                 {move || {
-                                    let page = pitch_page.get();
-                                    if page + 1 < total {
+                                    if pitch_page.get() + 1 < total {
                                         view! {
-                                            <button
-                                                class="pitch-nav-btn"
+                                            <button class="pitch-nav-btn"
                                                 on:click=move |_| pitch_page.update(|p| *p += 1)
                                             >"→"</button>
                                         }.into_view()
                                     } else {
-                                        view! {
-                                            <button
-                                                class="btn-primary btn-sm"
-                                                on:click=move |_| show_pitch.set(false)
-                                            >"Parlons-en →"</button>
-                                        }.into_view()
+                                        view! { <span></span> }.into_view()
                                     }
                                 }}
                             </div>
+
+                            {/* Pricing card — always visible */}
+                            {pitch.pricing.as_ref().map(|pr| {
+                                let pr = pr.clone();
+                                let is_autonome = pr.kind == "autonome";
+                                let sid = session_id.clone();
+                                let label = pr.montant_label.clone();
+                                let note  = pr.note.clone();
+                                let delai = pr.delai.clone();
+                                let summary = slides_for_pricing.first()
+                                    .map(|s| s.body.clone()).unwrap_or_default();
+                                let slides_json: Vec<serde_json::Value> = slides_for_pricing.iter()
+                                    .map(|s| serde_json::json!({
+                                        "title": s.title, "body": s.body, "points": s.points
+                                    })).collect();
+
+                                view! {
+                                    <div class="pitch-pricing-card">
+                                        <div class="pitch-pricing-header">
+                                            <div>
+                                                <p class="pitch-pricing-label">"Estimation"</p>
+                                                <p class="pitch-pricing-amount">{pr.montant_label.clone()}</p>
+                                            </div>
+                                            <div class="text-right">
+                                                <p class="pitch-pricing-label">"Délai"</p>
+                                                <p class="pitch-pricing-delay">{pr.delai.clone()}</p>
+                                            </div>
+                                        </div>
+                                        {(!pr.note.is_empty()).then(|| view! {
+                                            <p class="pitch-pricing-note">{pr.note.clone()}</p>
+                                        })}
+
+                                        {if is_autonome {
+                                            // ── Stripe direct payment ──
+                                            let montant = pr.montant;
+                                            let label2 = label.clone();
+                                            let note2  = note.clone();
+                                            view! {
+                                                <button
+                                                    class="btn-primary w-full mt-4"
+                                                    on:click=move |_| {
+                                                        let req = PitchCheckoutRequest {
+                                                            montant,
+                                                            label: format!("Automatisation pointe.dev — {label2}"),
+                                                            note: note2.clone(),
+                                                        };
+                                                        spawn_local(async move {
+                                                            if let Ok(resp) = Request::post("/api/pitch/checkout")
+                                                                .json(&req).unwrap().send().await
+                                                            {
+                                                                if let Ok(data) = resp.json::<PitchCheckoutResponse>().await {
+                                                                    let _ = js_sys::Function::new_with_args(
+                                                                        "u", "window.open(u,'_blank')"
+                                                                    ).call1(&wasm_bindgen::JsValue::NULL,
+                                                                        &wasm_bindgen::JsValue::from_str(&data.checkout_url));
+                                                                }
+                                                            }
+                                                        });
+                                                    }
+                                                >
+                                                    "Procéder au paiement →"
+                                                </button>
+                                            }.into_view()
+                                        } else {
+                                            // ── Quote by email ──
+                                            let sid2       = sid.clone();
+                                            let summary2   = summary.clone();
+                                            let label3     = label.clone();
+                                            let delai2     = delai.clone();
+                                            let note3      = note.clone();
+                                            let slides2    = slides_json.clone();
+                                            view! {
+                                                {move || if quote_sent.get() {
+                                                    view! {
+                                                        <p class="pitch-quote-sent">"✓ Devis envoyé — nous revenons vers vous rapidement."</p>
+                                                    }.into_view()
+                                                } else {
+                                                    view! {
+                                                        <div class="pitch-quote-form">
+                                                            <input
+                                                                type="email"
+                                                                placeholder="votre@email.com"
+                                                                class="pitch-quote-input"
+                                                                prop:value=move || quote_email.get()
+                                                                on:input=move |ev| quote_email.set(event_target_value(&ev))
+                                                            />
+                                                            {move || quote_error.get().then(|| view! {
+                                                                <p class="text-xs text-red-400">"Erreur lors de l'envoi, réessayez."</p>
+                                                            })}
+                                                            <button
+                                                                class="btn-primary w-full"
+                                                                on:click={
+                                                                    let sid3     = sid2.clone();
+                                                                    let summary3 = summary2.clone();
+                                                                    let label4   = label3.clone();
+                                                                    let delai3   = delai2.clone();
+                                                                    let note4    = note3.clone();
+                                                                    let slides3  = slides2.clone();
+                                                                    move |_| {
+                                                                        let email = quote_email.get_untracked().trim().to_string();
+                                                                        if email.is_empty() { return; }
+                                                                        let req = SendQuoteRequest {
+                                                                            session_id: sid3.clone(),
+                                                                            email,
+                                                                            summary: summary3.clone(),
+                                                                            montant_label: label4.clone(),
+                                                                            delai: delai3.clone(),
+                                                                            note: note4.clone(),
+                                                                            slides: slides3.clone(),
+                                                                        };
+                                                                        spawn_local(async move {
+                                                                            match Request::post("/api/pitch/send-quote")
+                                                                                .json(&req).unwrap().send().await
+                                                                            {
+                                                                                Ok(r) => {
+                                                                                    let ok = r.json::<serde_json::Value>().await
+                                                                                        .ok().and_then(|v| v["ok"].as_bool()).unwrap_or(false);
+                                                                                    if ok { quote_sent.set(true); }
+                                                                                    else  { quote_error.set(true); }
+                                                                                }
+                                                                                Err(_) => quote_error.set(true),
+                                                                            }
+                                                                        });
+                                                                    }
+                                                                }
+                                                            >
+                                                                "Recevoir ce devis par email →"
+                                                            </button>
+                                                        </div>
+                                                    }.into_view()
+                                                }}
+                                            }.into_view()
+                                        }}
+                                    </div>
+                                }
+                            })}
                         </div>
                     </div>
                 }

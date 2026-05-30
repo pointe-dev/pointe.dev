@@ -91,6 +91,57 @@ impl StripeClient {
         Ok(CheckoutSession { id: data.id, url })
     }
 
+    /// Creates a Stripe Checkout session for a pitch quote (no pipeline needed).
+    pub async fn create_direct_checkout(
+        &self,
+        montant_eur: u32,
+        label: &str,
+        note: &str,
+        success_url: &str,
+        cancel_url: &str,
+    ) -> Result<CheckoutSession, String> {
+        let cents = (montant_eur * 100).to_string();
+
+        let params = [
+            ("mode", "payment"),
+            ("currency", "eur"),
+            ("line_items[0][quantity]", "1"),
+            ("line_items[0][price_data][currency]", "eur"),
+            ("line_items[0][price_data][product_data][name]", label),
+            ("line_items[0][price_data][product_data][description]", note),
+            ("line_items[0][price_data][unit_amount]", &cents),
+            ("allow_promotion_codes", "true"),
+            ("billing_address_collection", "auto"),
+            ("invoice_creation[enabled]", "true"),
+            ("success_url", success_url),
+            ("cancel_url", cancel_url),
+        ];
+
+        #[derive(serde::Deserialize)]
+        struct Resp { id: String, url: Option<String> }
+
+        let resp = self.http
+            .post("https://api.stripe.com/v1/checkout/sessions")
+            .basic_auth(&self.secret_key, Option::<&str>::None)
+            .header("Stripe-Version", "2024-12-18.acacia")
+            .form(&params)
+            .send()
+            .await
+            .map_err(|e| format!("Stripe direct checkout request: {e}"))?;
+
+        if !resp.status().is_success() {
+            let s = resp.status();
+            let b = resp.text().await.unwrap_or_default();
+            return Err(format!("Stripe direct checkout {s}: {b}"));
+        }
+
+        let data: Resp = resp.json().await
+            .map_err(|e| format!("Stripe direct checkout parse: {e}"))?;
+
+        let url = data.url.ok_or("Stripe returned no checkout URL")?;
+        Ok(CheckoutSession { id: data.id, url })
+    }
+
     /// Verifies the `Stripe-Signature` header and returns the parsed event.
     /// Rejects events older than 5 minutes to prevent replay attacks.
     pub fn verify_webhook(

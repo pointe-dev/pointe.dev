@@ -235,6 +235,35 @@ async fn handle_confirm(
     Redirect::to(&redirect_url)
 }
 
+async fn resend_send(
+    http: &reqwest::Client,
+    api_key: &str,
+    to: &str,
+    subject: &str,
+    html: &str,
+) -> Result<(), String> {
+    let payload = serde_json::json!({
+        "from": "pointe.dev <noreply@pointe.dev>",
+        "to": [to],
+        "subject": subject,
+        "html": html,
+    });
+    let resp = http
+        .post("https://api.resend.com/emails")
+        .header("Authorization", format!("Bearer {api_key}"))
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if resp.status().is_success() {
+        Ok(())
+    } else {
+        let s = resp.status();
+        let b = resp.text().await.unwrap_or_default();
+        Err(format!("Resend {s}: {b}"))
+    }
+}
+
 async fn send_confirm_email(
     http: &reqwest::Client,
     api_key: &str,
@@ -259,29 +288,161 @@ async fn send_confirm_email(
 </div>
 </body></html>"#
     );
+    resend_send(http, api_key, to_email, "Continuez votre conversation avec pointe.dev", &html).await
+        .inspect(|_| tracing::info!("Confirmation email sent to {to_email}"))
+}
 
-    let payload = serde_json::json!({
-        "from": "pointe.dev <noreply@pointe.dev>",
-        "to": [to_email],
-        "subject": "Continuez votre conversation avec pointe.dev",
-        "html": html,
-    });
+// ── Pitch: Stripe checkout (autonome) ────────────────────────────────────────
 
-    let resp = http
-        .post("https://api.resend.com/emails")
-        .header("Authorization", format!("Bearer {api_key}"))
-        .json(&payload)
-        .send()
+#[derive(Deserialize)]
+struct PitchCheckoutRequest {
+    montant: u32,
+    label: String,
+    #[serde(default)]
+    note: String,
+}
+
+#[derive(Serialize)]
+struct PitchCheckoutResponse {
+    checkout_url: String,
+}
+
+async fn handle_pitch_checkout(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<PitchCheckoutRequest>,
+) -> Result<Json<PitchCheckoutResponse>, StatusCode> {
+    let stripe = state.stripe.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let app_url = std::env::var("APP_URL").unwrap_or_else(|_| state.base_url.clone());
+    let success_url = format!("{app_url}/merci");
+    let cancel_url = app_url.clone();
+
+    let session = stripe
+        .create_direct_checkout(payload.montant, &payload.label, &payload.note, &success_url, &cancel_url)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            tracing::error!("[pitch] Stripe checkout failed: {e}");
+            StatusCode::BAD_GATEWAY
+        })?;
 
-    if resp.status().is_success() {
-        tracing::info!("Confirmation email sent to {to_email}");
-        Ok(())
-    } else {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        Err(format!("Resend {status}: {body}"))
+    tracing::info!("[pitch] Stripe checkout created montant={}€ label={}", payload.montant, payload.label);
+    Ok(Json(PitchCheckoutResponse { checkout_url: session.url }))
+}
+
+// ── Pitch: send quote email (sur-mesure) ─────────────────────────────────────
+
+#[derive(Deserialize)]
+struct SendQuoteRequest {
+    session_id: String,
+    /// Client email — used if not already in session.
+    email: String,
+    summary: String,
+    montant_label: String,
+    delai: String,
+    #[serde(default)]
+    note: String,
+    slides: Vec<serde_json::Value>,
+}
+
+async fn handle_send_quote(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<SendQuoteRequest>,
+) -> Json<serde_json::Value> {
+    let api_key = match &state.resend_api_key {
+        Some(k) => k.clone(),
+        None => {
+            tracing::warn!("[quote] RESEND_API_KEY not set");
+            return Json(serde_json::json!({ "ok": false, "error": "email not configured" }));
+        }
+    };
+
+    // Prefer the email confirmed in the session; fall back to payload
+    let client_email = state.sessions.get_email(&payload.session_id).await
+        .unwrap_or_else(|| payload.email.trim().to_lowercase());
+    if !client_email.contains('@') {
+        return Json(serde_json::json!({ "ok": false, "error": "invalid email" }));
+    }
+
+    // Build slide HTML for the client email
+    let slides_html = payload.slides.iter().map(|s| {
+        let title = s["title"].as_str().unwrap_or("");
+        let body  = s["body"].as_str().unwrap_or("");
+        let points = s["points"].as_array().map(|arr|
+            arr.iter().map(|p| format!(
+                "<li style='margin:4px 0;color:#d1d5db'>{}</li>",
+                p.as_str().unwrap_or("")
+            )).collect::<String>()
+        ).unwrap_or_default();
+        format!(
+            "<div style='margin-bottom:24px'>
+               <h3 style='color:#f3f4f6;font-size:15px;margin:0 0 6px'>{title}</h3>
+               <p style='color:#9ca3af;font-size:13px;margin:0 0 8px'>{body}</p>
+               {}</div>",
+            if points.is_empty() { String::new() }
+            else { format!("<ul style='margin:0;padding-left:20px'>{points}</ul>") }
+        )
+    }).collect::<String>();
+
+    let client_html = format!(
+        r#"<!DOCTYPE html><html><body style="font-family:sans-serif;background:#0a0a0a;margin:0;padding:40px 20px">
+<div style="max-width:560px;margin:auto;background:#111;border-radius:16px;padding:40px;border:1px solid #222">
+  <p style="color:#dc2626;font-size:20px;font-weight:700;margin:0 0 24px">pointe.dev</p>
+  <h1 style="color:#f3f4f6;font-size:20px;font-weight:600;margin:0 0 6px">Votre proposition</h1>
+  <p style="color:#9ca3af;font-size:13px;margin:0 0 28px">{summary}</p>
+  {slides_html}
+  <div style="background:#1a1a1a;border-radius:12px;padding:20px;margin-top:8px;border:1px solid #2a2a2a">
+    <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+      <span style="color:#6b7280;font-size:12px">Estimation</span>
+      <span style="color:#6b7280;font-size:12px">Délai</span>
+    </div>
+    <div style="display:flex;justify-content:space-between">
+      <span style="color:#f3f4f6;font-size:18px;font-weight:700">{montant_label}</span>
+      <span style="color:#f3f4f6;font-size:14px;font-weight:600">{delai}</span>
+    </div>
+    {note_html}
+  </div>
+  <p style="color:#6b7280;font-size:12px;margin-top:28px">Notre équipe vous contactera prochainement pour affiner la proposition.</p>
+</div></body></html>"#,
+        summary = payload.summary,
+        montant_label = payload.montant_label,
+        delai = payload.delai,
+        note_html = if payload.note.is_empty() { String::new() }
+            else { format!("<p style='color:#9ca3af;font-size:12px;margin:8px 0 0'>{}</p>", payload.note) },
+    );
+
+    // Notify owner in background
+    if let Some(owner) = &state.owner_email {
+        let owner_html = format!(
+            r#"<div style="font-family:sans-serif;padding:24px">
+  <h2>Nouveau devis demandé</h2>
+  <p><b>Client :</b> {client_email}</p>
+  <p><b>Résumé :</b> {summary}</p>
+  <p><b>Montant :</b> {montant_label} · {delai}</p>
+</div>"#,
+            summary = payload.summary,
+            montant_label = payload.montant_label,
+            delai = payload.delai,
+        );
+        let http2 = state.http.clone();
+        let api2  = api_key.clone();
+        let owner = owner.clone();
+        tokio::spawn(async move {
+            if let Err(e) = resend_send(&http2, &api2, &owner,
+                "🎯 Nouveau devis demandé — pointe.dev", &owner_html).await {
+                tracing::warn!("[quote] owner notify failed: {e}");
+            }
+        });
+    }
+
+    match resend_send(&state.http, &api_key, &client_email,
+        "Votre proposition pointe.dev", &client_html).await {
+        Ok(()) => {
+            tracing::info!("[quote] proposal sent to {client_email}");
+            Json(serde_json::json!({ "ok": true }))
+        }
+        Err(e) => {
+            tracing::error!("[quote] send failed: {e}");
+            Json(serde_json::json!({ "ok": false, "error": e }))
+        }
     }
 }
 
@@ -458,6 +619,11 @@ async fn main() {
         .unwrap_or_else(|_| "http://localhost:3001".to_string());
     tracing::info!("Base URL: {base_url}");
 
+    let owner_email = std::env::var("OWNER_EMAIL").ok();
+    if let Some(ref e) = owner_email {
+        tracing::info!("Owner notifications → {e}");
+    }
+
     let state = Arc::new(AppState {
         anthropic_key,
         http,
@@ -471,6 +637,7 @@ async fn main() {
         session_secret,
         resend_api_key,
         base_url,
+        owner_email,
     });
 
     let app = Router::new()
@@ -479,6 +646,8 @@ async fn main() {
         .route("/api/ai/chat", post(handle_ai_chat))
         .route("/api/auth/unlock", post(handle_unlock))
         .route("/api/auth/confirm", get(handle_confirm))
+        .route("/api/pitch/checkout", post(handle_pitch_checkout))
+        .route("/api/pitch/send-quote", post(handle_send_quote))
         .route("/api/pipeline/start", post(handlers::pipeline::start))
         .route("/api/pipeline/:id", get(handlers::pipeline::status))
         .route("/api/pipeline/:id/resume", post(handlers::pipeline::resume))

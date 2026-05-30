@@ -21,4 +21,6 @@ pub struct AppState {
     pub resend_api_key: Option<String>,
     /// Public base URL used to build confirmation links (e.g. "https://pointe.dev").
     pub base_url: String,
+    /// Owner email — receives notifications on new quote requests.
+    pub owner_email: Option<String>,
 }
