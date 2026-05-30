@@ -186,6 +186,39 @@ fn parse_response(content: &str) -> (String, Option<PitchData>) {
     (display_text, pitch_json)
 }
 
+#[derive(Serialize, Deserialize)]
+struct StoredMsg {
+    is_user: bool,
+    content: String,
+}
+
+fn load_history() -> Vec<(bool, String, String)> {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item("chat_msgs").ok().flatten())
+        .and_then(|json| serde_json::from_str::<Vec<StoredMsg>>(&json).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|m| {
+            let html = if m.is_user { m.content.clone() } else { render_markdown(&m.content) };
+            (m.is_user, m.content, html)
+        })
+        .collect()
+}
+
+fn save_history(messages: &[(bool, String, String)]) {
+    let stored: Vec<StoredMsg> = messages.iter()
+        .map(|(is_user, raw, _)| StoredMsg { is_user: *is_user, content: raw.clone() })
+        .collect();
+    if let Ok(json) = serde_json::to_string(&stored) {
+        if let Some(w) = web_sys::window() {
+            if let Ok(Some(s)) = w.local_storage() {
+                let _ = s.set_item("chat_msgs", &json);
+            }
+        }
+    }
+}
+
 fn render_markdown(input: &str) -> String {
     use pulldown_cmark::{html::push_html, Options, Parser};
     let opts = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES;
@@ -216,7 +249,7 @@ pub fn Chat() -> impl IntoView {
     let session_id_unlock = session_id.clone();
     let is_unlocked: RwSignal<bool> = create_rw_signal(is_token_session);
 
-    let messages = create_rw_signal::<Vec<(bool, String, String)>>(vec![]);
+    let messages = create_rw_signal::<Vec<(bool, String, String)>>(load_history());
     let input_text    = create_rw_signal(String::new());
     let is_loading    = create_rw_signal(false);
     let copied_idx: RwSignal<Option<usize>> = create_rw_signal(None);
@@ -236,6 +269,11 @@ pub fn Chat() -> impl IntoView {
         let _ = js_sys::Function::new_no_args(
             "var t=document.querySelector('.chat-textarea');if(t)t.focus();"
         ).call0(&wasm_bindgen::JsValue::NULL);
+    });
+
+    // Persist conversation to localStorage on every change
+    create_effect(move |_| {
+        save_history(&messages.get());
     });
 
     create_effect(move |_| {
