@@ -139,6 +139,10 @@ struct PitchPollResponse {
     manual_quote: bool,
     #[serde(default)]
     slides: Vec<PitchSlide>,
+    #[serde(default)]
+    price_eur_cents: u32,
+    #[serde(default)]
+    price_validity: String,
 }
 
 #[derive(Deserialize)]
@@ -300,9 +304,11 @@ pub fn Chat() -> impl IntoView {
     let quote_error = create_rw_signal(false);
 
     // Pitch pipeline polling
-    let pitch_loading: RwSignal<bool>      = create_rw_signal(false);
-    let pitch_manual_quote: RwSignal<bool> = create_rw_signal(false);
-    let pitch_poll_tick: RwSignal<u32>     = create_rw_signal(0);
+    let pitch_loading: RwSignal<bool>         = create_rw_signal(false);
+    let pitch_manual_quote: RwSignal<bool>    = create_rw_signal(false);
+    let pitch_price_cents: RwSignal<u32>      = create_rw_signal(0);
+    let pitch_price_validity: RwSignal<String> = create_rw_signal(String::new());
+    let pitch_poll_tick: RwSignal<u32>        = create_rw_signal(0);
 
     // Email confirmation polling
     let email_confirmed: RwSignal<bool> = create_rw_signal(false);
@@ -347,10 +353,15 @@ pub fn Chat() -> impl IntoView {
             match Request::get(&format!("/api/pitch/result?sid={}", sid)).send().await {
                 Ok(r) => match r.json::<PitchPollResponse>().await {
                     Ok(data) if data.ready => {
-                        let slides = data.slides.clone();
+                        let slides       = data.slides;
+                        let manual_quote = data.manual_quote;
+                        let cents        = data.price_eur_cents;
+                        let validity     = data.price_validity;
                         batch(move || {
                             current_pitch.set(Some(PitchData { slides }));
-                            pitch_manual_quote.set(data.manual_quote);
+                            pitch_manual_quote.set(manual_quote);
+                            pitch_price_cents.set(cents);
+                            pitch_price_validity.set(validity);
                             pitch_loading.set(false);
                         });
                     }
@@ -760,6 +771,28 @@ pub fn Chat() -> impl IntoView {
                                         } else {
                                             // ── Normal quote CTA ──────────────────────────────
                                             view! {
+                                                <div>
+                                                {/* Price card */}
+                                                {move || {
+                                                    let cents = pitch_price_cents.get();
+                                                    (cents > 0).then(|| {
+                                                        let euros = cents / 100;
+                                                        let price_str = if euros >= 1000 {
+                                                            format!("{} {:03} €", euros / 1000, euros % 1000)
+                                                        } else {
+                                                            format!("{} €", euros)
+                                                        };
+                                                        let validity = pitch_price_validity.get();
+                                                        view! {
+                                                            <div class="pitch-price-card">
+                                                                <span class="pitch-price-amount">{price_str}</span>
+                                                                {(!validity.is_empty()).then(|| view! {
+                                                                    <span class="pitch-price-validity">{validity}</span>
+                                                                })}
+                                                            </div>
+                                                        }
+                                                    })
+                                                }}
                                                 {move || if quote_sent.get() {
                                                     view! {
                                                         <p class="pitch-quote-sent">"✓ Proposition envoyée — nous revenons vers vous rapidement."</p>
@@ -808,6 +841,7 @@ pub fn Chat() -> impl IntoView {
                                                         </div>
                                                     }.into_view()
                                                 }}
+                                                </div>
                                             }.into_view()
                                         }}
                                     </div>
