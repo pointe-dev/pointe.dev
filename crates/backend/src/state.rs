@@ -1,6 +1,7 @@
 use crate::embeddings::EmbeddingEngine;
 use crate::langfuse::LangfuseClient;
 use crate::pipeline::PipelineStore;
+use crate::pitch::PitchStore;
 use crate::qdrant::QdrantStore;
 use crate::sessions::SessionStore;
 use crate::stripe::StripeClient;
@@ -12,6 +13,7 @@ pub struct AppState {
     pub langfuse: Option<LangfuseClient>,
     pub sessions: SessionStore,
     pub pipelines: PipelineStore,
+    pub pitches: PitchStore,
     pub qdrant: Option<QdrantStore>,
     pub embeddings: Option<EmbeddingEngine>,
     pub stripe: Option<StripeClient>,

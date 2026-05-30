@@ -8,6 +8,7 @@ use crate::agents;
 use crate::state::AppState;
 
 pub const MAX_BUILD_ATTEMPTS: u8 = 3;
+pub const MAX_PRICING_ATTEMPTS: u8 = 2;
 
 /// The stage an automation pipeline is currently in.
 /// Serialized as `{ "stage": "building", ... }` for the status API.
@@ -24,6 +25,8 @@ pub enum PipelineStage {
     Validating,
     /// Pricing agent computing the quote.
     Pricing,
+    /// Pricing critic validating profitability and client fairness.
+    PricingValidating,
     /// Waiting for Stripe payment — pipeline is paused.
     AwaitingPayment,
     /// Deploying to n8n after payment confirmed.
@@ -60,6 +63,16 @@ pub struct PipelineContext {
     pub price_monthly: Option<u32>,
     /// Client-facing justification covering both one-time and monthly fees.
     pub price_justification: Option<String>,
+    /// Number of pricing attempts (incremented before each run_pricing call).
+    pub pricing_attempts: u8,
+    /// Critic feedback accumulated across pricing attempts.
+    pub pricing_critic_feedback: Vec<String>,
+    /// Complexity override set by the pricing critic (replaces research_json value).
+    pub pricing_complexity_override: Option<String>,
+    /// Feasibility score override set by the pricing critic.
+    pub pricing_feasibility_override: Option<f32>,
+    /// Slides JSON produced by run_pricing, carried to run_pricing_critic for publishing.
+    pub pricing_slides_json: Option<serde_json::Value>,
     /// n8n workflow ID after deployment.
     pub n8n_workflow_id: Option<String>,
     /// Direct URL to the workflow in the n8n editor.
@@ -186,6 +199,7 @@ async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(),
                 if approved {
                     store.advance(id, PipelineStage::Pricing, ctx).await;
                 } else if ctx.build_attempts >= MAX_BUILD_ATTEMPTS {
+                    agents::publish_manual_pitch(app, &ctx).await;
                     store.advance(
                         id,
                         PipelineStage::SavedForHuman {
@@ -204,10 +218,34 @@ async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(),
             }
 
             PipelineStage::Pricing => {
+                ctx.pricing_attempts += 1;
                 agents::run_pricing(app, &mut ctx).await.map_err(|e| e.to_string())?;
-                // Pause: wait for Stripe webhook to call resume_after_payment
-                store.advance(id, PipelineStage::AwaitingPayment, ctx).await;
-                break;
+                store.advance(id, PipelineStage::PricingValidating, ctx).await;
+            }
+
+            PipelineStage::PricingValidating => {
+                let approved = agents::run_pricing_critic(app, &mut ctx).await.map_err(|e| e.to_string())?;
+                if approved {
+                    // Pause: wait for Stripe webhook to call resume_after_payment
+                    store.advance(id, PipelineStage::AwaitingPayment, ctx).await;
+                    break;
+                } else if ctx.pricing_attempts >= MAX_PRICING_ATTEMPTS {
+                    agents::publish_manual_pitch(app, &ctx).await;
+                    store.advance(
+                        id,
+                        PipelineStage::SavedForHuman {
+                            reason: format!(
+                                "pricing critic rejected after {} attempts: {}",
+                                ctx.pricing_attempts,
+                                ctx.pricing_critic_feedback.last().cloned().unwrap_or_default()
+                            ),
+                        },
+                        ctx,
+                    ).await;
+                    break;
+                } else {
+                    store.advance(id, PipelineStage::Pricing, ctx).await;
+                }
             }
 
             PipelineStage::Deploying => {
@@ -216,7 +254,8 @@ async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(),
                 break;
             }
 
-            // Terminal or externally-driven stages — stop the loop
+            // Terminal or externally-driven stages — stop the loop.
+            // AwaitingPayment resumes via resume_after_payment() → Deploying.
             PipelineStage::AwaitingPayment
             | PipelineStage::Live
             | PipelineStage::SavedForHuman { .. }

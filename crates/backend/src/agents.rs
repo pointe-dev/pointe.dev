@@ -1,4 +1,5 @@
 use crate::pipeline::PipelineContext;
+use crate::pitch::{PitchResult, PitchSlide};
 use crate::state::AppState;
 
 #[derive(Debug)]
@@ -370,16 +371,19 @@ Client: {}\nResearch: {}\nWorkflow:\n{}",
 }
 
 /// Computes the price from research_json using deterministic rules, then asks Haiku
-/// to write a client-facing justification. Numbers never come from the LLM.
+/// Rule-based pricing + Haiku justification + slide generation.
+/// Stores slides in ctx.pricing_slides_json — does NOT publish to app.pitches yet.
+/// Publishing happens in run_pricing_critic once the price is approved.
 pub async fn run_pricing(app: &AppState, ctx: &mut PipelineContext) -> Result<(), AgentError> {
-    tracing::info!("[pricing] session={}", ctx.session_id);
+    tracing::info!("[pricing] attempt={} session={}", ctx.pricing_attempts, ctx.session_id);
 
     // --- 1. Rule-based price calculation ---
 
     let research = ctx.research_json.as_ref();
 
-    let complexity = research
-        .and_then(|r| r["complexity"].as_str())
+    // Accept complexity/feasibility overrides injected by the pricing critic on retry
+    let complexity = ctx.pricing_complexity_override.as_deref()
+        .or_else(|| research.and_then(|r| r["complexity"].as_str()))
         .unwrap_or("medium");
 
     let integration_count = research
@@ -397,9 +401,8 @@ pub async fn run_pricing(app: &AppState, ctx: &mut PipelineContext) -> Result<()
         }).sum())
         .unwrap_or(0);
 
-    let feasibility: f32 = research
-        .and_then(|r| r["feasibility_score"].as_f64())
-        .map(|f| f as f32)
+    let feasibility: f32 = ctx.pricing_feasibility_override
+        .or_else(|| research.and_then(|r| r["feasibility_score"].as_f64()).map(|f| f as f32))
         .unwrap_or(7.0);
 
     // Base price by complexity tier (euros)
@@ -450,9 +453,18 @@ feas={feasibility_buffer} nodes={node_premium}) | monthly={monthly_price}€"
 
     // --- 2. Haiku writes the client-facing justification ---
 
+    let critic_note = if ctx.pricing_critic_feedback.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nPrevious critic feedback (address these): {}\n",
+            ctx.pricing_critic_feedback.last().unwrap()
+        )
+    };
+
     let justification_prompt = format!(
         "2-3 sentences. Professional, no filler. Mention integrations. Focus on time saved / errors eliminated.\n\
-Include both fees naturally in the last sentence.\n\
+Include both fees naturally in the last sentence.{critic_note}\n\
 Project: {need}\nComplexity: {complexity}\nIntegrations: {integrations}\n\
 Setup fee: {setup}€ (one-time) | Monthly: {monthly}€/mo (maintenance + monitoring + hosting)",
         need        = ctx.client_need,
@@ -497,10 +509,335 @@ Setup fee: {setup}€ (one-time) | Monthly: {monthly}€/mo (maintenance + monit
         format!("Automatisation {complexity} — {setup_price}€ (setup) + {monthly_price}€/mois.")
     };
 
-    ctx.price_quote        = Some(setup_price);
-    ctx.price_monthly      = Some(monthly_price);
-    ctx.price_justification = Some(justification);
+    ctx.price_quote         = Some(setup_price);
+    ctx.price_monthly       = Some(monthly_price);
+    ctx.price_justification = Some(justification.clone());
+
+    // ── Generate 3 slides and store in ctx (published by critic if approved) ─
+
+    let research = ctx.research_json.as_ref();
+
+    let slides_prompt = format!(
+        "Generate exactly 3 JSON slides for a proposal. Respond ONLY with a JSON array, no prose.\n\
+Schema: [{{\"title\":\"...\",\"body\":\"...\",\"points\":[\"...\"]}}]\n\
+Rules: titles MUST be exactly these 3, in the SAME LANGUAGE as the Project field:\n\
+  1. Ce que nous avons compris / What we understood / Was wir verstanden haben\n\
+  2. Notre proposition / Our proposal / Unser Angebot\n\
+  3. Prochaines étapes / Next steps / Nächste Schritte\n\
+body = 1-2 sentences max. Each point = max 10 words. Max 3 points per slide.\n\
+\n\
+Project: {need}\n\
+Summary: {summary}\n\
+Integrations: {integrations}\n\
+Complexity: {complexity} | Build: ~{hours}h\n\
+Setup: {setup}€ (one-time) + {monthly}€/month\n\
+Justification: {just}",
+        need         = ctx.client_need,
+        summary      = ctx.qualification_summary.as_deref().unwrap_or(""),
+        integrations = research
+            .and_then(|r| r["integrations_required"].as_array())
+            .map(|v| v.iter().filter_map(|i| i["name"].as_str()).collect::<Vec<_>>().join(", "))
+            .unwrap_or_default(),
+        complexity   = complexity,
+        hours        = research.and_then(|r| r["estimated_build_hours"].as_str()).unwrap_or("?"),
+        setup        = setup_price,
+        monthly      = monthly_price,
+        just         = justification,
+    );
+
+    let slides_raw = match app.http
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", &app.anthropic_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&Req {
+            model: "claude-haiku-4-5-20251001",
+            max_tokens: 600,
+            messages: vec![Msg { role: "user", content: slides_prompt }],
+        })
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {
+            let ant: Resp = r.json().await.unwrap_or(Resp { content: vec![] });
+            ant.content.into_iter()
+                .find(|c| c.kind == "text")
+                .and_then(|c| c.text)
+                .unwrap_or_default()
+        }
+        _ => {
+            tracing::warn!("[pricing] slide generation failed — will use fallback in critic");
+            String::new()
+        }
+    };
+
+    ctx.pricing_slides_json = Some(serde_json::Value::String(slides_raw));
     Ok(())
+}
+
+/// Evaluates the pricing from two angles: pointe.dev profitability and client fairness.
+/// On approval: publishes PitchResult to app.pitches and returns true.
+/// On rejection: injects corrections into ctx and returns false.
+pub async fn run_pricing_critic(app: &AppState, ctx: &mut PipelineContext) -> Result<bool, AgentError> {
+    tracing::info!("[pricing-critic] attempt={} session={}", ctx.pricing_attempts, ctx.session_id);
+
+    let research = ctx.research_json.as_ref();
+    let setup_price  = ctx.price_quote.unwrap_or(0);
+    let monthly      = ctx.price_monthly.unwrap_or(0);
+    let complexity   = ctx.pricing_complexity_override.as_deref()
+        .or_else(|| research.and_then(|r| r["complexity"].as_str()))
+        .unwrap_or("medium");
+
+    let estimated_hours: f32 = research
+        .and_then(|r| r["estimated_build_hours"].as_str())
+        .and_then(|h| h.parse().ok())
+        .unwrap_or(10.0);
+    let hourly_rate = if estimated_hours > 0.0 { setup_price as f32 / estimated_hours } else { 0.0 };
+
+    let integrations_str = research
+        .and_then(|r| r["integrations_required"].as_array())
+        .map(|v| v.iter().filter_map(|i| i["name"].as_str()).collect::<Vec<_>>().join(", "))
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let risks_str = research
+        .and_then(|r| r["risks"].as_array())
+        .map(|v| v.iter().map(|r| format!(
+            "{} ({})",
+            r["description"].as_str().unwrap_or("?"),
+            r["severity"].as_str().unwrap_or("?")
+        )).collect::<Vec<_>>().join("; "))
+        .unwrap_or_else(|| "none".to_string());
+
+    let prev_feedback = ctx.pricing_critic_feedback.last().cloned().unwrap_or_default();
+
+    let prompt = format!(
+        "You are the pricing critic for pointe.dev, an automation agency (target: €100-200/h effective rate).\n\
+Evaluate this quote and respond ONLY with valid JSON — no prose, no fences.\n\
+\n\
+Project: {need}\n\
+Complexity: {complexity} | Build estimate: {hours}h\n\
+Integrations: {integrations}\n\
+Risks: {risks}\n\
+\n\
+Computed price:\n\
+  Setup: {setup}€ (one-time)\n\
+  Monthly: {monthly}€/month\n\
+  Effective rate: {rate:.0}€/h\n\
+{prev}\
+\n\
+Approval criteria:\n\
+  - Effective rate €80-250/h (reject if outside)\n\
+  - Complexity matches integration count and risk level\n\
+  - Price is credible for the client's sector\n\
+\n\
+JSON schema:\n\
+{{\"approved\":bool,\"reason\":\"1-2 sentences\",\"complexity\":\"simple\"|\"medium\"|\"complex\"|null,\"feasibility_score\":number|null}}\n\
+Set complexity/feasibility_score to null if current values are acceptable.",
+        need         = ctx.client_need,
+        complexity   = complexity,
+        hours        = estimated_hours,
+        integrations = integrations_str,
+        risks        = risks_str,
+        setup        = setup_price,
+        monthly      = monthly,
+        rate         = hourly_rate,
+        prev         = if prev_feedback.is_empty() { String::new() }
+                       else { format!("Previous feedback: {prev_feedback}\n") },
+    );
+
+    #[derive(serde::Serialize)]
+    struct Req { model: &'static str, max_tokens: u32, messages: Vec<Msg> }
+    #[derive(serde::Serialize)]
+    struct Msg { role: &'static str, content: String }
+    #[derive(serde::Deserialize)]
+    struct Resp { content: Vec<Content> }
+    #[derive(serde::Deserialize)]
+    struct Content { #[serde(rename = "type")] kind: String, text: Option<String> }
+
+    #[derive(serde::Deserialize)]
+    struct CriticOutput {
+        approved: bool,
+        reason: String,
+        complexity: Option<String>,
+        feasibility_score: Option<f32>,
+    }
+
+    let resp = app.http
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", &app.anthropic_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&Req {
+            model: "claude-sonnet-4-6",
+            max_tokens: 200,
+            messages: vec![Msg { role: "user", content: prompt }],
+        })
+        .send()
+        .await
+        .map_err(|e| AgentError(format!("pricing critic request: {e}")))?;
+
+    if !resp.status().is_success() {
+        let s = resp.status();
+        tracing::warn!("[pricing-critic] call failed {s} — auto-approving");
+        // Fail open: publish what we have rather than blocking forever
+        publish_pitch(app, ctx).await;
+        return Ok(true);
+    }
+
+    let ant: Resp = resp.json().await
+        .map_err(|e| AgentError(format!("pricing critic parse: {e}")))?;
+    let raw = ant.content.into_iter()
+        .find(|c| c.kind == "text")
+        .and_then(|c| c.text)
+        .unwrap_or_default();
+
+    let json_str = raw.trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    let verdict: CriticOutput = match serde_json::from_str(json_str) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("[pricing-critic] JSON parse failed: {e} — auto-approving");
+            publish_pitch(app, ctx).await;
+            return Ok(true);
+        }
+    };
+
+    tracing::info!(
+        "[pricing-critic] approved={} reason=\"{}\" complexity_override={:?} feasibility_override={:?}",
+        verdict.approved, verdict.reason, verdict.complexity, verdict.feasibility_score,
+    );
+
+    if verdict.approved {
+        publish_pitch(app, ctx).await;
+        Ok(true)
+    } else {
+        ctx.pricing_critic_feedback.push(verdict.reason);
+        if let Some(c) = verdict.complexity       { ctx.pricing_complexity_override   = Some(c); }
+        if let Some(f) = verdict.feasibility_score { ctx.pricing_feasibility_override = Some(f); }
+        Ok(false)
+    }
+}
+
+/// Deserialises the slides stored by run_pricing and writes the PitchResult to app.pitches.
+async fn publish_pitch(app: &AppState, ctx: &PipelineContext) {
+    let research = ctx.research_json.as_ref();
+
+    let externals_needed: Vec<String> = research
+        .and_then(|r| r["api_keys_to_acquire"].as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+
+    let solution_desc = research
+        .and_then(|r| r["approach"].as_str())
+        .unwrap_or(&ctx.client_need)
+        .to_string();
+
+    let setup_price = ctx.price_quote.unwrap_or(0);
+    let monthly     = ctx.price_monthly.unwrap_or(0);
+    let complexity  = ctx.pricing_complexity_override.as_deref()
+        .or_else(|| research.and_then(|r| r["complexity"].as_str()))
+        .unwrap_or("medium");
+
+    // Parse slides from the JSON string stored by run_pricing
+    let slides: Vec<PitchSlide> = ctx.pricing_slides_json
+        .as_ref()
+        .and_then(|v| v.as_str())
+        .and_then(|s| {
+            let j = s.trim()
+                .trim_start_matches("```json")
+                .trim_start_matches("```")
+                .trim_end_matches("```")
+                .trim();
+            serde_json::from_str(j).ok()
+        })
+        .unwrap_or_else(|| vec![
+            PitchSlide {
+                title: "Ce que nous avons compris".to_string(),
+                body: ctx.qualification_summary.clone().unwrap_or_default(),
+                points: vec![],
+            },
+            PitchSlide {
+                title: "Notre proposition".to_string(),
+                body: solution_desc.clone(),
+                points: vec![],
+            },
+            PitchSlide {
+                title: "Prochaines étapes".to_string(),
+                body: format!(
+                    "Développement {complexity} estimé à {}h.",
+                    research.and_then(|r| r["estimated_build_hours"].as_str()).unwrap_or("?")
+                ),
+                points: vec![
+                    "Phase 1 : Spec & setup".to_string(),
+                    "Phase 2 : Build & test".to_string(),
+                    format!("Maintenance : {monthly}€/mois"),
+                ],
+            },
+        ]);
+
+    app.pitches.set(&ctx.session_id, PitchResult {
+        solution_desc,
+        price_eur_cents: setup_price * 100,
+        price_validity: "valable 48h".to_string(),
+        externals_needed,
+        slides,
+        manual_quote: false,
+    }).await;
+}
+
+/// Publishes a manual-quote PitchResult (pricing failed, human follows up).
+/// Uses whatever slides were produced so far; falls back to research-based stubs.
+pub async fn publish_manual_pitch(app: &AppState, ctx: &PipelineContext) {
+    let research = ctx.research_json.as_ref();
+
+    let slides: Vec<PitchSlide> = ctx.pricing_slides_json
+        .as_ref()
+        .and_then(|v| v.as_str())
+        .and_then(|s| serde_json::from_str(
+            s.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim()
+        ).ok())
+        .unwrap_or_else(|| vec![
+            PitchSlide {
+                title: "Ce que nous avons compris".to_string(),
+                body: ctx.qualification_summary.clone().unwrap_or_else(|| ctx.client_need.clone()),
+                points: vec![],
+            },
+            PitchSlide {
+                title: "Notre proposition".to_string(),
+                body: research
+                    .and_then(|r| r["approach"].as_str())
+                    .unwrap_or("Solution d'automatisation sur mesure.")
+                    .to_string(),
+                points: vec![],
+            },
+            PitchSlide {
+                title: "Prochaines étapes".to_string(),
+                body: "Notre équipe vous revient avec un devis personnalisé sous 24h.".to_string(),
+                points: vec![
+                    "Analyse approfondie de votre besoin".to_string(),
+                    "Estimation détaillée et chiffrée".to_string(),
+                    "Proposition sur mesure envoyée par email".to_string(),
+                ],
+            },
+        ]);
+
+    let solution_desc = research
+        .and_then(|r| r["approach"].as_str())
+        .unwrap_or(&ctx.client_need)
+        .to_string();
+
+    app.pitches.set(&ctx.session_id, PitchResult {
+        solution_desc,
+        price_eur_cents: 0,
+        price_validity: String::new(),
+        externals_needed: vec![],
+        slides,
+        manual_quote: true,
+    }).await;
 }
 
 /// Deploys the workflow to n8n (our instance or client's) and activates it.

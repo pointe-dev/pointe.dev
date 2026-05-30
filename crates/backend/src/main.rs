@@ -20,6 +20,7 @@ mod embeddings;
 mod handlers;
 mod langfuse;
 mod pipeline;
+mod pitch;
 mod qdrant;
 mod sessions;
 mod state;
@@ -28,6 +29,7 @@ mod stripe;
 use embeddings::EmbeddingEngine;
 use langfuse::LangfuseClient;
 use pipeline::PipelineStore;
+use pitch::{PitchResult, PitchStore};
 use qdrant::QdrantStore;
 use sessions::{SessionStore, FREE_MESSAGES};
 use state::AppState;
@@ -292,54 +294,11 @@ async fn send_confirm_email(
         .inspect(|_| tracing::info!("Confirmation email sent to {to_email}"))
 }
 
-// ── Pitch: Stripe checkout (autonome) ────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct PitchCheckoutRequest {
-    montant: u32,
-    label: String,
-    #[serde(default)]
-    note: String,
-}
-
-#[derive(Serialize)]
-struct PitchCheckoutResponse {
-    checkout_url: String,
-}
-
-async fn handle_pitch_checkout(
-    State(state): State<Arc<AppState>>,
-    Json(payload): Json<PitchCheckoutRequest>,
-) -> Result<Json<PitchCheckoutResponse>, StatusCode> {
-    let stripe = state.stripe.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
-    let app_url = std::env::var("APP_URL").unwrap_or_else(|_| state.base_url.clone());
-    let success_url = format!("{app_url}/merci");
-    let cancel_url = app_url.clone();
-
-    let session = stripe
-        .create_direct_checkout(payload.montant, &payload.label, &payload.note, &success_url, &cancel_url)
-        .await
-        .map_err(|e| {
-            tracing::error!("[pitch] Stripe checkout failed: {e}");
-            StatusCode::BAD_GATEWAY
-        })?;
-
-    tracing::info!("[pitch] Stripe checkout created montant={}€ label={}", payload.montant, payload.label);
-    Ok(Json(PitchCheckoutResponse { checkout_url: session.url }))
-}
-
-// ── Pitch: send quote email (sur-mesure) ─────────────────────────────────────
+// ── Pitch: send proposal by email ────────────────────────────────────────────
 
 #[derive(Deserialize)]
 struct SendQuoteRequest {
-    session_id: String,
-    /// Client email — used if not already in session.
     email: String,
-    summary: String,
-    montant_label: String,
-    delai: String,
-    #[serde(default)]
-    note: String,
     slides: Vec<serde_json::Value>,
 }
 
@@ -355,17 +314,15 @@ async fn handle_send_quote(
         }
     };
 
-    // Prefer the email confirmed in the session; fall back to payload
-    let client_email = state.sessions.get_email(&payload.session_id).await
-        .unwrap_or_else(|| payload.email.trim().to_lowercase());
+    let client_email = payload.email.trim().to_lowercase();
     if !client_email.contains('@') {
         return Json(serde_json::json!({ "ok": false, "error": "invalid email" }));
     }
 
-    // Build slide HTML for the client email
+    // Build slide HTML
     let slides_html = payload.slides.iter().map(|s| {
-        let title = s["title"].as_str().unwrap_or("");
-        let body  = s["body"].as_str().unwrap_or("");
+        let title  = s["title"].as_str().unwrap_or("");
+        let body   = s["body"].as_str().unwrap_or("");
         let points = s["points"].as_array().map(|arr|
             arr.iter().map(|p| format!(
                 "<li style='margin:4px 0;color:#d1d5db'>{}</li>",
@@ -373,9 +330,9 @@ async fn handle_send_quote(
             )).collect::<String>()
         ).unwrap_or_default();
         format!(
-            "<div style='margin-bottom:24px'>
-               <h3 style='color:#f3f4f6;font-size:15px;margin:0 0 6px'>{title}</h3>
-               <p style='color:#9ca3af;font-size:13px;margin:0 0 8px'>{body}</p>
+            "<div style='margin-bottom:24px'>\
+               <h3 style='color:#f3f4f6;font-size:15px;margin:0 0 6px'>{title}</h3>\
+               <p style='color:#9ca3af;font-size:13px;margin:0 0 8px'>{body}</p>\
                {}</div>",
             if points.is_empty() { String::new() }
             else { format!("<ul style='margin:0;padding-left:20px'>{points}</ul>") }
@@ -386,48 +343,26 @@ async fn handle_send_quote(
         r#"<!DOCTYPE html><html><body style="font-family:sans-serif;background:#0a0a0a;margin:0;padding:40px 20px">
 <div style="max-width:560px;margin:auto;background:#111;border-radius:16px;padding:40px;border:1px solid #222">
   <p style="color:#dc2626;font-size:20px;font-weight:700;margin:0 0 24px">pointe.dev</p>
-  <h1 style="color:#f3f4f6;font-size:20px;font-weight:600;margin:0 0 6px">Votre proposition</h1>
-  <p style="color:#9ca3af;font-size:13px;margin:0 0 28px">{summary}</p>
+  <h1 style="color:#f3f4f6;font-size:20px;font-weight:600;margin:0 0 24px">Votre proposition</h1>
   {slides_html}
-  <div style="background:#1a1a1a;border-radius:12px;padding:20px;margin-top:8px;border:1px solid #2a2a2a">
-    <div style="display:flex;justify-content:space-between;margin-bottom:8px">
-      <span style="color:#6b7280;font-size:12px">Estimation</span>
-      <span style="color:#6b7280;font-size:12px">Délai</span>
-    </div>
-    <div style="display:flex;justify-content:space-between">
-      <span style="color:#f3f4f6;font-size:18px;font-weight:700">{montant_label}</span>
-      <span style="color:#f3f4f6;font-size:14px;font-weight:600">{delai}</span>
-    </div>
-    {note_html}
-  </div>
-  <p style="color:#6b7280;font-size:12px;margin-top:28px">Notre équipe vous contactera prochainement pour affiner la proposition.</p>
-</div></body></html>"#,
-        summary = payload.summary,
-        montant_label = payload.montant_label,
-        delai = payload.delai,
-        note_html = if payload.note.is_empty() { String::new() }
-            else { format!("<p style='color:#9ca3af;font-size:12px;margin:8px 0 0'>{}</p>", payload.note) },
+  <p style="color:#6b7280;font-size:12px;margin-top:28px">Notre équipe vous contactera prochainement avec une estimation détaillée.</p>
+</div></body></html>"#
     );
 
     // Notify owner in background
     if let Some(owner) = &state.owner_email {
         let owner_html = format!(
-            r#"<div style="font-family:sans-serif;padding:24px">
-  <h2>Nouveau devis demandé</h2>
-  <p><b>Client :</b> {client_email}</p>
-  <p><b>Résumé :</b> {summary}</p>
-  <p><b>Montant :</b> {montant_label} · {delai}</p>
-</div>"#,
-            summary = payload.summary,
-            montant_label = payload.montant_label,
-            delai = payload.delai,
+            "<div style='font-family:sans-serif;padding:24px'>\
+               <h2>Nouvelle proposition demandée</h2>\
+               <p><b>Client :</b> {client_email}</p>\
+             </div>"
         );
-        let http2 = state.http.clone();
-        let api2  = api_key.clone();
-        let owner = owner.clone();
+        let http2  = state.http.clone();
+        let api2   = api_key.clone();
+        let owner  = owner.clone();
         tokio::spawn(async move {
             if let Err(e) = resend_send(&http2, &api2, &owner,
-                "🎯 Nouveau devis demandé — pointe.dev", &owner_html).await {
+                "🎯 Nouvelle proposition demandée — pointe.dev", &owner_html).await {
                 tracing::warn!("[quote] owner notify failed: {e}");
             }
         });
@@ -444,6 +379,65 @@ async fn handle_send_quote(
             Json(serde_json::json!({ "ok": false, "error": e }))
         }
     }
+}
+
+// ── Pitch: n8n pipeline callback ─────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct PipelineResultPayload {
+    session_id: String,
+    #[serde(flatten)]
+    result: PitchResult,
+}
+
+async fn handle_pipeline_result(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<PipelineResultPayload>,
+) -> Json<serde_json::Value> {
+    if payload.session_id.is_empty() {
+        return Json(serde_json::json!({ "ok": false, "error": "missing session_id" }));
+    }
+    state.pitches.set(&payload.session_id, payload.result).await;
+    Json(serde_json::json!({ "ok": true }))
+}
+
+// ── Pitch: frontend polling ───────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct PitchPollParams {
+    sid: String,
+}
+
+async fn handle_pitch_poll(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<PitchPollParams>,
+) -> Json<serde_json::Value> {
+    match state.pitches.get(&params.sid).await {
+        Some(r) => Json(serde_json::json!({
+            "ready":            true,
+            "manual_quote":     r.manual_quote,
+            "solution_desc":    r.solution_desc,
+            "price_eur_cents":  r.price_eur_cents,
+            "price_validity":   r.price_validity,
+            "externals_needed": r.externals_needed,
+            "slides":           r.slides,
+        })),
+        None => Json(serde_json::json!({ "ready": false })),
+    }
+}
+
+// ── Auth: email confirmation status (frontend poll) ───────────────────────────
+
+#[derive(Deserialize)]
+struct AuthStatusParams { sid: String }
+
+async fn handle_auth_status(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<AuthStatusParams>,
+) -> Json<serde_json::Value> {
+    let unlocked = state.sessions.is_unlocked(&params.sid).await;
+    let email    = state.sessions.get_email(&params.sid).await;
+    Json(serde_json::json!({ "unlocked": unlocked, "email": email }))
 }
 
 /// Extract the best-guess real IP from the request.
@@ -631,6 +625,7 @@ async fn main() {
         langfuse,
         sessions: SessionStore::new(),
         pipelines: PipelineStore::new(),
+        pitches: PitchStore::new(),
         qdrant,
         embeddings,
         stripe,
@@ -646,8 +641,10 @@ async fn main() {
         .route("/api/ai/chat", post(handle_ai_chat))
         .route("/api/auth/unlock", post(handle_unlock))
         .route("/api/auth/confirm", get(handle_confirm))
-        .route("/api/pitch/checkout", post(handle_pitch_checkout))
         .route("/api/pitch/send-quote", post(handle_send_quote))
+        .route("/api/pitch/pipeline-result", post(handle_pipeline_result))
+        .route("/api/pitch/result", get(handle_pitch_poll))
+        .route("/api/auth/status", get(handle_auth_status))
         .route("/api/pipeline/start", post(handlers::pipeline::start))
         .route("/api/pipeline/:id", get(handlers::pipeline::status))
         .route("/api/pipeline/:id/resume", post(handlers::pipeline::resume))
