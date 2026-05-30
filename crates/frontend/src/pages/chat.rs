@@ -4,6 +4,7 @@ use leptos::spawn_local;
 use gloo_net::http::Request;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
+use crate::components::consent_banner::is_consent_given;
 use crate::i18n::{Lang, t};
 
 const FREE_MESSAGES: u32 = 5;
@@ -193,6 +194,7 @@ struct StoredMsg {
 }
 
 fn load_history() -> Vec<(bool, String, String)> {
+    if !is_consent_given() { return vec![]; }
     web_sys::window()
         .and_then(|w| w.local_storage().ok().flatten())
         .and_then(|s| s.get_item("chat_msgs").ok().flatten())
@@ -207,6 +209,7 @@ fn load_history() -> Vec<(bool, String, String)> {
 }
 
 fn save_history(messages: &[(bool, String, String)]) {
+    if !is_consent_given() { return; }
     let stored: Vec<StoredMsg> = messages.iter()
         .map(|(is_user, raw, _)| StoredMsg { is_user: *is_user, content: raw.clone() })
         .collect();

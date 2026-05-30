@@ -1,4 +1,5 @@
 use leptos::*;
+use crate::components::consent_banner::ConsentBanner;
 use crate::components::contact_modal::ContactModal;
 use crate::components::theme_toggle::ThemeToggle;
 use crate::pages::home::Home;
@@ -155,6 +156,7 @@ pub fn Layout() -> impl IntoView {
             </main>
 
             <ContactModal is_open=is_contact_open on_chat=move || active_page.set(Page::Chat) />
+            <ConsentBanner />
 
             {/* ── FOOTER (home only) ───────────────────────────── */}
             {move || (active_page.get() == Page::Home).then(|| view! {
