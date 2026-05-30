@@ -4,8 +4,18 @@ use leptos::spawn_local;
 use gloo_net::http::Request;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
+use wasm_bindgen_futures::JsFuture;
 use crate::components::consent_banner::is_consent_given;
 use crate::i18n::{Lang, t};
+
+async fn sleep_ms(ms: i32) {
+    let promise = js_sys::Promise::new(&mut |resolve: js_sys::Function, _| {
+        if let Some(w) = web_sys::window() {
+            let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, ms);
+        }
+    });
+    let _ = JsFuture::from(promise).await;
+}
 
 const FREE_MESSAGES: u32 = 5;
 
@@ -112,47 +122,28 @@ struct PitchSlide {
 }
 
 #[derive(Deserialize, Clone)]
-struct PricingData {
-    #[serde(rename = "type")]
-    kind: String,          // "autonome" | "sur-mesure"
-    #[serde(default)]
-    montant: u32,          // median euros HT (for Stripe)
-    #[serde(default)]
-    montant_label: String, // display string e.g. "2 500 € HT"
-    #[serde(default)]
-    delai: String,
-    #[serde(default)]
-    note: String,
-}
-
-#[derive(Deserialize, Clone)]
 struct PitchData {
     slides: Vec<PitchSlide>,
-    #[serde(default)]
-    pricing: Option<PricingData>,
-}
-
-#[derive(Serialize)]
-struct PitchCheckoutRequest {
-    montant: u32,
-    label: String,
-    note: String,
-}
-
-#[derive(Deserialize)]
-struct PitchCheckoutResponse {
-    checkout_url: String,
 }
 
 #[derive(Serialize)]
 struct SendQuoteRequest {
-    session_id: String,
     email: String,
-    summary: String,
-    montant_label: String,
-    delai: String,
-    note: String,
     slides: Vec<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct PitchPollResponse {
+    ready: bool,
+    #[serde(default)]
+    manual_quote: bool,
+    #[serde(default)]
+    slides: Vec<PitchSlide>,
+}
+
+#[derive(Deserialize)]
+struct AuthStatusResponse {
+    unlocked: bool,
 }
 
 fn strip_block<'a>(content: &'a str, tag: &str) -> (&'a str, Option<&'a str>) {
@@ -308,6 +299,18 @@ pub fn Chat() -> impl IntoView {
     let quote_sent  = create_rw_signal(false);
     let quote_error = create_rw_signal(false);
 
+    // Pitch pipeline polling
+    let pitch_loading: RwSignal<bool>      = create_rw_signal(false);
+    let pitch_manual_quote: RwSignal<bool> = create_rw_signal(false);
+    let pitch_poll_tick: RwSignal<u32>     = create_rw_signal(0);
+
+    // Email confirmation polling
+    let email_confirmed: RwSignal<bool> = create_rw_signal(false);
+    let email_poll_tick: RwSignal<u32>  = create_rw_signal(0);
+
+    // Toast notification
+    let toast_msg: RwSignal<Option<String>> = create_rw_signal(None);
+
     // Focus textarea on mount
     create_effect(move |first| {
         if first.is_none() { return; }
@@ -331,6 +334,63 @@ pub fn Chat() -> impl IntoView {
                if(c)c.scrollTop=c.scrollHeight;\
              });"
         ).call0(&wasm_bindgen::JsValue::NULL);
+    });
+
+    // ── Pitch result poll ─────────────────────────────────────────────────────
+    let sid_pitch = session_id.clone();
+    create_effect(move |_| {
+        let _tick = pitch_poll_tick.get();
+        if !pitch_loading.get_untracked() { return; }
+        let sid = sid_pitch.clone();
+        spawn_local(async move {
+            sleep_ms(3000).await;
+            match Request::get(&format!("/api/pitch/result?sid={}", sid)).send().await {
+                Ok(r) => match r.json::<PitchPollResponse>().await {
+                    Ok(data) if data.ready => {
+                        let slides = data.slides.clone();
+                        batch(move || {
+                            current_pitch.set(Some(PitchData { slides }));
+                            pitch_manual_quote.set(data.manual_quote);
+                            pitch_loading.set(false);
+                        });
+                    }
+                    _ => pitch_poll_tick.update(|t| *t += 1),
+                },
+                Err(_) => pitch_poll_tick.update(|t| *t += 1),
+            }
+        });
+    });
+
+    // ── Email confirmation poll ───────────────────────────────────────────────
+    let sid_email = session_id.clone();
+    // StoredValue is Copy — can be captured by multiple reactive closures
+    let session_id_pitch_form = store_value(session_id.clone());
+    create_effect(move |_| {
+        let _tick = email_poll_tick.get();
+        if !email_pending.get_untracked() || email_confirmed.get_untracked() { return; }
+        let sid = sid_email.clone();
+        spawn_local(async move {
+            sleep_ms(3000).await;
+            match Request::get(&format!("/api/auth/status?sid={}", sid)).send().await {
+                Ok(r) => match r.json::<AuthStatusResponse>().await {
+                    Ok(s) if s.unlocked => {
+                        batch(move || {
+                            email_confirmed.set(true);
+                            is_unlocked.set(true);
+                        });
+                        if !show_unlock.get_untracked() && !show_pitch.get_untracked() {
+                            toast_msg.set(Some("✓ Email confirmé — conversation déverrouillée.".to_string()));
+                            spawn_local(async move {
+                                sleep_ms(5000).await;
+                                toast_msg.set(None);
+                            });
+                        }
+                    }
+                    _ => email_poll_tick.update(|t| *t += 1),
+                },
+                Err(_) => email_poll_tick.update(|t| *t += 1),
+            }
+        });
     });
 
     let reset_textarea_height = move || {
@@ -396,7 +456,11 @@ pub fn Chat() -> impl IntoView {
                                     pitch_page.set(0);
                                 }
                                 messages_used.set(data.messages_used);
-                                if let Some(pid) = data.pipeline_id { pipeline_id.set(Some(pid)); }
+                                if let Some(pid) = data.pipeline_id {
+                                    pipeline_id.set(Some(pid));
+                                    pitch_loading.set(true);
+                                    pitch_poll_tick.update(|t| *t += 1);
+                                }
                                 is_loading.set(false);
                             });
                         }
@@ -438,6 +502,7 @@ pub fn Chat() -> impl IntoView {
                             batch(move || {
                                 unlock_error.set(false);
                                 email_pending.set(true);
+                                email_poll_tick.update(|t| *t += 1);
                             });
                         }
                         _ => unlock_error.set(true),
@@ -477,30 +542,49 @@ pub fn Chat() -> impl IntoView {
                         </div>
 
                         {move || if email_pending.get() {
-                            // ── Pending state ─────────────────────────────
+                            // ── Pending / confirmed state ──────────────────
                             view! {
                                 <div class="text-center py-2">
-                                    <div class="w-14 h-14 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-5">
-                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="w-7 h-7 text-red-400" stroke-linecap="round" stroke-linejoin="round">
-                                            <rect x="2" y="4" width="20" height="16" rx="2"/>
-                                            <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>
-                                        </svg>
-                                    </div>
-                                    <h3 class="text-lg font-bold text-primary mb-2">"Vérifiez votre email"</h3>
-                                    <p class="text-sm text-secondary leading-relaxed">
-                                        "Un lien de confirmation a été envoyé à "
-                                        <strong class="text-primary">{move || email_input.get()}</strong>
-                                        "."
-                                    </p>
-                                    <p class="text-xs text-muted mt-3 leading-relaxed">
-                                        "Cliquez sur le lien pour déverrouiller la conversation."
-                                    </p>
-                                    <button
-                                        on:click=move |_| email_pending.set(false)
-                                        class="text-xs text-red-400 hover:text-red-300 transition-colors mt-5"
-                                    >
-                                        "Changer d'adresse →"
-                                    </button>
+                                    {move || if email_confirmed.get() {
+                                        view! {
+                                            <div class="w-14 h-14 rounded-full flex items-center justify-center mx-auto mb-5" style="background:rgba(74,222,128,0.1)">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="w-7 h-7" style="color:#4ade80" stroke-linecap="round" stroke-linejoin="round">
+                                                    <polyline points="20 6 9 17 4 12"/>
+                                                </svg>
+                                            </div>
+                                            <h3 class="text-lg font-bold text-primary mb-2">"✓ Email confirmé"</h3>
+                                            <p class="text-sm text-secondary leading-relaxed mb-6">
+                                                "Votre conversation est maintenant déverrouillée."
+                                            </p>
+                                            <button
+                                                on:click=move |_| show_unlock.set(false)
+                                                class="btn-primary w-full"
+                                            >"Continuer →"</button>
+                                        }.into_view()
+                                    } else {
+                                        view! {
+                                            <div class="w-14 h-14 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-5">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="w-7 h-7 text-red-400" stroke-linecap="round" stroke-linejoin="round">
+                                                    <rect x="2" y="4" width="20" height="16" rx="2"/>
+                                                    <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>
+                                                </svg>
+                                            </div>
+                                            <h3 class="text-lg font-bold text-primary mb-2">"Vérifiez votre email"</h3>
+                                            <p class="text-sm text-secondary leading-relaxed">
+                                                "Un lien de confirmation a été envoyé à "
+                                                <strong class="text-primary">{move || email_input.get()}</strong>
+                                                "."
+                                            </p>
+                                            <div class="flex items-center justify-center gap-2 mt-3">
+                                                <span class="pitch-pending-dot"></span>
+                                                <p class="text-xs text-muted">"En attente de validation…"</p>
+                                            </div>
+                                            <button
+                                                on:click=move |_| email_pending.set(false)
+                                                class="text-xs text-red-400 hover:text-red-300 transition-colors mt-5"
+                                            >"Changer d'adresse →"</button>
+                                        }.into_view()
+                                    }}
                                 </div>
                             }.into_view()
                         } else {
@@ -536,164 +620,107 @@ pub fn Chat() -> impl IntoView {
             })}
 
             {/* Pitch modal */}
-            {move || show_pitch.get().then(|| {
-                let pitch = current_pitch.get().unwrap_or_else(|| PitchData { slides: vec![], pricing: None });
-                let total = pitch.slides.len();
-                let slides_for_pricing = pitch.slides.clone();
-                view! {
-                    <div
-                        class="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md"
-                        on:click=move |ev| {
-                            if let Some(target) = ev.target() {
-                                if let Ok(el) = target.dyn_into::<web_sys::HtmlElement>() {
-                                    if el.class_list().contains("pitch-backdrop") {
-                                        show_pitch.set(false);
-                                    }
-                                }
-                            }
-                        }
-                    >
-                        <div class="pitch-card" style="pointer-events: auto;">
+            {move || show_pitch.get().then(|| view! {
+                <div class="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md">
+                    <div class="pitch-card" style="pointer-events: auto;">
+                        <button class="pitch-close" on:click=move |_| show_pitch.set(false)>"✕"</button>
 
-                            {/* Close */}
-                            <button
-                                class="pitch-close"
-                                on:click=move |_| show_pitch.set(false)
-                            >"✕"</button>
-
-                            {/* Slide content */}
-                            {move || {
-                                let page = pitch_page.get().min(total.saturating_sub(1));
-                                let slide = pitch.slides.get(page).cloned().unwrap_or_else(|| PitchSlide {
-                                    title: String::new(),
-                                    body: String::new(),
-                                    points: vec![],
-                                });
-                                view! {
-                                    <div class="pitch-slide">
-                                        {/* Page indicator */}
-                                        <div class="pitch-page-indicator">
-                                            {(0..total).map(|i| view! {
-                                                <span class=move || if pitch_page.get() == i { "pitch-dot pitch-dot-active" } else { "pitch-dot" }></span>
-                                            }).collect_view()}
-                                        </div>
-
-                                        <h2 class="pitch-title">{slide.title.clone()}</h2>
-                                        <p class="pitch-body">{slide.body.clone()}</p>
-
-                                        {(!slide.points.is_empty()).then(|| view! {
-                                            <ul class="pitch-points">
-                                                {slide.points.iter().map(|p| view! {
-                                                    <li class="pitch-point">
-                                                        <span class="pitch-point-dot"></span>
-                                                        {p.clone()}
-                                                    </li>
-                                                }).collect_view()}
-                                            </ul>
-                                        })}
-                                    </div>
-                                }
-                            }}
-
-                            {/* Navigation */}
-                            <div class="pitch-nav">
-                                <button
-                                    class=move || if pitch_page.get() == 0 { "pitch-nav-btn pitch-nav-btn-ghost" } else { "pitch-nav-btn" }
-                                    disabled=move || pitch_page.get() == 0
-                                    on:click=move |_| pitch_page.update(|p| *p = p.saturating_sub(1))
-                                >"←"</button>
-
-                                <span class="pitch-nav-count">
-                                    {move || pitch_page.get() + 1}" / "{total}
-                                </span>
-
-                                {move || {
-                                    if pitch_page.get() + 1 < total {
+                        {move || if pitch_loading.get() {
+                            // ── Loading state ──────────────────────────────
+                            view! {
+                                <div class="pitch-loading-state">
+                                    <div class="pitch-loading-spinner"></div>
+                                    <p class="pitch-loading-title">"Votre projet est en cours d'analyse…"</p>
+                                    <p class="pitch-loading-sub">"Notre équipe IA examine votre besoin — résultat dans quelques instants."</p>
+                                </div>
+                            }.into_view()
+                        } else {
+                            let pitch = current_pitch.get().unwrap_or_else(|| PitchData { slides: vec![] });
+                            let total = pitch.slides.len();
+                            view! {
+                                <div>
+                                    {/* Slide content */}
+                                    {move || {
+                                        let pitch2 = current_pitch.get().unwrap_or_else(|| PitchData { slides: vec![] });
+                                        let total2 = pitch2.slides.len();
+                                        let page = pitch_page.get().min(total2.saturating_sub(1));
+                                        let slide = pitch2.slides.get(page).cloned().unwrap_or_else(|| PitchSlide {
+                                            title: String::new(), body: String::new(), points: vec![],
+                                        });
                                         view! {
-                                            <button class="pitch-nav-btn"
-                                                on:click=move |_| pitch_page.update(|p| *p += 1)
-                                            >"→"</button>
-                                        }.into_view()
-                                    } else {
-                                        view! { <span></span> }.into_view()
-                                    }
-                                }}
-                            </div>
-
-                            {/* Pricing card — always visible */}
-                            {pitch.pricing.as_ref().map(|pr| {
-                                let pr = pr.clone();
-                                let is_autonome = pr.kind == "autonome";
-                                let sid = session_id.clone();
-                                let label = pr.montant_label.clone();
-                                let note  = pr.note.clone();
-                                let delai = pr.delai.clone();
-                                let summary = slides_for_pricing.first()
-                                    .map(|s| s.body.clone()).unwrap_or_default();
-                                let slides_json: Vec<serde_json::Value> = slides_for_pricing.iter()
-                                    .map(|s| serde_json::json!({
-                                        "title": s.title, "body": s.body, "points": s.points
-                                    })).collect();
-
-                                view! {
-                                    <div class="pitch-pricing-card">
-                                        <div class="pitch-pricing-header">
-                                            <div>
-                                                <p class="pitch-pricing-label">"Estimation"</p>
-                                                <p class="pitch-pricing-amount">{pr.montant_label.clone()}</p>
+                                            <div class="pitch-slide">
+                                                <div class="pitch-page-indicator">
+                                                    {(0..total2).map(|i| view! {
+                                                        <span class=move || if pitch_page.get() == i { "pitch-dot pitch-dot-active" } else { "pitch-dot" }></span>
+                                                    }).collect_view()}
+                                                </div>
+                                                <h2 class="pitch-title">{slide.title.clone()}</h2>
+                                                <p class="pitch-body">{slide.body.clone()}</p>
+                                                {(!slide.points.is_empty()).then(|| view! {
+                                                    <ul class="pitch-points">
+                                                        {slide.points.iter().map(|p| view! {
+                                                            <li class="pitch-point">
+                                                                <span class="pitch-point-dot"></span>
+                                                                {p.clone()}
+                                                            </li>
+                                                        }).collect_view()}
+                                                    </ul>
+                                                })}
                                             </div>
-                                            <div class="text-right">
-                                                <p class="pitch-pricing-label">"Délai"</p>
-                                                <p class="pitch-pricing-delay">{pr.delai.clone()}</p>
-                                            </div>
-                                        </div>
-                                        {(!pr.note.is_empty()).then(|| view! {
-                                            <p class="pitch-pricing-note">{pr.note.clone()}</p>
-                                        })}
+                                        }
+                                    }}
 
-                                        {if is_autonome {
-                                            // ── Stripe direct payment ──
-                                            let montant = pr.montant;
-                                            let label2 = label.clone();
-                                            let note2  = note.clone();
+                                    {/* Navigation */}
+                                    <div class="pitch-nav">
+                                        <button
+                                            class=move || if pitch_page.get() == 0 { "pitch-nav-btn pitch-nav-btn-ghost" } else { "pitch-nav-btn" }
+                                            disabled=move || pitch_page.get() == 0
+                                            on:click=move |_| pitch_page.update(|p| *p = p.saturating_sub(1))
+                                        >"←"</button>
+                                        <span class="pitch-nav-count">
+                                            {move || pitch_page.get() + 1}" / "{total}
+                                        </span>
+                                        {move || if pitch_page.get() + 1 < total {
                                             view! {
-                                                <button
-                                                    class="btn-primary w-full mt-4"
-                                                    on:click=move |_| {
-                                                        let req = PitchCheckoutRequest {
-                                                            montant,
-                                                            label: format!("Automatisation pointe.dev — {label2}"),
-                                                            note: note2.clone(),
-                                                        };
-                                                        spawn_local(async move {
-                                                            if let Ok(resp) = Request::post("/api/pitch/checkout")
-                                                                .json(&req).unwrap().send().await
-                                                            {
-                                                                if let Ok(data) = resp.json::<PitchCheckoutResponse>().await {
-                                                                    let _ = js_sys::Function::new_with_args(
-                                                                        "u", "window.open(u,'_blank')"
-                                                                    ).call1(&wasm_bindgen::JsValue::NULL,
-                                                                        &wasm_bindgen::JsValue::from_str(&data.checkout_url));
-                                                                }
-                                                            }
-                                                        });
-                                                    }
-                                                >
-                                                    "Procéder au paiement →"
-                                                </button>
+                                                <button class="pitch-nav-btn"
+                                                    on:click=move |_| pitch_page.update(|p| *p += 1)
+                                                >"→"</button>
                                             }.into_view()
-                                        } else {
-                                            // ── Quote by email ──
-                                            let sid2       = sid.clone();
-                                            let summary2   = summary.clone();
-                                            let label3     = label.clone();
-                                            let delai2     = delai.clone();
-                                            let note3      = note.clone();
-                                            let slides2    = slides_json.clone();
+                                        } else { view! { <span></span> }.into_view() }}
+                                    </div>
+
+                                    {/* CTA section — normal vs manual_quote */}
+                                    <div class="pitch-quote-section">
+                                        {move || if pitch_manual_quote.get() {
+                                            // ── Manual quote CTA ──────────────────────────────
                                             view! {
-                                                {move || if quote_sent.get() {
+                                                <div class="pitch-manual-banner">
+                                                    <p class="pitch-manual-title">"⏱ Devis personnalisé sous 24h"</p>
+                                                    <p class="pitch-manual-sub">"Notre équipe analyse votre projet et vous revient avec une estimation détaillée."</p>
+                                                </div>
+                                                {move || if email_confirmed.get() || is_unlocked.get() {
                                                     view! {
-                                                        <p class="pitch-quote-sent">"✓ Devis envoyé — nous revenons vers vous rapidement."</p>
+                                                        <p class="pitch-email-confirmed">"✓ Vous serez contacté sous 24h."</p>
+                                                    }.into_view()
+                                                } else if email_pending.get() {
+                                                    view! {
+                                                        <div class="pitch-email-pending">
+                                                            <span class="pitch-pending-dot"></span>
+                                                            "En attente de validation mail…"
+                                                            <br/>
+                                                            <span class="text-xs text-muted">
+                                                                "Cliquez sur le lien envoyé à "
+                                                                <strong>{move || email_input.get()}</strong>
+                                                            </span>
+                                                            <br/>
+                                                            <button
+                                                                class="text-xs text-red-400 hover:text-red-300 mt-2"
+                                                                on:click=move |_| {
+                                                                    email_pending.set(false);
+                                                                    email_confirmed.set(false);
+                                                                }
+                                                            >"Changer d'adresse →"</button>
+                                                        </div>
                                                     }.into_view()
                                                 } else {
                                                     view! {
@@ -701,6 +728,48 @@ pub fn Chat() -> impl IntoView {
                                                             <input
                                                                 type="email"
                                                                 placeholder="votre@email.com"
+                                                                class="pitch-quote-input"
+                                                                prop:value=move || email_input.get()
+                                                                on:input=move |ev| email_input.set(event_target_value(&ev))
+                                                            />
+                                                            <button
+                                                                class="btn-primary w-full"
+                                                                on:click=move |_| {
+                                                                    let email = email_input.get_untracked().trim().to_string();
+                                                                    if email.is_empty() { return; }
+                                                                    let sid = session_id_pitch_form.get_value();
+                                                                    spawn_local(async move {
+                                                                        let resp = Request::post("/api/auth/unlock")
+                                                                            .json(&UnlockRequest { session_id: sid, email })
+                                                                            .unwrap().send().await;
+                                                                        if let Ok(r) = resp {
+                                                                            if r.json::<UnlockResponse>().await.ok().map(|d| d.ok).unwrap_or(false) {
+                                                                                batch(move || {
+                                                                                    email_pending.set(true);
+                                                                                    email_poll_tick.update(|t| *t += 1);
+                                                                                });
+                                                                            }
+                                                                        }
+                                                                    });
+                                                                }
+                                                            >"Être contacté →"</button>
+                                                        </div>
+                                                    }.into_view()
+                                                }}
+                                            }.into_view()
+                                        } else {
+                                            // ── Normal quote CTA ──────────────────────────────
+                                            view! {
+                                                {move || if quote_sent.get() {
+                                                    view! {
+                                                        <p class="pitch-quote-sent">"✓ Proposition envoyée — nous revenons vers vous rapidement."</p>
+                                                    }.into_view()
+                                                } else {
+                                                    view! {
+                                                        <div class="pitch-quote-form">
+                                                            <input
+                                                                type="email"
+                                                                placeholder="Recevoir cette proposition par email"
                                                                 class="pitch-quote-input"
                                                                 prop:value=move || quote_email.get()
                                                                 on:input=move |ev| quote_email.set(event_target_value(&ev))
@@ -710,54 +779,43 @@ pub fn Chat() -> impl IntoView {
                                                             })}
                                                             <button
                                                                 class="btn-primary w-full"
-                                                                on:click={
-                                                                    let sid3     = sid2.clone();
-                                                                    let summary3 = summary2.clone();
-                                                                    let label4   = label3.clone();
-                                                                    let delai3   = delai2.clone();
-                                                                    let note4    = note3.clone();
-                                                                    let slides3  = slides2.clone();
-                                                                    move |_| {
-                                                                        let email = quote_email.get_untracked().trim().to_string();
-                                                                        if email.is_empty() { return; }
-                                                                        let req = SendQuoteRequest {
-                                                                            session_id: sid3.clone(),
-                                                                            email,
-                                                                            summary: summary3.clone(),
-                                                                            montant_label: label4.clone(),
-                                                                            delai: delai3.clone(),
-                                                                            note: note4.clone(),
-                                                                            slides: slides3.clone(),
-                                                                        };
-                                                                        spawn_local(async move {
-                                                                            match Request::post("/api/pitch/send-quote")
-                                                                                .json(&req).unwrap().send().await
-                                                                            {
-                                                                                Ok(r) => {
-                                                                                    let ok = r.json::<serde_json::Value>().await
-                                                                                        .ok().and_then(|v| v["ok"].as_bool()).unwrap_or(false);
-                                                                                    if ok { quote_sent.set(true); }
-                                                                                    else  { quote_error.set(true); }
-                                                                                }
-                                                                                Err(_) => quote_error.set(true),
+                                                                on:click=move |_| {
+                                                                    let email = quote_email.get_untracked().trim().to_string();
+                                                                    if email.is_empty() { return; }
+                                                                    let slides = current_pitch.get_untracked()
+                                                                        .map(|p| p.slides.iter().map(|s| serde_json::json!({
+                                                                            "title": s.title,
+                                                                            "body": s.body,
+                                                                            "points": s.points,
+                                                                        })).collect::<Vec<_>>())
+                                                                        .unwrap_or_default();
+                                                                    let req = SendQuoteRequest { email, slides };
+                                                                    spawn_local(async move {
+                                                                        match Request::post("/api/pitch/send-quote")
+                                                                            .json(&req).unwrap().send().await
+                                                                        {
+                                                                            Ok(r) => {
+                                                                                let ok = r.json::<serde_json::Value>().await
+                                                                                    .ok().and_then(|v| v["ok"].as_bool()).unwrap_or(false);
+                                                                                if ok { quote_sent.set(true); }
+                                                                                else  { quote_error.set(true); }
                                                                             }
-                                                                        });
-                                                                    }
+                                                                            Err(_) => quote_error.set(true),
+                                                                        }
+                                                                    });
                                                                 }
-                                                            >
-                                                                "Recevoir ce devis par email →"
-                                                            </button>
+                                                            >"Envoyer →"</button>
                                                         </div>
                                                     }.into_view()
                                                 }}
                                             }.into_view()
                                         }}
                                     </div>
-                                }
-                            })}
-                        </div>
+                                </div>
+                            }.into_view()
+                        }}
                     </div>
-                }
+                </div>
             })}
 
             {/* Chat */}
@@ -795,14 +853,27 @@ pub fn Chat() -> impl IntoView {
                                     </span>
                                 })
                             }}
-                            {move || current_pitch.get().map(|_| view! {
-                                <button
-                                    class="pitch-trigger-btn"
-                                    on:click=move |_| { pitch_page.set(0); show_pitch.set(true); }
-                                >
-                                    "✨ Voir notre proposition"
-                                </button>
-                            })}
+                            {move || {
+                                let show = current_pitch.get().is_some()
+                                    || pitch_loading.get()
+                                    || pitch_manual_quote.get();
+                                show.then(|| view! {
+                                    <button
+                                        class=move || if pitch_loading.get() {
+                                            "pitch-trigger-btn pitch-trigger-loading"
+                                        } else { "pitch-trigger-btn" }
+                                        on:click=move |_| { pitch_page.set(0); show_pitch.set(true); }
+                                    >
+                                        {move || if pitch_loading.get() {
+                                            "⏳ Analyse en cours…"
+                                        } else if pitch_manual_quote.get() {
+                                            "📋 Voir la proposition"
+                                        } else {
+                                            "✨ Voir notre proposition"
+                                        }}
+                                    </button>
+                                })
+                            }}
                         </div>
                     </div>
                 </div>
@@ -943,5 +1014,11 @@ pub fn Chat() -> impl IntoView {
                 </div>
             </div>
         </div>
+
+        {/* Toast notification */}
+        {move || toast_msg.get().map(|msg| view! {
+            <div class="chat-toast">{msg}</div>
+        })}
+
     }
 }
