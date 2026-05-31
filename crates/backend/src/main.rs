@@ -16,6 +16,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber;
 
 mod agents;
+mod email;
 mod embeddings;
 mod handlers;
 mod langfuse;
@@ -337,34 +338,8 @@ async fn handle_confirm(
     Redirect::to(&redirect_url)
 }
 
-pub(crate) async fn resend_send(
-    http: &reqwest::Client,
-    api_key: &str,
-    to: &str,
-    subject: &str,
-    html: &str,
-) -> Result<(), String> {
-    let payload = serde_json::json!({
-        "from": "pointe.dev <noreply@pointe.dev>",
-        "to": [to],
-        "subject": subject,
-        "html": html,
-    });
-    let resp = http
-        .post("https://api.resend.com/emails")
-        .header("Authorization", format!("Bearer {api_key}"))
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    if resp.status().is_success() {
-        Ok(())
-    } else {
-        let s = resp.status();
-        let b = resp.text().await.unwrap_or_default();
-        Err(format!("Resend {s}: {b}"))
-    }
-}
+/// Re-export so handlers in this file can call `resend_send(...)` directly.
+use email::resend_send;
 
 async fn send_confirm_email(
     http: &reqwest::Client,
@@ -877,5 +852,95 @@ async fn init_langfuse(http: reqwest::Client) -> (String, Option<LangfuseClient>
             tracing::warn!("Failed to fetch Langfuse prompt: {e} — using fallback");
             (FALLBACK_PROMPT.to_string(), Some(client))
         }
+    }
+}
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+//
+// Layer   : pure unit — no I/O, no HTTP
+// Covers  : parse_qualify() — block extraction, display-text trimming,
+//           before+after text reconstruction, JSON parse failure, absent block
+// Does NOT cover: the AI response generation, Anthropic API, session handling,
+//                 email confirmation flow
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── parse_qualify ──────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_qualify_extracts_block_and_strips_display() {
+        let text = r#"Here is my answer.
+```qualify
+{"client_need":"automate orders","summary":"sector|pain|tools|volume"}
+```"#;
+        let (display, block) = parse_qualify(text);
+        assert_eq!(display.trim(), "Here is my answer.");
+        let b = block.expect("block must be present");
+        assert_eq!(b.client_need, "automate orders");
+        assert_eq!(b.summary, "sector|pain|tools|volume");
+    }
+
+    #[test]
+    fn parse_qualify_no_block_returns_text_unchanged() {
+        let text = "Just a normal AI response.";
+        let (display, block) = parse_qualify(text);
+        assert_eq!(display, text);
+        assert!(block.is_none());
+    }
+
+    #[test]
+    fn parse_qualify_invalid_json_returns_none_block() {
+        let text = "Before\n```qualify\nnot-valid-json\n```\nAfter";
+        let (_, block) = parse_qualify(text);
+        assert!(block.is_none(), "malformed JSON must not crash");
+    }
+
+    #[test]
+    fn parse_qualify_preserves_before_and_after_text() {
+        let text = "BEFORE\n```qualify\n{\"client_need\":\"n\",\"summary\":\"s\"}\n```\nAFTER";
+        let (display, block) = parse_qualify(text);
+        assert!(display.contains("BEFORE"));
+        assert!(display.contains("AFTER"));
+        assert!(block.is_some());
+    }
+
+    #[test]
+    fn parse_qualify_empty_display_when_only_block() {
+        let text = "```qualify\n{\"client_need\":\"n\",\"summary\":\"s\"}\n```";
+        let (display, _) = parse_qualify(text);
+        // Display should be empty (no content outside the block)
+        assert!(display.is_empty());
+    }
+
+    #[test]
+    fn parse_qualify_block_only_before() {
+        let text = "Visible text\n```qualify\n{\"client_need\":\"x\",\"summary\":\"y\"}\n```";
+        let (display, block) = parse_qualify(text);
+        assert_eq!(display.trim(), "Visible text");
+        assert!(block.is_some());
+    }
+
+    // ── real_ip ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn real_ip_prefers_x_forwarded_for() {
+        use axum::http::HeaderMap;
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.1, 10.0.0.1".parse().unwrap());
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 4321);
+        let ip = real_ip(addr, &headers);
+        assert_eq!(ip, "203.0.113.1");
+    }
+
+    #[test]
+    fn real_ip_falls_back_to_socket_addr() {
+        use axum::http::HeaderMap;
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+        let headers = HeaderMap::new();
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)), 5678);
+        let ip = real_ip(addr, &headers);
+        assert_eq!(ip, "192.168.1.1");
     }
 }

@@ -1,0 +1,33 @@
+# Tarpaulin coverage configuration for pointe.dev backend.
+#
+# Run with:  cargo tarpaulin --config tarpaulin.toml
+# Target   : >= 60% line coverage on backend domain modules.
+#
+# Covered  : sessions.rs, pitch.rs, pipeline.rs, stripe.rs, agents.rs
+#            (pure functions and in-memory stores — no I/O)
+# Excluded : main.rs (binary entry point, integration-tested separately)
+#            lib.rs (re-export shim, no logic)
+#            handlers/* (tested via axum-test integration tests)
+#            embeddings.rs (local ONNX model, no test fixtures)
+#            langfuse.rs, qdrant.rs (external-service wrappers)
+
+[coverage]
+packages = ["backend"]
+lib = true
+exclude-files = [
+    "crates/backend/src/main.rs",
+    "crates/backend/src/lib.rs",
+    "crates/backend/src/email.rs",
+    "crates/backend/src/handlers/health.rs",
+    "crates/backend/src/handlers/ingest.rs",
+    "crates/backend/src/handlers/mcp.rs",
+    "crates/backend/src/handlers/mod.rs",
+    "crates/backend/src/handlers/pipeline.rs",
+    "crates/backend/src/handlers/services.rs",
+    "crates/backend/src/handlers/stripe.rs",
+    "crates/backend/src/embeddings.rs",
+    "crates/backend/src/langfuse.rs",
+    "crates/backend/src/qdrant.rs",
+]
+out = ["Xml", "Html"]
+output-dir = "target/tarpaulin"

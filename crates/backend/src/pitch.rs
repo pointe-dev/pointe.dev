@@ -102,3 +102,105 @@ pub async fn run_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
     tracing::info!("[pitch] DB migration complete");
     Ok(())
 }
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+//
+// Layer   : pure unit — no I/O, no Postgres
+// Covers  : PitchStore in-memory set/get, PitchResult serialisation round-trip,
+//           missing-key returns None, second write overwrites first
+// Does NOT cover: Postgres write-through, DB cache-miss path after restart
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_pitch() -> PitchResult {
+        PitchResult {
+            solution_desc: "Automatic Shopify → accounting sync".to_string(),
+            price_eur_cents: 120_000,
+            price_validity: "valable 48h".to_string(),
+            externals_needed: vec!["Shopify Admin API key".to_string()],
+            slides: vec![
+                PitchSlide {
+                    title: "Ce que nous avons compris".to_string(),
+                    body: "Vous saisissez chaque commande à la main.".to_string(),
+                    points: vec!["~80 commandes/jour".to_string()],
+                },
+            ],
+            manual_quote: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn set_then_get_returns_same_result() {
+        let store = PitchStore::new(None);
+        let pitch = sample_pitch();
+        store.set("sess-1", pitch.clone()).await;
+        let got = store.get("sess-1").await.expect("should be present");
+        assert_eq!(got.solution_desc, pitch.solution_desc);
+        assert_eq!(got.price_eur_cents, 120_000);
+        assert_eq!(got.price_validity, "valable 48h");
+        assert!(!got.manual_quote);
+    }
+
+    #[tokio::test]
+    async fn get_missing_key_returns_none() {
+        let store = PitchStore::new(None);
+        assert!(store.get("does-not-exist").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn set_overwrites_previous_value() {
+        let store = PitchStore::new(None);
+        store.set("sess", sample_pitch()).await;
+        let updated = PitchResult {
+            solution_desc: "Updated description".to_string(),
+            price_eur_cents: 999,
+            price_validity: String::new(),
+            externals_needed: vec![],
+            slides: vec![],
+            manual_quote: true,
+        };
+        store.set("sess", updated.clone()).await;
+        let got = store.get("sess").await.unwrap();
+        assert_eq!(got.solution_desc, "Updated description");
+        assert_eq!(got.price_eur_cents, 999);
+        assert!(got.manual_quote);
+    }
+
+    #[tokio::test]
+    async fn multiple_sessions_stored_independently() {
+        let store = PitchStore::new(None);
+        let mut p1 = sample_pitch();
+        p1.price_eur_cents = 1000;
+        let mut p2 = sample_pitch();
+        p2.price_eur_cents = 2000;
+        store.set("session-1", p1).await;
+        store.set("session-2", p2).await;
+        assert_eq!(store.get("session-1").await.unwrap().price_eur_cents, 1000);
+        assert_eq!(store.get("session-2").await.unwrap().price_eur_cents, 2000);
+    }
+
+    #[test]
+    fn pitch_result_serialises_to_expected_json_shape() {
+        let pitch = sample_pitch();
+        let json = serde_json::to_value(&pitch).unwrap();
+        assert_eq!(json["price_eur_cents"], 120_000);
+        assert_eq!(json["manual_quote"], false);
+        assert!(json["slides"].is_array());
+        assert_eq!(json["slides"][0]["title"], "Ce que nous avons compris");
+    }
+
+    #[test]
+    fn pitch_result_deserialises_with_defaults() {
+        // price_validity and manual_quote have #[serde(default)]
+        let json = r#"{
+            "solution_desc": "test",
+            "price_eur_cents": 0,
+            "externals_needed": [],
+            "slides": []
+        }"#;
+        let pitch: PitchResult = serde_json::from_str(json).unwrap();
+        assert_eq!(pitch.price_validity, "");
+        assert!(!pitch.manual_quote);
+    }
+}

@@ -29,3 +29,13 @@ shared = { path = "../shared" }
 [[bin]]
 name = "backend"
 path = "src/main.rs"
+
+[dev-dependencies]
+axum-test = "15"
+tokio = { version = "1.40", features = ["full"] }
+serde_json = "1.0"
+chrono = { version = "0.4" }
+
+[lib]
+name = "backend_lib"
+path = "src/lib.rs"

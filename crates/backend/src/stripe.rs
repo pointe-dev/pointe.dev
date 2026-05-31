@@ -190,3 +190,140 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() { return false; }
     a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+//
+// Layer   : pure unit — no network calls to Stripe
+// Covers  : verify_webhook() HMAC verification, replay-attack timestamp guard,
+//           missing signature header, malformed JSON body, constant_time_eq
+// Does NOT cover: create_checkout() (requires live Stripe API), Stripe checkout
+//                 redirect flow
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    const WEBHOOK_SECRET: &str = "whsec_test_secret_for_unit_tests";
+
+    fn fresh_ts() -> i64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+    }
+
+    fn sign_payload(secret: &str, ts: i64, payload: &[u8]) -> String {
+        let signed = format!("{ts}.{}", String::from_utf8_lossy(payload));
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(signed.as_bytes());
+        hex::encode(mac.finalize().into_bytes())
+    }
+
+    fn make_client() -> StripeClient {
+        StripeClient::new(
+            reqwest::Client::new(),
+            "sk_test_fake".to_string(),
+            WEBHOOK_SECRET.to_string(),
+        )
+    }
+
+    // ── constant_time_eq ───────────────────────────────────────────────────
+
+    #[test]
+    fn constant_time_eq_equal_slices() {
+        assert!(constant_time_eq(b"hello", b"hello"));
+    }
+
+    #[test]
+    fn constant_time_eq_different_slices() {
+        assert!(!constant_time_eq(b"hello", b"world"));
+    }
+
+    #[test]
+    fn constant_time_eq_different_lengths() {
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+    }
+
+    #[test]
+    fn constant_time_eq_empty_equal() {
+        assert!(constant_time_eq(b"", b""));
+    }
+
+    // ── verify_webhook — valid signature ──────────────────────────────────
+
+    #[test]
+    fn verify_webhook_valid_sig_returns_parsed_json() {
+        let client = make_client();
+        let payload = b"{\"type\":\"checkout.session.completed\"}";
+        let ts = fresh_ts();
+        let sig = sign_payload(WEBHOOK_SECRET, ts, payload);
+        let header = format!("t={ts},v1={sig}");
+        let result = client.verify_webhook(payload, &header);
+        assert!(result.is_ok(), "valid signature must be accepted: {:?}", result);
+        let event = result.unwrap();
+        assert_eq!(event["type"], "checkout.session.completed");
+    }
+
+    // ── verify_webhook — wrong secret ─────────────────────────────────────
+
+    #[test]
+    fn verify_webhook_wrong_secret_returns_err() {
+        let client = make_client();
+        let payload = b"{\"type\":\"test\"}";
+        let ts = fresh_ts();
+        let sig = sign_payload("wrong_secret", ts, payload);
+        let header = format!("t={ts},v1={sig}");
+        assert!(client.verify_webhook(payload, &header).is_err());
+    }
+
+    // ── verify_webhook — missing Stripe-Signature header ──────────────────
+
+    #[test]
+    fn verify_webhook_missing_timestamp_returns_err() {
+        let client = make_client();
+        let payload = b"{\"type\":\"test\"}";
+        let ts = fresh_ts();
+        let sig = sign_payload(WEBHOOK_SECRET, ts, payload);
+        // Header without "t=..." prefix
+        let header = format!("v1={sig}");
+        assert!(client.verify_webhook(payload, &header).is_err());
+    }
+
+    // ── verify_webhook — stale timestamp (replay attack) ──────────────────
+
+    #[test]
+    fn verify_webhook_stale_timestamp_returns_err() {
+        let client = make_client();
+        let payload = b"{\"type\":\"test\"}";
+        let old_ts = fresh_ts() - 400; // 400 s ago — beyond the 300 s window
+        let sig = sign_payload(WEBHOOK_SECRET, old_ts, payload);
+        let header = format!("t={old_ts},v1={sig}");
+        assert!(client.verify_webhook(payload, &header).is_err());
+    }
+
+    // ── verify_webhook — tampered payload ─────────────────────────────────
+
+    #[test]
+    fn verify_webhook_tampered_payload_returns_err() {
+        let client = make_client();
+        let original = b"{\"type\":\"test\"}";
+        let ts = fresh_ts();
+        let sig = sign_payload(WEBHOOK_SECRET, ts, original);
+        let header = format!("t={ts},v1={sig}");
+        let tampered = b"{\"type\":\"tampered\"}";
+        assert!(client.verify_webhook(tampered, &header).is_err());
+    }
+
+    // ── verify_webhook — invalid JSON body ────────────────────────────────
+
+    #[test]
+    fn verify_webhook_invalid_json_body_returns_err() {
+        let client = make_client();
+        let payload = b"not-json";
+        let ts = fresh_ts();
+        let sig = sign_payload(WEBHOOK_SECRET, ts, payload);
+        let header = format!("t={ts},v1={sig}");
+        // Signature is valid but body is not JSON
+        assert!(client.verify_webhook(payload, &header).is_err());
+    }
+}

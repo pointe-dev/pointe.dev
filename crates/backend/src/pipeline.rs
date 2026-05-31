@@ -155,6 +155,130 @@ impl PipelineStore {
     }
 }
 
+// ── Unit tests ────────────────────────────────────────────────────────────────
+//
+// Layer   : pure unit — no I/O, no network, no agents called
+// Covers  : PipelineStore CRUD, stage transitions, resume_after_payment,
+//           PipelineStage serialisation, MAX_BUILD_ATTEMPTS / MAX_PRICING_ATTEMPTS
+//           constant values
+// Does NOT cover: the full run() state machine (requires real Anthropic calls),
+//                 spawn() background task lifecycle, Postgres persistence
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn create_sets_qualifying_stage() {
+        let store = PipelineStore::new();
+        let id = store.create("sess-1".to_string(), "need something".to_string(), None).await;
+        let (stage, _) = store.status(id).await.expect("pipeline must exist");
+        assert_eq!(stage, PipelineStage::Qualifying);
+    }
+
+    #[tokio::test]
+    async fn create_pre_fills_qualification_summary() {
+        let store = PipelineStore::new();
+        let id = store.create(
+            "sess-2".to_string(),
+            "client need".to_string(),
+            Some("pre-filled summary".to_string()),
+        ).await;
+        let ctx = store.get_ctx(id).await.unwrap();
+        assert_eq!(ctx.qualification_summary, Some("pre-filled summary".to_string()));
+        assert_eq!(ctx.client_need, "client need");
+    }
+
+    #[tokio::test]
+    async fn advance_updates_stage_and_ctx() {
+        let store = PipelineStore::new();
+        let id = store.create("sess-3".to_string(), "need".to_string(), None).await;
+        let mut ctx = store.get_ctx(id).await.unwrap();
+        ctx.research_output = Some("some research".to_string());
+        store.advance(id, PipelineStage::Researching, ctx.clone()).await;
+        let (stage, _) = store.status(id).await.unwrap();
+        assert_eq!(stage, PipelineStage::Researching);
+        let saved = store.get_ctx(id).await.unwrap();
+        assert_eq!(saved.research_output, Some("some research".to_string()));
+    }
+
+    #[tokio::test]
+    async fn status_returns_none_for_unknown_id() {
+        let store = PipelineStore::new();
+        assert!(store.status(Uuid::new_v4()).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_ctx_returns_none_for_unknown_id() {
+        let store = PipelineStore::new();
+        assert!(store.get_ctx(Uuid::new_v4()).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn resume_after_payment_transitions_awaiting_to_deploying() {
+        let store = PipelineStore::new();
+        let id = store.create("sess-pay".to_string(), "need".to_string(), None).await;
+        // Manually advance to AwaitingPayment
+        let ctx = store.get_ctx(id).await.unwrap();
+        store.advance(id, PipelineStage::AwaitingPayment, ctx).await;
+
+        let resumed = store.resume_after_payment(id).await;
+        assert!(resumed, "should return true when in AwaitingPayment");
+
+        let (stage, _) = store.status(id).await.unwrap();
+        assert_eq!(stage, PipelineStage::Deploying);
+    }
+
+    #[tokio::test]
+    async fn resume_after_payment_returns_false_when_not_awaiting() {
+        let store = PipelineStore::new();
+        let id = store.create("sess-noawait".to_string(), "need".to_string(), None).await;
+        // Pipeline is in Qualifying stage, not AwaitingPayment
+        assert!(!store.resume_after_payment(id).await);
+    }
+
+    #[tokio::test]
+    async fn resume_after_payment_returns_false_for_unknown_id() {
+        let store = PipelineStore::new();
+        assert!(!store.resume_after_payment(Uuid::new_v4()).await);
+    }
+
+    #[test]
+    fn max_build_attempts_is_3() {
+        assert_eq!(MAX_BUILD_ATTEMPTS, 3);
+    }
+
+    #[test]
+    fn max_pricing_attempts_is_2() {
+        assert_eq!(MAX_PRICING_ATTEMPTS, 2);
+    }
+
+    #[test]
+    fn pipeline_stage_serialises_to_snake_case_with_tag() {
+        let stage = PipelineStage::Qualifying;
+        let json = serde_json::to_value(&stage).unwrap();
+        assert_eq!(json["stage"], "qualifying");
+
+        let failed = PipelineStage::Failed { reason: "test error".to_string() };
+        let json2 = serde_json::to_value(&failed).unwrap();
+        assert_eq!(json2["stage"], "failed");
+        assert_eq!(json2["reason"], "test error");
+    }
+
+    #[test]
+    fn pipeline_stage_awaiting_payment_serialises() {
+        let json = serde_json::to_value(&PipelineStage::AwaitingPayment).unwrap();
+        assert_eq!(json["stage"], "awaiting_payment");
+    }
+
+    #[tokio::test]
+    async fn advance_does_not_panic_for_unknown_id() {
+        let store = PipelineStore::new();
+        let ctx = PipelineContext::default();
+        // Should silently do nothing
+        store.advance(Uuid::new_v4(), PipelineStage::Researching, ctx).await;
+    }
+}
+
 /// Spawns the pipeline as a background Tokio task.
 pub fn spawn(id: Uuid, store: PipelineStore, app: Arc<AppState>) {
     tokio::spawn(async move {
@@ -180,7 +304,7 @@ async fn notify_owner_failure(app: &AppState, id: Uuid, session_id: &str, reason
            <p><b>Reason:</b> {reason}</p>\
          </div>"
     );
-    if let Err(e) = crate::resend_send(&app.http, api_key, owner,
+    if let Err(e) = crate::email::resend_send(&app.http, api_key, owner,
         "⚠️ Pipeline failed — pointe.dev", &html).await {
         tracing::warn!("[pipeline] owner failure notify failed: {e}");
     }
