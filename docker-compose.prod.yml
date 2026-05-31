@@ -21,7 +21,7 @@ services:
       RUST_LOG: info
       BIND_ADDR: "0.0.0.0:3001"
       N8N_URL: "http://n8n:5678"
-      QDRANT_URL: "http://qdrant:6333"
+      # QDRANT_URL: "http://qdrant:6333"  # re-enable once fastembed crash is resolved
     env_file: .env.prod
     volumes:
       - model_cache:/root/.cache       # persists BGE-M3 download (~300 MB)

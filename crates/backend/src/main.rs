@@ -694,12 +694,16 @@ async fn main() {
         tracing::warn!("QDRANT_URL not set — RAG disabled, builder uses stub");
     }
 
-    // BGE-M3 downloads ~300 MB on first run, then stays cached.
-    let embeddings = tokio::task::spawn_blocking(EmbeddingEngine::new)
-        .await
-        .unwrap_or_else(|e| Err(format!("join error: {e}")))
-        .map_err(|e| tracing::warn!("Embedding engine unavailable: {e} — RAG disabled"))
-        .ok();
+    // BGE-M3 only needed when Qdrant RAG is active.
+    let embeddings = if qdrant.is_some() {
+        tokio::task::spawn_blocking(EmbeddingEngine::new)
+            .await
+            .unwrap_or_else(|e| Err(format!("join error: {e}")))
+            .map_err(|e| tracing::warn!("Embedding engine unavailable: {e} — RAG disabled"))
+            .ok()
+    } else {
+        None
+    };
     if embeddings.is_some() {
         tracing::info!("Embedding engine ready (BGE-M3, 1024 dims, local)");
     }
