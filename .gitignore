@@ -29,3 +29,6 @@ secrets/
 
 # Claude memory backup (local only)
 claude-memory/
+
+# FastEmbed model cache (auto-downloaded at runtime, never commit)
+.fastembed_cache/
