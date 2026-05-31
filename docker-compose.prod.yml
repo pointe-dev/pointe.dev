@@ -125,7 +125,7 @@ services:
       - ./clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
     networks: [pointe-net]
     restart: unless-stopped
-    mem_limit: 400m
+    mem_limit: 500m
     healthcheck:
       test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1' || exit 1"]
       interval: 10s
