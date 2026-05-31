@@ -78,6 +78,76 @@ services:
     networks: [pointe-net]
     restart: unless-stopped
 
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.12-alpine
+    container_name: pointe-clickhouse
+    env_file: .env.langfuse
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+    networks: [pointe-net]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: pointe-redis
+    volumes:
+      - redis_data:/data
+    networks: [pointe-net]
+    restart: unless-stopped
+
+  langfuse-web:
+    image: langfuse/langfuse:3
+    container_name: pointe-langfuse-web
+    env_file: .env.langfuse
+    environment:
+      NODE_ENV: production
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      NEXTAUTH_URL: https://langfuse.pointe.dev
+      LANGFUSE_INIT_ORG_NAME: pointe
+      LANGFUSE_INIT_PROJECT_NAME: pointe-dev
+    networks: [pointe-net]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    container_name: pointe-langfuse-worker
+    env_file: .env.langfuse
+    environment:
+      NODE_ENV: production
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    networks: [pointe-net]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
 networks:
   pointe-net:
     driver: bridge
@@ -94,3 +164,5 @@ volumes:
   n8n_data:
   model_cache:
   fastembed_cache:
+  clickhouse_data:
+  redis_data:

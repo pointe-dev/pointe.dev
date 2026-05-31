@@ -25,6 +25,7 @@ Thumbs.db
 .env.local
 .env.prod
 .env.n8n
+.env.langfuse
 secrets/
 
 # Claude memory backup (local only)

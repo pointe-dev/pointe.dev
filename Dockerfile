@@ -58,6 +58,7 @@ COPY --from=builder /app/target/release/backend /app/backend
 COPY --from=builder /app/crates/frontend/pkg /app/crates/frontend/pkg
 COPY --from=builder /app/crates/frontend/styles.css /app/crates/frontend/styles.css
 COPY --from=builder /app/crates/frontend/index.html /app/crates/frontend/index.html
+COPY --from=builder /app/crates/frontend/favicon.svg /app/crates/frontend/favicon.svg
 
 # Expose the port the backend listens on
 EXPOSE 3001
