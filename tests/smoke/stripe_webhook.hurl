@@ -9,6 +9,7 @@
 # ── Error case: missing Stripe-Signature header → 400 ─────────────────────────
 POST {{base_url}}/api/stripe/webhook
 Content-Type: application/json
+X-CI-Token: {{ci_token}}
 {"type": "checkout.session.completed"}
 
 HTTP 400
@@ -17,6 +18,7 @@ HTTP 400
 POST {{base_url}}/api/stripe/webhook
 Content-Type: application/json
 Stripe-Signature: t=1234567890,v1=invalid_signature_that_will_not_match
+X-CI-Token: {{ci_token}}
 {"type": "checkout.session.completed"}
 
 HTTP 400

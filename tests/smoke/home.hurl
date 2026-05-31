@@ -6,6 +6,7 @@
 
 # ── Happy path: root serves HTML ──────────────────────────────────────────────
 GET {{base_url}}/
+X-CI-Token: {{ci_token}}
 
 HTTP 200
 [Asserts]

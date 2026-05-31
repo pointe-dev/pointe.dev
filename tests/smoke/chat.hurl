@@ -9,6 +9,7 @@
 # Axum returns 422 when required fields are missing from JSON body.
 POST {{base_url}}/api/ai/chat
 Content-Type: application/json
+X-CI-Token: {{ci_token}}
 {
   "description": "test message without session_id"
 }

@@ -6,6 +6,7 @@
 
 # ── Happy path ─────────────────────────────────────────────────────────────────
 GET {{base_url}}/api/health
+X-CI-Token: {{ci_token}}
 
 HTTP 200
 [Asserts]
