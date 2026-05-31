@@ -2,7 +2,13 @@
 # Caddy handles TLS automatically via Let's Encrypt.
 
 go.pointe.dev {
-    reverse_proxy backend:3001
+    reverse_proxy backend:3001 {
+        lb_try_duration 15s
+        lb_try_interval 300ms
+        health_uri /
+        health_interval 10s
+        health_timeout 5s
+    }
 }
 
 n8n.pointe.dev {
