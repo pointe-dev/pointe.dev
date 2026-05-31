@@ -77,7 +77,7 @@ services:
       - n8n_data:/home/node/.n8n
     networks: [pointe-net]
     restart: unless-stopped
-    mem_limit: 256m
+    mem_limit: 430m
 
   minio:
     image: minio/minio:latest
@@ -88,7 +88,7 @@ services:
       - minio_data:/data
     networks: [pointe-net]
     restart: unless-stopped
-    mem_limit: 128m
+    mem_limit: 160m
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 5s
@@ -125,7 +125,7 @@ services:
       - ./clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
     networks: [pointe-net]
     restart: unless-stopped
-    mem_limit: 500m
+    mem_limit: 640m
     healthcheck:
       test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1' || exit 1"]
       interval: 10s
@@ -180,7 +180,7 @@ services:
       REDIS_PORT: "6379"
     networks: [pointe-net]
     restart: unless-stopped
-    mem_limit: 200m
+    mem_limit: 480m
     depends_on:
       postgres:
         condition: service_healthy
