@@ -158,55 +158,59 @@ test.describe("Chat widget", () => {
   });
 });
 
-test.describe("API smoke via Playwright request", () => {
-  test("GET /api/health returns 200 with status=healthy", async ({
-    request,
-  }) => {
-    const resp = await request.get("/api/health");
-    expect(resp.status()).toBe(200);
-    const body = await resp.json();
+// API smoke tests use page.evaluate(fetch) so requests go through the real
+// Chromium browser context — bypassing Cloudflare's datacenter-IP block that
+// affects page.request (direct HTTP) and Hurl.
+test.describe("API smoke via browser fetch", () => {
+  test("GET /api/health returns 200 with status=healthy", async ({ page }) => {
+    await page.goto("/");
+    const body = await page.evaluate(async () => {
+      const r = await fetch("/api/health");
+      if (r.status !== 200) throw new Error(`status ${r.status}`);
+      return r.json();
+    });
     expect(body.status).toBe("healthy");
   });
 
-  test("GET /api/services returns a non-empty services array", async ({
-    request,
-  }) => {
-    const resp = await request.get("/api/services");
-    expect(resp.status()).toBe(200);
-    const body = await resp.json();
+  test("GET /api/services returns a non-empty services array", async ({ page }) => {
+    await page.goto("/");
+    const body = await page.evaluate(async () => {
+      const r = await fetch("/api/services");
+      if (r.status !== 200) throw new Error(`status ${r.status}`);
+      return r.json();
+    });
     expect(Array.isArray(body.services)).toBe(true);
     expect(body.services.length).toBeGreaterThan(0);
   });
 
-  test("POST /api/stripe/webhook without sig returns 400", async ({
-    request,
-  }) => {
-    const resp = await request.post("/api/stripe/webhook", {
-      data: JSON.stringify({ type: "checkout.session.completed" }),
-      headers: { "content-type": "application/json" },
+  test("POST /api/stripe/webhook without sig returns 400", async ({ page }) => {
+    await page.goto("/");
+    const status = await page.evaluate(async () => {
+      const r = await fetch("/api/stripe/webhook", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ type: "checkout.session.completed" }),
+      });
+      return r.status;
     });
-    expect(resp.status()).toBe(400);
+    expect(status).toBe(400);
   });
 
-  test("GET /api/pitch/result with unknown sid returns ready=false", async ({
-    request,
-  }) => {
-    const resp = await request.get(
-      "/api/pitch/result?sid=00000000-0000-0000-0000-000000000000"
-    );
-    expect(resp.status()).toBe(200);
-    const body = await resp.json();
+  test("GET /api/pitch/result with unknown sid returns ready=false", async ({ page }) => {
+    await page.goto("/");
+    const body = await page.evaluate(async () => {
+      const r = await fetch("/api/pitch/result?sid=00000000-0000-0000-0000-000000000000");
+      return r.json();
+    });
     expect(body.ready).toBe(false);
   });
 
-  test("GET /api/auth/status with unknown sid returns unlocked=false", async ({
-    request,
-  }) => {
-    const resp = await request.get(
-      "/api/auth/status?sid=00000000-0000-0000-0000-000000000000"
-    );
-    expect(resp.status()).toBe(200);
-    const body = await resp.json();
+  test("GET /api/auth/status with unknown sid returns unlocked=false", async ({ page }) => {
+    await page.goto("/");
+    const body = await page.evaluate(async () => {
+      const r = await fetch("/api/auth/status?sid=00000000-0000-0000-0000-000000000000");
+      return r.json();
+    });
     expect(body.unlocked).toBe(false);
   });
 });
