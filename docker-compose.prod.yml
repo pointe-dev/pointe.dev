@@ -154,9 +154,10 @@ services:
       NEXTAUTH_URL: https://langfuse.pointe.dev
       LANGFUSE_INIT_ORG_NAME: pointe
       LANGFUSE_INIT_PROJECT_NAME: pointe-dev
+      NODE_OPTIONS: "--max-old-space-size=700"
     networks: [pointe-net]
     restart: unless-stopped
-    mem_limit: 512m
+    mem_limit: 900m
     depends_on:
       postgres:
         condition: service_healthy
@@ -179,7 +180,7 @@ services:
       REDIS_PORT: "6379"
     networks: [pointe-net]
     restart: unless-stopped
-    mem_limit: 256m
+    mem_limit: 200m
     depends_on:
       postgres:
         condition: service_healthy
