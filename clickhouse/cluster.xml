@@ -1,4 +1,7 @@
 <clickhouse>
+    <!-- Limiter la RAM à ~350 MB (en dessous du mem_limit Docker de 400m) -->
+    <max_server_memory_usage>367001600</max_server_memory_usage>
+
     <!-- Single-node cluster for Langfuse v3 (uses ReplicatedMergeTree ON CLUSTER default) -->
     <remote_servers>
         <default>
