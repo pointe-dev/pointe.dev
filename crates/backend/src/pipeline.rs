@@ -161,12 +161,29 @@ pub fn spawn(id: Uuid, store: PipelineStore, app: Arc<AppState>) {
         tracing::info!("[pipeline {id}] started");
         if let Err(reason) = run(id, &store, &app).await {
             let ctx = store.get_ctx(id).await.unwrap_or_default();
-            store.advance(id, PipelineStage::Failed { reason: reason.clone() }, ctx).await;
+            store.advance(id, PipelineStage::Failed { reason: reason.clone() }, ctx.clone()).await;
             tracing::error!("[pipeline {id}] failed: {reason}");
+            notify_owner_failure(&app, id, &ctx.session_id, &reason).await;
         } else {
             tracing::info!("[pipeline {id}] reached terminal stage");
         }
     });
+}
+
+async fn notify_owner_failure(app: &AppState, id: Uuid, session_id: &str, reason: &str) {
+    let (Some(api_key), Some(owner)) = (&app.resend_api_key, &app.owner_email) else { return };
+    let html = format!(
+        "<div style='font-family:sans-serif;padding:24px'>\
+           <h2 style='color:#dc2626'>⚠️ Pipeline failed — pointe.dev</h2>\
+           <p><b>Pipeline ID:</b> {id}</p>\
+           <p><b>Session:</b> {session_id}</p>\
+           <p><b>Reason:</b> {reason}</p>\
+         </div>"
+    );
+    if let Err(e) = crate::resend_send(&app.http, api_key, owner,
+        "⚠️ Pipeline failed — pointe.dev", &html).await {
+        tracing::warn!("[pipeline] owner failure notify failed: {e}");
+    }
 }
 
 async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(), String> {
@@ -200,17 +217,13 @@ async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(),
                     store.advance(id, PipelineStage::Pricing, ctx).await;
                 } else if ctx.build_attempts >= MAX_BUILD_ATTEMPTS {
                     agents::publish_manual_pitch(app, &ctx).await;
-                    store.advance(
-                        id,
-                        PipelineStage::SavedForHuman {
-                            reason: format!(
-                                "critic rejected after {} attempts: {}",
-                                ctx.build_attempts,
-                                ctx.critic_feedback.last().cloned().unwrap_or_default()
-                            ),
-                        },
-                        ctx,
-                    ).await;
+                    let reason = format!(
+                        "critic rejected after {} attempts: {}",
+                        ctx.build_attempts,
+                        ctx.critic_feedback.last().cloned().unwrap_or_default()
+                    );
+                    notify_owner_failure(app, id, &ctx.session_id, &reason).await;
+                    store.advance(id, PipelineStage::SavedForHuman { reason }, ctx).await;
                     break;
                 } else {
                     store.advance(id, PipelineStage::Building, ctx).await;
@@ -231,17 +244,13 @@ async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(),
                     break;
                 } else if ctx.pricing_attempts >= MAX_PRICING_ATTEMPTS {
                     agents::publish_manual_pitch(app, &ctx).await;
-                    store.advance(
-                        id,
-                        PipelineStage::SavedForHuman {
-                            reason: format!(
-                                "pricing critic rejected after {} attempts: {}",
-                                ctx.pricing_attempts,
-                                ctx.pricing_critic_feedback.last().cloned().unwrap_or_default()
-                            ),
-                        },
-                        ctx,
-                    ).await;
+                    let reason = format!(
+                        "pricing critic rejected after {} attempts: {}",
+                        ctx.pricing_attempts,
+                        ctx.pricing_critic_feedback.last().cloned().unwrap_or_default()
+                    );
+                    notify_owner_failure(app, id, &ctx.session_id, &reason).await;
+                    store.advance(id, PipelineStage::SavedForHuman { reason }, ctx).await;
                     break;
                 } else {
                     store.advance(id, PipelineStage::Pricing, ctx).await;

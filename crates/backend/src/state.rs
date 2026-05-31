@@ -23,6 +23,8 @@ pub struct AppState {
     pub resend_api_key: Option<String>,
     /// Public base URL used to build confirmation links (e.g. "https://pointe.dev").
     pub base_url: String,
-    /// Owner email — receives notifications on new quote requests.
+    /// Owner email — receives notifications on new quote requests and failures.
     pub owner_email: Option<String>,
+    /// Postgres pool for pitch persistence. None → in-memory only.
+    pub db: Option<sqlx::PgPool>,
 }

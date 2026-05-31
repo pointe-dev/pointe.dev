@@ -1,0 +1,94 @@
+services:
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: pointe-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [pointe-net]
+    restart: unless-stopped
+
+  backend:
+    image: ghcr.io/pointe-dev/pointe.dev:latest
+    container_name: pointe-backend
+    environment:
+      RUST_LOG: info
+      BIND_ADDR: "0.0.0.0:3001"
+      N8N_URL: "http://n8n:5678"
+      QDRANT_URL: "http://qdrant:6333"
+    env_file: .env.prod
+    volumes:
+      - model_cache:/root/.cache   # persists BGE-M3 download (~300 MB)
+    networks: [pointe-net]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      n8n:
+        condition: service_started
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: pointe-postgres
+    environment:
+      POSTGRES_USER: pointe
+      POSTGRES_DB: pointe
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+    secrets: [pg_password]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [pointe-net]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pointe"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:v1.13.4
+    container_name: pointe-qdrant
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks: [pointe-net]
+    restart: unless-stopped
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: pointe-n8n
+    environment:
+      N8N_HOST: n8n.pointe.dev
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: https
+      WEBHOOK_URL: https://n8n.pointe.dev/
+      GENERIC_TIMEZONE: Europe/Paris
+      N8N_METRICS: "false"
+    env_file: .env.n8n
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks: [pointe-net]
+    restart: unless-stopped
+
+networks:
+  pointe-net:
+    driver: bridge
+
+secrets:
+  pg_password:
+    file: ./secrets/pg_password.txt
+
+volumes:
+  caddy_data:
+  caddy_config:
+  postgres_data:
+  qdrant_data:
+  n8n_data:
+  model_cache:

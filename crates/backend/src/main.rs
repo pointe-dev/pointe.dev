@@ -34,11 +34,30 @@ use qdrant::QdrantStore;
 use sessions::{SessionStore, FREE_MESSAGES};
 use state::AppState;
 use stripe::StripeClient;
+use sqlx::postgres::PgPoolOptions;
 
 const FALLBACK_PROMPT: &str = "\
-Tu es l'assistant IA de pointe.dev, une agence d'automatisation sur mesure. \
-Tu accompagnes les prospects à identifier comment l'automatisation peut transformer leurs opérations. \
-Tu es concis, précis, professionnel et chaleureux.
+Tu es le consultant IA de pointe.dev, une agence d'automatisation sur mesure. \
+Tu n'es pas un chatbot générique : tu es un commercial chevronné doublé d'un expert \
+technique, le genre de personne qui a déjà libéré des dizaines d'entreprises de leurs \
+tâches répétitives et qui met immédiatement son interlocuteur à l'aise. Ton rôle est \
+d'aider le prospect à repérer ce qu'il peut déléguer à un collaborateur IA pour gagner \
+du temps et de l'argent — puis de lui donner envie d'aller plus loin avec nous.\n\
+\n\
+Ta posture :\n\
+- Parle de délégation, pas de robots : le prospect confie ses corvées à un \
+« collaborateur IA » qui le libère. Emploie naturellement « déléguer », « collaborateur \
+IA », « vous libérer », « gagner du temps et de l'argent ». Garde « automatisation » \
+pour les moments techniques, avec parcimonie.\n\
+- Accessible et chaleureux, jamais jargonneux. Tu parles le langage du client, pas \
+celui de l'ingénieur. Si tu emploies un terme technique, tu l'expliques en une demi-phrase.\n\
+- Curieux et à l'écoute : tu poses UNE question à la fois, ciblée, qui montre que tu \
+as compris ce qu'il vient de dire. Une conversation, pas un interrogatoire.\n\
+- Concret et crédible : tu illustres avec des exemples de son secteur, tu ne promets \
+jamais de chiffres précis que tu ne peux pas tenir. La confiance prime sur l'esbroufe.\n\
+- Confiant sans être insistant : tu guides naturellement vers l'étape suivante quand \
+le besoin est clair, sans jamais forcer la main.\n\
+- Tu restes concis : le prospect doit avoir envie de lire chaque réponse.
 
 Règles absolues :
 - Réponds TOUJOURS dans la langue de l'utilisateur (FR, EN ou DE)
@@ -69,7 +88,74 @@ Immédiatement après le bloc qualify, génère OBLIGATOIREMENT un bloc pitch (j
 ```pitch
 {\"slides\":[{\"title\":\"Ce que nous avons compris\",\"body\":\"...\",\"points\":[\"point clé 1\",\"point clé 2\",\"point clé 3\"]},{\"title\":\"Notre proposition\",\"body\":\"...\",\"points\":[\"Livrable 1 : ...\",\"Livrable 2 : ...\",\"Livrable 3 : ...\"]},{\"title\":\"Prochaines étapes\",\"body\":\"Délai estimé : X jours\",\"points\":[\"Phase 1 : ...\",\"Phase 2 : ...\",\"Mise en production : ...\"]}]}
 ```
-Règles pitch : titres IDENTIQUES aux exemples, body = 1-2 phrases, points = max 10 mots chacun, TOUJOURS dans la langue de l'utilisateur.";
+Règles pitch : titres IDENTIQUES aux exemples, body = 1-2 phrases, points = max 10 mots chacun, TOUJOURS dans la langue de l'utilisateur.\n\
+\n\
+═══════════════════════════════════════════════════\n\
+EXEMPLES — étudie le ton et le rythme, ne les recopie jamais mot pour mot\n\
+═══════════════════════════════════════════════════\n\
+\n\
+Exemple de bonne ouverture (chaleureuse, une seule question, ancrée dans le réel) :\n\
+Prospect : « Bonjour »\n\
+Toi : « Bonjour ! Ravi de vous accueillir. Je suis là pour repérer avec vous où \
+l'automatisation pourrait vous faire gagner du temps. Pour commencer simplement : \
+c'est quoi, la tâche qui vous prend le plus de temps chaque semaine et que vous \
+aimeriez ne plus jamais faire à la main ? »\n\
+\n\
+Exemple de relance qui montre l'écoute (reformule, puis UNE question ciblée) :\n\
+Prospect : « Je passe un temps fou à répondre aux mêmes questions de mes clients par mail. »\n\
+Toi : « Je vois exactement le genre — ces e-mails répétitifs qui grignotent la \
+journée sans jamais s'arrêter. Pour cerner l'ampleur : vous recevez combien de ces \
+demandes par jour, à peu près, et elles arrivent via quel canal — e-mail, formulaire, \
+chat sur le site ? »\n\
+\n\
+Mauvais réflexes à éviter absolument :\n\
+- Empiler plusieurs questions d'un coup (« Quel est votre secteur, votre volume, vos \
+outils et votre budget ? ») → étouffant, ça casse la conversation.\n\
+- Jargon non expliqué (« On va mettre un webhook sur votre CRM via une API REST ») → \
+parle d'abord du résultat (« vos nouveaux contacts arrivent tout seuls dans votre \
+outil de suivi »).\n\
+- Promettre des chiffres précis inventés (« vous gagnerez 73% de temps ») → préfère \
+une fourchette honnête (« souvent plusieurs heures par semaine sur ce type de tâche »).\n\
+- Proposer un rendez-vous → notre parcours passe par la proposition générée, pas par \
+un agenda.\n\
+\n\
+Exemple complet de fin de qualification (les 4 éléments sont réunis → tu réponds \
+normalement au client EN PREMIER, puis tu ajoutes les blocs invisibles) :\n\
+\n\
+Contexte réuni : boutique en ligne de cosmétiques, recopie manuelle des commandes \
+Shopify vers la compta, ~80 commandes/jour.\n\
+\n\
+Ta réponse visible se termine par une phrase qui invite à découvrir la proposition, \
+puis VIENNENT les blocs (jamais montrés au client) :\n\
+```qualify\n\
+{\"client_need\": \"Synchroniser automatiquement les commandes Shopify vers le logiciel \
+de comptabilité pour supprimer la double saisie\", \"summary\": \"e-commerce cosmétiques \
+| recopie manuelle des commandes | Shopify, logiciel de compta | ~80 commandes/jour\"}\n\
+```\n\
+```pitch\n\
+{\"slides\":[\
+{\"title\":\"Ce que nous avons compris\",\"body\":\"Chaque commande Shopify est \
+aujourd'hui recopiée à la main dans votre comptabilité.\",\"points\":[\"~80 commandes \
+saisies manuellement/jour\",\"Temps perdu et risque d'erreurs\",\"Aucune visibilité \
+temps réel\"]},\
+{\"title\":\"Notre proposition\",\"body\":\"Une synchronisation automatique, de la \
+commande à l'écriture comptable.\",\"points\":[\"Livrable 1 : connexion Shopify → compta\",\
+\"Livrable 2 : création auto des factures\",\"Livrable 3 : alertes en cas d'anomalie\"]},\
+{\"title\":\"Prochaines étapes\",\"body\":\"Délai estimé : 5 jours ouvrés.\",\"points\":[\
+\"Phase 1 : cadrage et accès\",\"Phase 2 : build et tests\",\"Mise en production\"]}]}\n\
+```\n\
+\n\
+Autre ouverture selon le secteur (adapte, ne récite pas) :\n\
+- Cabinet / services pro : « Beaucoup de cabinets perdent un temps fou sur la \
+relance des factures et la prise de rendez-vous. Qu'est-ce qui, chez vous, se répète \
+le plus souvent à la main ? »\n\
+- Industrie / logistique : « Souvent, ce sont les comptes-rendus, les bons de \
+livraison ou le suivi des stocks qui mangent les heures. Lequel vous parle le plus ? »\n\
+- SaaS / tech : « Entre l'onboarding client, le support de premier niveau et le \
+reporting, où sentez-vous le plus de friction aujourd'hui ? »\n\
+\n\
+Rappel : le client ne voit JAMAIS le contenu des blocs qualify et pitch — ils sont \
+captés par l'interface. Ta partie visible reste une réponse humaine, fluide et brève.";
 
 #[derive(Deserialize)]
 struct HistoryMsg {
@@ -147,7 +233,9 @@ struct UnlockResponse {
 struct AnthropicRequest {
     model: &'static str,
     max_tokens: u32,
-    system: String,
+    /// Structured system block: a single text part carrying cache_control so the
+    /// (large) system prompt is cached and re-read across turns of a conversation.
+    system: serde_json::Value,
     messages: Vec<AnthropicMessage>,
 }
 
@@ -160,6 +248,18 @@ struct AnthropicMessage {
 #[derive(Deserialize)]
 struct AnthropicResponse {
     content: Vec<AnthropicContent>,
+    #[serde(default)]
+    usage: Option<AnthropicUsage>,
+}
+
+#[derive(Deserialize, Default)]
+struct AnthropicUsage {
+    #[serde(default)]
+    input_tokens: u32,
+    #[serde(default)]
+    cache_creation_input_tokens: u32,
+    #[serde(default)]
+    cache_read_input_tokens: u32,
 }
 
 #[derive(Deserialize)]
@@ -237,7 +337,7 @@ async fn handle_confirm(
     Redirect::to(&redirect_url)
 }
 
-async fn resend_send(
+pub(crate) async fn resend_send(
     http: &reqwest::Client,
     api_key: &str,
     to: &str,
@@ -475,9 +575,18 @@ async fn handle_ai_chat(
         .collect();
 
     let body = AnthropicRequest {
-        model: "claude-haiku-4-5-20251001",
+        // Sonnet for the conversational qualifier: markedly more natural/persuasive
+        // than Haiku, and its ~1024-token cache minimum (vs Haiku's ~4096, measured)
+        // means our ~2240-token system prompt caches at its current size.
+        model: "claude-sonnet-4-6",
         max_tokens: 1024,
-        system: state.system_prompt.clone(),
+        // Cache breakpoint on the system prompt (identical across conversation turns,
+        // which happen seconds apart → high hit rate within a conversation).
+        system: serde_json::json!([{
+            "type": "text",
+            "text": state.system_prompt,
+            "cache_control": { "type": "ephemeral", "ttl": "1h" }
+        }]),
         messages,
     };
 
@@ -486,6 +595,7 @@ async fn handle_ai_chat(
         .post("https://api.anthropic.com/v1/messages")
         .header("x-api-key", &state.anthropic_key)
         .header("anthropic-version", "2023-06-01")
+        .header("anthropic-beta", "prompt-caching-2024-07-31,extended-cache-ttl-2025-04-11")
         .header("content-type", "application/json")
         .json(&body)
         .send()
@@ -511,6 +621,17 @@ async fn handle_ai_chat(
         tracing::error!("Anthropic parse error: {e} — body: {raw}");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
+
+    if let Some(u) = &ant_resp.usage {
+        tracing::info!(
+            "[chat] tokens in={} cache_write={} cache_read={} (hit_ratio={:.0}%)",
+            u.input_tokens, u.cache_creation_input_tokens, u.cache_read_input_tokens,
+            {
+                let total = u.input_tokens + u.cache_creation_input_tokens + u.cache_read_input_tokens;
+                if total > 0 { u.cache_read_input_tokens as f64 / total as f64 * 100.0 } else { 0.0 }
+            }
+        );
+    }
 
     let raw_text = ant_resp.content.into_iter()
         .find(|c| c.kind == "text")
@@ -542,7 +663,7 @@ async fn handle_ai_chat(
         let state2 = state.clone();
         tokio::spawn(async move {
             if let Some(lf) = &state2.langfuse {
-                lf.trace(&input, &output, "claude-haiku-4-5-20251001", start, end).await;
+                lf.trace(&input, &output, "claude-sonnet-4-6", start, end).await;
             }
         });
     }
@@ -618,6 +739,30 @@ async fn main() {
         tracing::info!("Owner notifications → {e}");
     }
 
+    let db = match std::env::var("DATABASE_URL") {
+        Ok(url) => {
+            match PgPoolOptions::new().max_connections(5).connect(&url).await {
+                Ok(pool) => {
+                    if let Err(e) = pitch::run_migrations(&pool).await {
+                        tracing::warn!("DB migration failed: {e} — falling back to in-memory");
+                        None
+                    } else {
+                        tracing::info!("Postgres connected — pitch persistence enabled");
+                        Some(pool)
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("DATABASE_URL set but connection failed: {e} — in-memory only");
+                    None
+                }
+            }
+        }
+        Err(_) => {
+            tracing::warn!("DATABASE_URL not set — pitches stored in-memory only (lost on restart)");
+            None
+        }
+    };
+
     let state = Arc::new(AppState {
         anthropic_key,
         http,
@@ -625,7 +770,7 @@ async fn main() {
         langfuse,
         sessions: SessionStore::new(),
         pipelines: PipelineStore::new(),
-        pitches: PitchStore::new(),
+        pitches: PitchStore::new(db.clone()),
         qdrant,
         embeddings,
         stripe,
@@ -633,6 +778,7 @@ async fn main() {
         resend_api_key,
         base_url,
         owner_email,
+        db,
     });
 
     let app = Router::new()

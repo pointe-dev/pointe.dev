@@ -1,0 +1,10 @@
+# pointe.dev reverse proxy
+# Caddy handles TLS automatically via Let's Encrypt.
+
+go.pointe.dev {
+    reverse_proxy backend:3001
+}
+
+n8n.pointe.dev {
+    reverse_proxy n8n:5678
+}
