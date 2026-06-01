@@ -29,18 +29,21 @@ export const test = base.extend({
       await page.addInitScript(
         ({ token, baseUrl }) => {
           const originalFetch = window.fetch;
-          window.fetch = function (...args: any[]) {
+          window.fetch = (...args: any[]) => {
             const urlArg = args[0];
             const isString = typeof urlArg === "string";
             const urlStr = isString ? urlArg : urlArg.url;
             const urlObj = new URL(urlStr, window.location.origin);
 
+            // Only add header to same-origin requests that start with baseUrl
             if (urlObj.href.startsWith(baseUrl)) {
-              args[1] = args[1] || {};
-              args[1].headers = args[1].headers || {};
-              args[1].headers["x-ci-token"] = token;
+              // Handle both plain object and Request object cases
+              const options = args[1] || {};
+              const headers = new Headers(options.headers || {});
+              headers.set("x-ci-token", token);
+              args[1] = { ...options, headers };
             }
-            return originalFetch.apply(this, args);
+            return originalFetch(...args);
           };
         },
         { token: CI_TOKEN, baseUrl: BASE_URL }
