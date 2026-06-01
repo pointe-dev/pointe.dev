@@ -14,7 +14,3 @@ go.pointe.dev {
 n8n.pointe.dev {
     reverse_proxy n8n:5678
 }
-
-langfuse.pointe.dev {
-    reverse_proxy langfuse-web:3000
-}
