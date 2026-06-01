@@ -1,8 +1,11 @@
 name: Build & Deploy
 
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
     branches: [main]
+    types:
+      - completed
   workflow_dispatch:
 
 env:
@@ -12,6 +15,7 @@ env:
 
 jobs:
   build:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     name: Build Docker image
     runs-on: ubuntu-latest
     permissions:
@@ -46,6 +50,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     name: Deploy to Hetzner
     runs-on: ubuntu-latest
     needs: build
