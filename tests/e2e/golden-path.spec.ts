@@ -12,7 +12,8 @@
  *                 Mobile / Safari (only Chromium in CI).
  */
 
-import { test, expect, ConsoleMessage } from "@playwright/test";
+import { ConsoleMessage } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -59,13 +60,7 @@ function collectErrors(messages: ConsoleMessage[]): string[] {
         !t.includes("ResizeObserver loop") &&
         !t.includes("favicon") &&
         !t.includes("Cross-Origin") &&
-        !t.includes("ERR_BLOCKED_BY_CLIENT") && // ad blockers
-        // Cloudflare blocks GitHub Actions' datacenter IPs, so API calls
-        // (/api/chat) made during the test return 403 in CI. This is an
-        // environmental artefact, not an app error — see the note at the
-        // bottom of this file. The "AI response appears" test still verifies
-        // the API works from a real browser.
-        !t.includes("status of 403")
+        !t.includes("ERR_BLOCKED_BY_CLIENT") // ad blockers
     );
 }
 
@@ -164,8 +159,62 @@ test.describe("Chat widget", () => {
   });
 });
 
-// NOTE: Direct API calls (/api/*) from CI are blocked by Cloudflare's
-// datacenter-IP rules (GitHub Actions runs on Azure). API endpoint coverage
-// is handled by the integration tests (crates/backend/tests/integration.rs)
-// and by Hurl smoke tests run locally against production.
-// See tests/smoke/ for the .hurl files.
+// API smoke tests use page.evaluate(fetch) so requests go through the real
+// Chromium browser context, inheriting the X-CI-Token header set in
+// playwright.config.ts. That header lets requests past Cloudflare's
+// datacenter-IP block (GitHub Actions runs on Azure), so /api/* calls succeed
+// from CI. Locally (residential IP) the header is absent but the IP isn't
+// blocked, so these pass either way.
+test.describe("API smoke via browser fetch", () => {
+  test("GET /api/health returns 200 with status=healthy", async ({ page }) => {
+    await page.goto("/");
+    const body = await page.evaluate(async () => {
+      const r = await fetch("/api/health");
+      if (r.status !== 200) throw new Error(`status ${r.status}`);
+      return r.json();
+    });
+    expect(body.status).toBe("healthy");
+  });
+
+  test("GET /api/services returns a non-empty services array", async ({ page }) => {
+    await page.goto("/");
+    const body = await page.evaluate(async () => {
+      const r = await fetch("/api/services");
+      if (r.status !== 200) throw new Error(`status ${r.status}`);
+      return r.json();
+    });
+    expect(Array.isArray(body.services)).toBe(true);
+    expect(body.services.length).toBeGreaterThan(0);
+  });
+
+  test("POST /api/stripe/webhook without sig returns 400", async ({ page }) => {
+    await page.goto("/");
+    const status = await page.evaluate(async () => {
+      const r = await fetch("/api/stripe/webhook", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ type: "checkout.session.completed" }),
+      });
+      return r.status;
+    });
+    expect(status).toBe(400);
+  });
+
+  test("GET /api/pitch/result with unknown sid returns ready=false", async ({ page }) => {
+    await page.goto("/");
+    const body = await page.evaluate(async () => {
+      const r = await fetch("/api/pitch/result?sid=00000000-0000-0000-0000-000000000000");
+      return r.json();
+    });
+    expect(body.ready).toBe(false);
+  });
+
+  test("GET /api/auth/status with unknown sid returns unlocked=false", async ({ page }) => {
+    await page.goto("/");
+    const body = await page.evaluate(async () => {
+      const r = await fetch("/api/auth/status?sid=00000000-0000-0000-0000-000000000000");
+      return r.json();
+    });
+    expect(body.unlocked).toBe(false);
+  });
+});

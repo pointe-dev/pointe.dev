@@ -136,6 +136,9 @@ jobs:
         env:
           BASE_URL: https://go.pointe.dev
           CI: "true"
+          # Cloudflare WAF bypass header so /api/* calls aren't 403'd from the
+          # Actions runner's datacenter IP. See playwright.config.ts.
+          CI_BYPASS_TOKEN: ${{ secrets.CI_BYPASS_TOKEN }}
         run: npx playwright test --reporter=list
 
       - name: Upload Playwright report
