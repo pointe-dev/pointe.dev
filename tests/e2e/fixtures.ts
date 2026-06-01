@@ -17,14 +17,18 @@
  */
 import { test as base } from "@playwright/test";
 
-const CI_TOKEN = process.env.CI_BYPASS_TOKEN ?? "";
-const BASE_URL = process.env.BASE_URL ?? "https://go.pointe.dev";
+const env = (globalThis as {
+  process?: { env?: Record<string, string | undefined> };
+}).process?.env ?? {};
+
+const CI_TOKEN = env.CI_BYPASS_TOKEN ?? "";
+const BASE_URL = env.BASE_URL ?? "https://go.pointe.dev";
 
 export const test = base.extend({
   page: async ({ page }, use) => {
     if (CI_TOKEN) {
       await page.route(
-        (url) => url.href.startsWith(BASE_URL),
+        (requestUrl) => requestUrl.href.startsWith(BASE_URL),
         async (route) => {
           const headers = {
             ...route.request().headers(),
