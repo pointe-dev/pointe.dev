@@ -2,18 +2,15 @@
  * Shared Playwright fixtures for pointe.dev E2E tests.
  *
  * Provides a `page` that injects the Cloudflare WAF bypass header
- * (X-CI-Token) on SAME-ORIGIN requests only.
+ * (X-CI-Token) on SAME-ORIGIN requests only via fetch interception.
  *
- * Why scoped, not a blanket extraHTTPHeaders: setting the header on the whole
- * browser context leaks it to third-party origins (cdn.fontshare.com fonts,
- * static.cloudflareinsights.com analytics). Those trigger a CORS preflight
- * that fails — "x-ci-token is not allowed by Access-Control-Allow-Headers" —
- * breaking font loading and surfacing as console errors. Routing only
- * go.pointe.dev requests keeps the header where Cloudflare needs it (to let
- * the Actions runner's datacenter IP past the block) and nowhere else.
+ * Uses addInitScript to wrap window.fetch before any page code runs, ensuring
+ * the header is attached even when fetch() is called from page.evaluate().
+ * The header is only added to same-origin requests (those starting with BASE_URL),
+ * avoiding CORS preflight issues on third-party origins.
  *
  * When CI_BYPASS_TOKEN is unset (local dev on a residential, non-blocked IP),
- * no route is registered and requests flow normally.
+ * no script is injected and requests flow normally.
  */
 import { test as base } from "@playwright/test";
 
@@ -27,15 +24,26 @@ const BASE_URL = env.BASE_URL ?? "https://go.pointe.dev";
 export const test = base.extend({
   page: async ({ page }, use) => {
     if (CI_TOKEN) {
-      await page.route(
-        (requestUrl) => requestUrl.href.startsWith(BASE_URL),
-        async (route) => {
-          const headers = {
-            ...route.request().headers(),
-            "x-ci-token": CI_TOKEN,
+      // Inject a fetch wrapper that adds the bypass header to all same-origin requests.
+      // This ensures the header is attached even when fetch() is called from page.evaluate().
+      await page.addInitScript(
+        ({ token, baseUrl }) => {
+          const originalFetch = window.fetch;
+          window.fetch = function (...args: any[]) {
+            const urlArg = args[0];
+            const isString = typeof urlArg === "string";
+            const urlStr = isString ? urlArg : urlArg.url;
+            const urlObj = new URL(urlStr, window.location.origin);
+
+            if (urlObj.href.startsWith(baseUrl)) {
+              args[1] = args[1] || {};
+              args[1].headers = args[1].headers || {};
+              args[1].headers["x-ci-token"] = token;
+            }
+            return originalFetch.apply(this, args);
           };
-          await route.continue({ headers });
-        }
+        },
+        { token: CI_TOKEN, baseUrl: BASE_URL }
       );
     }
     await use(page);
