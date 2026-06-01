@@ -18,7 +18,6 @@ use axum::{
     Json, Router,
 };
 use axum_test::TestServer;
-        admin_ingest_token: Some("integration-admin-token".to_string()),
 use backend_lib::{
     pipeline::PipelineStore,
     pitch::{PitchResult, PitchSlide, PitchStore},
@@ -52,6 +51,7 @@ fn test_state() -> Arc<AppState> {
         base_url: "http://localhost".to_string(),
         owner_email: None,
         db: None,
+        admin_ingest_token: Some("integration-admin-token".to_string()),
     })
 }
 
