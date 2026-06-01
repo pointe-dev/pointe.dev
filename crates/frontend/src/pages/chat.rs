@@ -100,6 +100,13 @@ struct ChatResponse {
     messages_used: u32,
     messages_free: u32,
     pipeline_id: Option<String>,
+    #[serde(default)]
+    options: Vec<ChatOption>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+struct ChatOption {
+    label: String,
 }
 
 #[derive(Serialize)]
@@ -166,7 +173,7 @@ fn strip_block<'a>(content: &'a str, tag: &str) -> (&'a str, Option<&'a str>) {
     (content, None)
 }
 
-fn parse_response(content: &str) -> (String, Option<PitchData>) {
+fn parse_response(content: &str) -> (String, Option<PitchData>, Vec<ChatOption>) {
     // Strip pitch block
     let (without_pitch, pitch_json) = {
         const OPEN: &str = "```pitch";
@@ -194,8 +201,8 @@ fn parse_response(content: &str) -> (String, Option<PitchData>) {
         }
     };
 
-    // Strip workflow block from remaining text (kept for future use, display suppressed)
-    let display_text = {
+    // Strip workflow block
+    let without_workflow = {
         const OPEN: &str = "```workflow";
         const CLOSE: &str = "\n```";
         if let Some(s) = without_pitch.find(OPEN) {
@@ -218,7 +225,34 @@ fn parse_response(content: &str) -> (String, Option<PitchData>) {
         }
     };
 
-    (display_text, pitch_json)
+    // Strip options block and extract options
+    let (display_text, options) = {
+        const OPEN: &str = "```options";
+        const CLOSE: &str = "\n```";
+        if let Some(s) = without_workflow.find(OPEN) {
+            let after_tag = &without_workflow[s + OPEN.len()..];
+            let after = after_tag.find('\n').map(|nl| &after_tag[nl + 1..]).unwrap_or("");
+            if let Some(e) = after.find(CLOSE) {
+                let json = &after[..e];
+                let before = without_workflow[..s].trim_end();
+                let rest = after[e + CLOSE.len()..].trim_start();
+                let text = match (before.is_empty(), rest.is_empty()) {
+                    (true,  true)  => String::new(),
+                    (false, true)  => before.to_string(),
+                    (true,  false) => rest.to_string(),
+                    (false, false) => format!("{}\n\n{}", before, rest),
+                };
+                let opts = serde_json::from_str::<Vec<ChatOption>>(json).unwrap_or_default();
+                (text, opts)
+            } else {
+                (without_workflow, vec![])
+            }
+        } else {
+            (without_workflow, vec![])
+        }
+    };
+
+    (display_text, pitch_json, options)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -302,6 +336,9 @@ pub fn Chat() -> impl IntoView {
     let quote_email = create_rw_signal(String::new());
     let quote_sent  = create_rw_signal(false);
     let quote_error = create_rw_signal(false);
+
+    // Selectable options shown below the last assistant message
+    let pending_options: RwSignal<Vec<ChatOption>> = create_rw_signal(vec![]);
 
     // Pitch pipeline polling
     let pitch_loading: RwSignal<bool>         = create_rw_signal(false);
@@ -433,6 +470,7 @@ pub fn Chat() -> impl IntoView {
         batch(move || {
             input_text.set(String::new());
             messages.update(|v| v.push((true, msg.clone(), msg.clone())));
+            pending_options.set(vec![]);
             is_loading.set(true);
         });
 
@@ -458,10 +496,13 @@ pub fn Chat() -> impl IntoView {
                     }
                     match resp.json::<ChatResponse>().await {
                         Ok(data) => {
-                            let (text, pitch) = parse_response(&data.response);
+                            let (text, pitch, opts) = parse_response(&data.response);
+                            // Also check for options in the dedicated field (backend-parsed)
+                            let final_opts = if !data.options.is_empty() { data.options } else { opts };
                             let html = render_markdown(&text);
                             batch(move || {
                                 messages.update(|v| v.push((false, text, html)));
+                                pending_options.set(final_opts);
                                 if let Some(p) = pitch {
                                     current_pitch.set(Some(p));
                                     pitch_page.set(0);
@@ -533,6 +574,9 @@ pub fn Chat() -> impl IntoView {
             send_clone();
         }
     };
+
+    // Cloned for the selectable-options block (cloned again per button inside).
+    let send_for_options = send.clone();
 
     view! {
         <div class="relative flex flex-col bg-deep" style="height: calc(100vh - 65px);">
@@ -972,6 +1016,36 @@ pub fn Chat() -> impl IntoView {
                                     </div>
                                 }
                             }).collect_view()
+                        }}
+
+                        {/* Selectable options — shown below last assistant message */}
+                        {move || {
+                            let opts = pending_options.get();
+                            if opts.is_empty() || is_loading.get() { return None; }
+                            Some(view! {
+                                <div class="flex justify-start">
+                                    <div class="max-w-[80%] flex flex-col gap-2 pt-1">
+                                        <div class="flex flex-wrap gap-2">
+                                            {opts.into_iter().map(|opt| {
+                                                let label = opt.label.clone();
+                                                let label2 = label.clone();
+                                                let send = send_for_options.clone();
+                                                view! {
+                                                    <button
+                                                        class="chat-option-btn"
+                                                        on:click=move |_| {
+                                                            input_text.set(label2.clone());
+                                                            send();
+                                                        }
+                                                    >
+                                                        {label}
+                                                    </button>
+                                                }
+                                            }).collect_view()}
+                                        </div>
+                                    </div>
+                                </div>
+                            })
                         }}
 
                         {move || is_loading.get().then(|| view! {

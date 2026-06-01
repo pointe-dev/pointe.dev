@@ -2106,6 +2106,32 @@ html.dark {
   margin: 0;
 }
 
+/* ── Chat option buttons ─────────────────────────────────────────────── */
+.chat-option-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.45rem 1rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.18s, color 0.18s, background 0.18s, transform 0.18s;
+  white-space: nowrap;
+}
+.chat-option-btn:hover {
+  border-color: var(--red-mid);
+  color: var(--text-primary);
+  background: rgba(196, 18, 47, 0.07);
+  transform: translateY(-1px);
+}
+.chat-option-btn:active {
+  transform: translateY(0);
+  transition-duration: 0.06s;
+}
+
 /* ── Focus ring (accessibility + trust) ─────────────────────────────── */
 :focus-visible {
   outline: 2px solid rgba(196, 18, 47, 0.55);

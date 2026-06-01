@@ -73,6 +73,13 @@ Règles absolues :
 - Ne jamais halluciner des chiffres précis — utilise des fourchettes réalistes
 - Réponse max : 200 mots hors workflow
 
+Options sélectionnables (facultatif) :
+Quand tu poses une question dont les réponses courantes sont prévisibles (secteur, volume, outils…), tu PEUX ajouter un bloc options INVISIBLE pour guider l'utilisateur avec des boutons cliquables :
+```options
+[{\"label\": \"Réponse A\"}, {\"label\": \"Réponse B\"}, {\"label\": \"Réponse C\"}, {\"label\": \"Autre (précisez)\"}]
+```
+Règles options : 2-4 options MAX, labels courts (3-6 mots), JAMAIS en même temps qu'un bloc qualify ou pitch, JAMAIS obligatoire — uniquement quand ça simplifie vraiment la réponse du prospect.
+
 Déclenchement du pipeline :
 Dès que tu as collecté les 4 éléments suivants, INCLUS un bloc qualify INVISIBLE à la fin de ta réponse :
   1. secteur d'activité
@@ -183,6 +190,41 @@ struct ChatResponse {
     messages_free: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pipeline_id: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    options: Vec<ChatOption>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ChatOption {
+    pub label: String,
+}
+
+/// Strips a ```options block from the AI response.
+/// Returns (display_text, Vec<ChatOption>).
+fn parse_options(text: &str) -> (String, Vec<ChatOption>) {
+    const OPEN: &str = "```options";
+    const CLOSE: &str = "```";
+    if let Some(start) = text.find(OPEN) {
+        let after_tag = &text[start + OPEN.len()..];
+        let after = match after_tag.find('\n') {
+            Some(nl) => &after_tag[nl + 1..],
+            None => return (text.to_string(), vec![]),
+        };
+        if let Some(end) = after.find(CLOSE) {
+            let json = after[..end].trim();
+            let before = text[..start].trim_end();
+            let rest = after[end + CLOSE.len()..].trim_start();
+            let display = match (before.is_empty(), rest.is_empty()) {
+                (true,  true)  => String::new(),
+                (false, true)  => before.to_string(),
+                (true,  false) => rest.to_string(),
+                (false, false) => format!("{before}\n\n{rest}"),
+            };
+            let opts = serde_json::from_str::<Vec<ChatOption>>(json).unwrap_or_default();
+            return (display, opts);
+        }
+    }
+    (text.to_string(), vec![])
 }
 
 #[derive(serde::Deserialize)]
@@ -615,8 +657,8 @@ async fn handle_ai_chat(
     let end = Utc::now();
 
     // Strip qualify block and launch pipeline if the AI decided to qualify
-    let (display_text, pipeline_id) = {
-        let (display, maybe_qualify) = parse_qualify(&raw_text);
+    let (display_text, pipeline_id, options) = {
+        let (after_qualify, maybe_qualify) = parse_qualify(&raw_text);
         let pid = if let Some(q) = maybe_qualify {
             let id = state.pipelines.create(
                 payload.session_id.clone(),
@@ -629,7 +671,8 @@ async fn handle_ai_chat(
         } else {
             None
         };
-        (display, pid)
+        let (display, opts) = parse_options(&after_qualify);
+        (display, pid, opts)
     };
 
     if state.langfuse.is_some() {
@@ -648,6 +691,7 @@ async fn handle_ai_chat(
         messages_used,
         messages_free: FREE_MESSAGES,
         pipeline_id,
+        options,
     }))
 }
 
@@ -919,6 +963,50 @@ mod tests {
         let (display, block) = parse_qualify(text);
         assert_eq!(display.trim(), "Visible text");
         assert!(block.is_some());
+    }
+
+    // ── parse_options ──────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_options_extracts_labels_and_strips_block() {
+        let text = "Quel est votre secteur ?\n```options\n[{\"label\":\"E-commerce\"},{\"label\":\"Santé\"},{\"label\":\"Autre\"}]\n```";
+        let (display, opts) = parse_options(text);
+        assert_eq!(display.trim(), "Quel est votre secteur ?");
+        assert_eq!(opts.len(), 3);
+        assert_eq!(opts[0].label, "E-commerce");
+        assert_eq!(opts[2].label, "Autre");
+    }
+
+    #[test]
+    fn parse_options_no_block_returns_text_unchanged() {
+        let text = "A normal reply with no options.";
+        let (display, opts) = parse_options(text);
+        assert_eq!(display, text);
+        assert!(opts.is_empty());
+    }
+
+    #[test]
+    fn parse_options_invalid_json_returns_empty_vec() {
+        let text = "Before\n```options\nnot-json\n```\nAfter";
+        let (_, opts) = parse_options(text);
+        assert!(opts.is_empty(), "malformed JSON must degrade gracefully");
+    }
+
+    #[test]
+    fn parse_options_preserves_before_and_after_text() {
+        let text = "BEFORE\n```options\n[{\"label\":\"A\"}]\n```\nAFTER";
+        let (display, opts) = parse_options(text);
+        assert!(display.contains("BEFORE"));
+        assert!(display.contains("AFTER"));
+        assert_eq!(opts.len(), 1);
+    }
+
+    #[test]
+    fn parse_options_empty_array_yields_no_options() {
+        let text = "Pick one\n```options\n[]\n```";
+        let (display, opts) = parse_options(text);
+        assert_eq!(display.trim(), "Pick one");
+        assert!(opts.is_empty());
     }
 
     // ── real_ip ────────────────────────────────────────────────────────────
