@@ -1,4 +1,8 @@
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{
+    extract::State,
+    http::{header, HeaderMap, StatusCode},
+    Json,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use crate::qdrant::{TemplatePayload, TemplatePoint};
@@ -20,11 +24,41 @@ pub struct IngestResponse {
 
 /// POST /api/admin/ingest
 /// Embeds and upserts a batch of n8n templates into Qdrant.
-/// Protected in production — add auth middleware before shipping.
+/// Protected by the ADMIN_INGEST_TOKEN / ADMIN_INGEST_TOKEN_FILE secret.
+fn extract_admin_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            headers
+                .get("x-admin-token")
+                .and_then(|value| value.to_str().ok())
+                .filter(|value| !value.is_empty())
+        })
+}
+
 pub async fn ingest(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(templates): Json<Vec<IngestTemplate>>,
 ) -> Result<Json<IngestResponse>, (StatusCode, String)> {
+    let Some(expected_token) = state.admin_ingest_token.as_deref() else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "admin ingest token not configured".to_string(),
+        ));
+    };
+
+    let Some(provided_token) = extract_admin_token(&headers) else {
+        return Err((StatusCode::UNAUTHORIZED, "admin token required".to_string()));
+    };
+
+    if provided_token != expected_token {
+        return Err((StatusCode::UNAUTHORIZED, "invalid admin token".to_string()));
+    }
+
     let (Some(qdrant), Some(engine)) = (&state.qdrant, &state.embeddings) else {
         return Err((StatusCode::SERVICE_UNAVAILABLE, "Qdrant or embedding engine not configured".to_string()));
     };

@@ -58,6 +58,8 @@ echo ""
 echo "Create the following files in $APP_DIR before running docker compose:"
 echo ""
 echo "  $APP_DIR/secrets/pg_password.txt   — Postgres password (no newline)"
+echo "  $APP_DIR/secrets/session_secret.txt — Session HMAC secret (no newline)"
+echo "  $APP_DIR/secrets/admin_ingest_token.txt — Admin token for template ingest"
 echo "  $APP_DIR/.env.prod                 — Backend env vars (see below)"
 echo "  $APP_DIR/.env.n8n                  — n8n env vars (see below)"
 echo ""
@@ -65,7 +67,8 @@ echo ".env.prod:"
 cat <<'EOF'
 ANTHROPIC_API_KEY=sk-ant-...
 DATABASE_URL=postgresql://pointe:<PG_PASSWORD>@postgres:5432/pointe
-SESSION_SECRET=<random-64-char-hex>
+SESSION_SECRET_FILE=/run/secrets/session_secret
+ADMIN_INGEST_TOKEN_FILE=/run/secrets/admin_ingest_token
 RESEND_API_KEY=re_...
 BASE_URL=https://go.pointe.dev
 OWNER_EMAIL=your@email.com

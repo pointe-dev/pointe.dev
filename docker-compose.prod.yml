@@ -21,6 +21,8 @@ services:
       RUST_LOG: info
       BIND_ADDR: "0.0.0.0:3001"
       N8N_URL: "http://n8n:5678"
+      SESSION_SECRET_FILE: /run/secrets/session_secret
+      ADMIN_INGEST_TOKEN_FILE: /run/secrets/admin_ingest_token
       # QDRANT_URL: "http://qdrant:6333"  # re-enable once fastembed crash is resolved
     env_file: .env.prod
     volumes:
@@ -196,6 +198,10 @@ networks:
 secrets:
   pg_password:
     file: ./secrets/pg_password.txt
+  session_secret:
+    file: ./secrets/session_secret.txt
+  admin_ingest_token:
+    file: ./secrets/admin_ingest_token.txt
 
 volumes:
   caddy_data:

@@ -18,6 +18,7 @@ use axum::{
     Json, Router,
 };
 use axum_test::TestServer;
+        admin_ingest_token: Some("integration-admin-token".to_string()),
 use backend_lib::{
     pipeline::PipelineStore,
     pitch::{PitchResult, PitchSlide, PitchStore},
@@ -102,6 +103,12 @@ fn stripe_webhook_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
+fn ingest_router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/api/admin/ingest", post(backend_lib::handlers::ingest::ingest))
+        .with_state(state)
+}
+
 // ── GET /api/health ────────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -138,6 +145,18 @@ async fn get_services_returns_200_with_services_array() {
     let body: Value = resp.json();
     assert!(body["services"].is_array(), "should have a 'services' array");
     assert!(!body["services"].as_array().unwrap().is_empty());
+}
+
+// ── POST /api/admin/ingest ────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn admin_ingest_requires_token() {
+    let state = test_state();
+    let app = ingest_router(state);
+    let server = TestServer::new(app).unwrap();
+
+    let resp = server.post("/api/admin/ingest").json(&json!([])).await;
+    resp.assert_status(StatusCode::UNAUTHORIZED);
 }
 
 // ── GET /api/pitch/result — happy path ────────────────────────────────────────

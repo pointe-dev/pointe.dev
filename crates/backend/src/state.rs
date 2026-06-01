@@ -19,6 +19,8 @@ pub struct AppState {
     pub stripe: Option<StripeClient>,
     /// HMAC secret for signing persistent session tokens and confirm links.
     pub session_secret: Vec<u8>,
+    /// Admin token required to authorize template ingestion.
+    pub admin_ingest_token: Option<String>,
     /// Resend API key for transactional email. None → log link to console.
     pub resend_api_key: Option<String>,
     /// Public base URL used to build confirmation links (e.g. "https://pointe.dev").

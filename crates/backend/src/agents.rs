@@ -1171,6 +1171,7 @@ mod tests {
             embeddings: None,
             stripe: None,
             session_secret: b"test".to_vec(),
+            admin_ingest_token: None,
             resend_api_key: None,
             base_url: "http://localhost".to_string(),
             owner_email: None,

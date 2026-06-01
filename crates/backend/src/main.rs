@@ -12,10 +12,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
+use tower_http::trace::TraceLayer;
 use tower_http::services::{ServeDir, ServeFile};
-use tracing_subscriber;
+use tracing_subscriber::EnvFilter;
 
 mod agents;
+mod config;
 mod email;
 mod embeddings;
 mod handlers;
@@ -698,7 +700,11 @@ async fn handle_ai_chat(
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
-    tracing_subscriber::fmt::init();
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .compact()
+        .init();
 
     let http = reqwest::Client::new();
     let anthropic_key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY must be set");
@@ -741,12 +747,11 @@ async fn main() {
         }
     };
 
-    let session_secret = std::env::var("SESSION_SECRET")
-        .unwrap_or_else(|_| {
-            tracing::warn!("SESSION_SECRET not set — using insecure default (set it in production)");
-            "pointe-dev-default-secret-change-in-prod".to_string()
-        })
-        .into_bytes();
+    let session_secret = config::load_session_secret();
+    let admin_ingest_token = config::load_admin_ingest_token();
+    if admin_ingest_token.is_none() {
+        tracing::warn!("ADMIN_INGEST_TOKEN not set — /api/admin/ingest will reject requests");
+    }
 
     let resend_api_key = std::env::var("RESEND_API_KEY").ok();
     if resend_api_key.is_none() {
@@ -798,6 +803,7 @@ async fn main() {
         embeddings,
         stripe,
         session_secret,
+        admin_ingest_token,
         resend_api_key,
         base_url,
         owner_email,
@@ -835,6 +841,7 @@ async fn main() {
                 .layer(middleware::from_fn(no_store)),
         )
         .layer(CorsLayer::permissive())
+        .layer(TraceLayer::new_for_http())
         .layer(CompressionLayer::new());
 
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3001".to_string());
