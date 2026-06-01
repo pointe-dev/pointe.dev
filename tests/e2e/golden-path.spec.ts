@@ -59,7 +59,13 @@ function collectErrors(messages: ConsoleMessage[]): string[] {
         !t.includes("ResizeObserver loop") &&
         !t.includes("favicon") &&
         !t.includes("Cross-Origin") &&
-        !t.includes("ERR_BLOCKED_BY_CLIENT") // ad blockers
+        !t.includes("ERR_BLOCKED_BY_CLIENT") && // ad blockers
+        // Cloudflare blocks GitHub Actions' datacenter IPs, so API calls
+        // (/api/chat) made during the test return 403 in CI. This is an
+        // environmental artefact, not an app error — see the note at the
+        // bottom of this file. The "AI response appears" test still verifies
+        // the API works from a real browser.
+        !t.includes("status of 403")
     );
 }
 
