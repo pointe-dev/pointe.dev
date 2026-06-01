@@ -774,8 +774,11 @@ async fn main() {
                     if let Err(e) = pitch::run_migrations(&pool).await {
                         tracing::warn!("DB migration failed: {e} — falling back to in-memory");
                         None
+                    } else if let Err(e) = sessions::run_migrations(&pool).await {
+                        tracing::warn!("Session DB migration failed: {e} — falling back to in-memory");
+                        None
                     } else {
-                        tracing::info!("Postgres connected — pitch persistence enabled");
+                        tracing::info!("Postgres connected — pitch + session persistence enabled");
                         Some(pool)
                     }
                 }
@@ -791,12 +794,14 @@ async fn main() {
         }
     };
 
+    let sessions = SessionStore::with_db(db.clone()).await;
+
     let state = Arc::new(AppState {
         anthropic_key,
         http,
         system_prompt,
         langfuse,
-        sessions: SessionStore::new(),
+        sessions,
         pipelines: PipelineStore::new(),
         pitches: PitchStore::new(db.clone()),
         qdrant,

@@ -8,13 +8,18 @@ pub const FREE_MESSAGES: u32 = 5;
 
 type HmacSha256 = Hmac<Sha256>;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Session {
     pub message_count: u32,
     pub unlocked: bool,
     pub email: Option<String>,
 }
 
+/// In-memory store with optional Postgres write-through.
+/// Memory is L1 (the hot path stays lock-only, no DB await under load).
+/// DB is L2 (survives restarts). On boot the maps are hydrated from DB so the
+/// existing in-memory gate logic stays correct without per-read DB lookups.
+/// If DATABASE_URL is not set the store works purely in-memory.
 #[derive(Clone)]
 pub struct SessionStore {
     /// Primary sessions keyed by session_id (UUID or signed token).
@@ -22,13 +27,109 @@ pub struct SessionStore {
     /// Secondary rate limit keyed by SHA-256(ip|fingerprint).
     /// Prevents localStorage-clearing from resetting the free tier.
     fp_limits: Arc<RwLock<HashMap<String, u32>>>,
+    db: Option<sqlx::PgPool>,
 }
 
 impl SessionStore {
+    /// In-memory only (db = None). Used by tests and the no-DATABASE_URL path.
     pub fn new() -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             fp_limits: Arc::new(RwLock::new(HashMap::new())),
+            db: None,
+        }
+    }
+
+    /// Construct with optional Postgres write-through, hydrating the in-memory
+    /// maps from the `sessions` / `fp_limits` tables so restarts don't reset
+    /// unlock state or the free-message gate.
+    pub async fn with_db(db: Option<sqlx::PgPool>) -> Self {
+        let store = Self {
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            fp_limits: Arc::new(RwLock::new(HashMap::new())),
+            db,
+        };
+        store.hydrate().await;
+        store
+    }
+
+    async fn hydrate(&self) {
+        let Some(pool) = &self.db else { return };
+
+        match sqlx::query_as::<_, (String, i32, bool, Option<String>)>(
+            "SELECT session_key, message_count, unlocked, email FROM sessions",
+        )
+        .fetch_all(pool)
+        .await
+        {
+            Ok(rows) => {
+                let mut w = self.sessions.write().await;
+                for (key, count, unlocked, email) in rows {
+                    w.insert(key, Session { message_count: count.max(0) as u32, unlocked, email });
+                }
+                tracing::info!("[sessions] hydrated {} sessions from DB", w.len());
+            }
+            Err(e) => tracing::warn!("[sessions] hydrate sessions failed: {e}"),
+        }
+
+        match sqlx::query_as::<_, (String, i32)>(
+            "SELECT fp_key, message_count FROM fp_limits",
+        )
+        .fetch_all(pool)
+        .await
+        {
+            Ok(rows) => {
+                let mut w = self.fp_limits.write().await;
+                for (key, count) in rows {
+                    w.insert(key, count.max(0) as u32);
+                }
+                tracing::info!("[sessions] hydrated {} fp buckets from DB", w.len());
+            }
+            Err(e) => tracing::warn!("[sessions] hydrate fp_limits failed: {e}"),
+        }
+    }
+
+    // ── Write-through helpers ─────────────────────────────────────────────
+    // Called after the in-memory mutation, with the lock already released, so
+    // a slow/failed DB write never blocks or breaks the request path.
+
+    async fn persist_session(&self, key: &str, s: &Session) {
+        let Some(pool) = &self.db else { return };
+        if let Err(e) = sqlx::query(
+            "INSERT INTO sessions (session_key, message_count, unlocked, email, updated_at)
+             VALUES ($1, $2, $3, $4, NOW())
+             ON CONFLICT (session_key) DO UPDATE SET
+                 message_count = EXCLUDED.message_count,
+                 unlocked      = EXCLUDED.unlocked,
+                 email         = EXCLUDED.email,
+                 updated_at    = NOW()",
+        )
+        .bind(key)
+        .bind(s.message_count as i32)
+        .bind(s.unlocked)
+        .bind(&s.email)
+        .execute(pool)
+        .await
+        {
+            tracing::warn!("[sessions] DB write failed for session={key}: {e}");
+        }
+    }
+
+    async fn persist_fp(&self, key: &str, count: u32) {
+        let Some(pool) = &self.db else { return };
+        if let Err(e) = sqlx::query(
+            "INSERT INTO fp_limits (fp_key, message_count, updated_at)
+             VALUES ($1, $2, NOW())
+             ON CONFLICT (fp_key) DO UPDATE SET
+                 message_count = EXCLUDED.message_count,
+                 updated_at    = NOW()",
+        )
+        .bind(key)
+        .bind(count as i32)
+        .execute(pool)
+        .await
+        {
+            tracing::warn!("[sessions] fp DB write failed for {key}: {e}");
         }
     }
 
@@ -111,9 +212,15 @@ impl SessionStore {
             let r = self.sessions.read().await;
             if r.get(session_key).map(|s| s.unlocked).unwrap_or(false) {
                 drop(r);
-                let mut w = self.sessions.write().await;
-                if let Some(s) = w.get_mut(session_key) {
-                    s.message_count += 1;
+                let snapshot = {
+                    let mut w = self.sessions.write().await;
+                    w.get_mut(session_key).map(|s| {
+                        s.message_count += 1;
+                        s.clone()
+                    })
+                };
+                if let Some(s) = snapshot {
+                    self.persist_session(session_key, &s).await;
                 }
                 return true;
             }
@@ -129,26 +236,40 @@ impl SessionStore {
                 return false;
             }
             // Both buckets under limit — allow and increment both
-            {
+            let session_snapshot = {
                 let mut w = self.sessions.write().await;
                 let s = w.entry(session_key.to_string()).or_default();
                 s.message_count += 1;
-            }
-            {
+                s.clone()
+            };
+            let fp_total = {
                 let mut w = self.fp_limits.write().await;
-                *w.entry(fpk.to_string()).or_default() += 1;
-            }
+                let c = w.entry(fpk.to_string()).or_default();
+                *c += 1;
+                *c
+            };
+            self.persist_session(session_key, &session_snapshot).await;
+            self.persist_fp(fpk, fp_total).await;
             return true;
         }
 
         // No fingerprint — fall back to UUID-only gate
-        let mut w = self.sessions.write().await;
-        let s = w.entry(session_key.to_string()).or_default();
-        if s.message_count < FREE_MESSAGES {
-            s.message_count += 1;
-            true
-        } else {
-            false
+        let session_snapshot = {
+            let mut w = self.sessions.write().await;
+            let s = w.entry(session_key.to_string()).or_default();
+            if s.message_count < FREE_MESSAGES {
+                s.message_count += 1;
+                Some(s.clone())
+            } else {
+                None
+            }
+        };
+        match session_snapshot {
+            Some(s) => {
+                self.persist_session(session_key, &s).await;
+                true
+            }
+            None => false,
         }
     }
 
@@ -161,7 +282,7 @@ impl SessionStore {
         email: String,
         token: &str,
     ) -> bool {
-        {
+        let (session_snapshot, token_snapshot) = {
             let mut w = self.sessions.write().await;
             let s = w.entry(session_key.to_string()).or_default();
             if s.unlocked {
@@ -169,12 +290,16 @@ impl SessionStore {
             }
             s.unlocked = true;
             s.email = Some(email.clone());
+            let session_snapshot = s.clone();
 
             // Pre-create unlocked session for the token key
             let token_session = w.entry(token.to_string()).or_default();
             token_session.unlocked = true;
             token_session.email = Some(email.clone());
-        }
+            (session_snapshot, token_session.clone())
+        };
+        self.persist_session(session_key, &session_snapshot).await;
+        self.persist_session(token, &token_snapshot).await;
         tracing::info!("Lead captured — email: {email} session: {session_key}");
         true
     }
@@ -200,6 +325,34 @@ impl SessionStore {
             .map(|s| s.unlocked)
             .unwrap_or(false)
     }
+}
+
+/// Creates the sessions / fp_limits tables if they don't exist.
+pub async fn run_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS sessions (
+            session_key   TEXT PRIMARY KEY,
+            message_count INTEGER     NOT NULL DEFAULT 0,
+            unlocked      BOOLEAN     NOT NULL DEFAULT FALSE,
+            email         TEXT,
+            updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS fp_limits (
+            fp_key        TEXT PRIMARY KEY,
+            message_count INTEGER     NOT NULL DEFAULT 0,
+            updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    tracing::info!("[sessions] DB migration complete");
+    Ok(())
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
@@ -437,5 +590,99 @@ mod tests {
     async fn is_unlocked_false_for_new_session() {
         let store = SessionStore::new();
         assert!(!store.is_unlocked("brand-new-session").await);
+    }
+
+    // ── Postgres write-through / hydration ─────────────────────────────────
+    //
+    // These require a real Postgres. They read TEST_DATABASE_URL and skip
+    // (pass) when it is unset so CI — which has no DB service — stays green.
+    // Run locally with: TEST_DATABASE_URL=postgres://… cargo test -p backend
+
+    async fn test_pool() -> Option<sqlx::PgPool> {
+        let url = std::env::var("TEST_DATABASE_URL").ok()?;
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&url)
+            .await
+            .expect("TEST_DATABASE_URL set but connection failed");
+        run_migrations(&pool).await.expect("migrations should run");
+        Some(pool)
+    }
+
+    #[tokio::test]
+    async fn with_db_none_behaves_in_memory() {
+        let store = SessionStore::with_db(None).await;
+        for _ in 0..FREE_MESSAGES {
+            assert!(store.check_and_increment("k", None).await);
+        }
+        assert!(!store.check_and_increment("k", None).await);
+    }
+
+    #[tokio::test]
+    async fn session_state_survives_restart() {
+        let Some(pool) = test_pool().await else { return };
+        let key = format!("hydrate-test-{}", uuid_like());
+        // clean any prior run
+        sqlx::query("DELETE FROM sessions WHERE session_key = $1")
+            .bind(&key).execute(&pool).await.unwrap();
+
+        let store = SessionStore::with_db(Some(pool.clone())).await;
+        store.check_and_increment(&key, None).await;
+        store.check_and_increment(&key, None).await;
+
+        // Simulate a restart: brand-new store, same pool — must hydrate.
+        let restarted = SessionStore::with_db(Some(pool.clone())).await;
+        assert_eq!(restarted.message_count(&key).await, 2);
+
+        sqlx::query("DELETE FROM sessions WHERE session_key = $1")
+            .bind(&key).execute(&pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unlock_survives_restart() {
+        let Some(pool) = test_pool().await else { return };
+        let key = format!("unlock-test-{}", uuid_like());
+        let tok = SessionStore::sign_token("restart@example.com", SECRET);
+        sqlx::query("DELETE FROM sessions WHERE session_key = ANY($1)")
+            .bind(vec![key.clone(), tok.clone()]).execute(&pool).await.unwrap();
+
+        let store = SessionStore::with_db(Some(pool.clone())).await;
+        store.unlock_with_email(&key, "restart@example.com".to_string(), &tok).await;
+
+        let restarted = SessionStore::with_db(Some(pool.clone())).await;
+        assert!(restarted.is_unlocked(&key).await, "unlock must persist across restart");
+        assert!(restarted.is_unlocked(&tok).await, "token session must persist too");
+        assert_eq!(restarted.get_email(&key).await, Some("restart@example.com".to_string()));
+
+        sqlx::query("DELETE FROM sessions WHERE session_key = ANY($1)")
+            .bind(vec![key, tok]).execute(&pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn fp_limit_survives_restart() {
+        let Some(pool) = test_pool().await else { return };
+        let fp = format!("fp-test-{}", uuid_like());
+        sqlx::query("DELETE FROM fp_limits WHERE fp_key = $1")
+            .bind(&fp).execute(&pool).await.unwrap();
+
+        let store = SessionStore::with_db(Some(pool.clone())).await;
+        // exhaust the fp bucket across one session
+        for _ in 0..FREE_MESSAGES {
+            store.check_and_increment("sess-fp", Some(&fp)).await;
+        }
+
+        // After restart a fresh session sharing the fp must still be blocked.
+        let restarted = SessionStore::with_db(Some(pool.clone())).await;
+        assert!(!restarted.check_and_increment("fresh-sess", Some(&fp)).await);
+
+        sqlx::query("DELETE FROM fp_limits WHERE fp_key = $1")
+            .bind(&fp).execute(&pool).await.unwrap();
+    }
+
+    // Cheap unique suffix so concurrent test runs don't collide on keys.
+    fn uuid_like() -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        format!("{nanos}")
     }
 }
