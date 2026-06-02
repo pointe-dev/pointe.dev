@@ -23,11 +23,13 @@ services:
       N8N_URL: "http://n8n:5678"
       SESSION_SECRET_FILE: /run/secrets/session_secret
       ADMIN_INGEST_TOKEN_FILE: /run/secrets/admin_ingest_token
+      LOG_DIR: /var/log/pointe   # daily-rolling file logs; survives container recreate
       # QDRANT_URL: "http://qdrant:6333"  # re-enable once fastembed crash is resolved
     env_file: .env.prod
     volumes:
       - model_cache:/root/.cache       # persists BGE-M3 download (~300 MB)
       - fastembed_cache:/app/.fastembed_cache  # persists multilingual-e5-large (~2.1 GB)
+      - backend_logs:/var/log/pointe   # persistent app logs (json-file logs die on recreate)
     networks: [pointe-net]
     restart: unless-stopped
     depends_on:
@@ -101,3 +103,4 @@ volumes:
   n8n_data:
   model_cache:
   fastembed_cache:
+  backend_logs:

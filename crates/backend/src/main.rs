@@ -574,14 +574,46 @@ async fn handle_ai_chat(
     }))
 }
 
+/// Initialises tracing to stdout, plus a daily-rolling file when `LOG_DIR` is
+/// set (prod, via a mounted Docker volume that survives container recreate).
+/// Returns the non-blocking writer guard, which the caller must keep alive.
+fn init_tracing() -> Option<tracing_appender::non_blocking::WorkerGuard> {
+    use tracing_subscriber::prelude::*;
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let stdout_layer = tracing_subscriber::fmt::layer().compact();
+
+    match std::env::var("LOG_DIR") {
+        Ok(dir) if !dir.is_empty() => {
+            let appender = tracing_appender::rolling::daily(&dir, "backend.log");
+            let (writer, guard) = tracing_appender::non_blocking(appender);
+            let file_layer = tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(writer);
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(stdout_layer)
+                .with(file_layer)
+                .init();
+            tracing::info!("File logging enabled at {dir}/backend.log");
+            Some(guard)
+        }
+        _ => {
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(stdout_layer)
+                .init();
+            None
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .compact()
-        .init();
+    // Keep the WorkerGuard alive for the whole program: dropping it flushes and
+    // stops the background log-writing thread. Bound to a named local in main so
+    // it lives until the process exits.
+    let _log_guard = init_tracing();
 
     let http = reqwest::Client::new();
     let anthropic_key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY must be set");

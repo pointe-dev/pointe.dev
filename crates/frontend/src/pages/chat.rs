@@ -157,6 +157,12 @@ struct AuthStatusResponse {
     unlocked: bool,
 }
 
+#[derive(Deserialize)]
+struct PipelineStatusResponse {
+    /// Tagged enum: `{"stage":"failed","reason":...}` etc.
+    stage: serde_json::Value,
+}
+
 fn strip_block<'a>(content: &'a str, tag: &str) -> (&'a str, Option<&'a str>) {
     let open = Box::leak(format!("```{}", tag).into_boxed_str()) as &str;
     let close = "\n```";
@@ -290,6 +296,26 @@ fn save_history(messages: &[(bool, String, String)]) {
     }
 }
 
+/// Persists the in-flight pitch pipeline id so polling can resume after a
+/// page refresh. The pitch payload itself lives server-side (Postgres), so we
+/// only need the id to re-poll `/api/pitch/result`.
+fn save_pitch_pipeline(id: &Option<String>) {
+    if !is_consent_given() { return; }
+    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        match id {
+            Some(v) => { let _ = s.set_item("pitch_pipeline_id", v); }
+            None    => { let _ = s.remove_item("pitch_pipeline_id"); }
+        }
+    }
+}
+
+fn load_pitch_pipeline() -> Option<String> {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item("pitch_pipeline_id").ok().flatten())
+        .filter(|v| !v.is_empty())
+}
+
 fn render_markdown(input: &str) -> String {
     use pulldown_cmark::{html::push_html, Options, Parser};
     let opts = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES;
@@ -346,6 +372,16 @@ pub fn Chat() -> impl IntoView {
     let pitch_price_cents: RwSignal<u32>      = create_rw_signal(0);
     let pitch_price_validity: RwSignal<String> = create_rw_signal(String::new());
     let pitch_poll_tick: RwSignal<u32>        = create_rw_signal(0);
+    // Set when the pipeline hard-fails (agent error / record gone after restart)
+    // so we stop the spinner and show a real message instead of polling forever.
+    let pitch_failed: RwSignal<bool>          = create_rw_signal(false);
+
+    // Resume a pitch pipeline that was in flight (or completed) before a refresh.
+    // The poll below resolves it to ready / failed via the server.
+    if let Some(pid) = load_pitch_pipeline() {
+        pipeline_id.set(Some(pid));
+        pitch_loading.set(true);
+    }
 
     // Email confirmation polling
     let email_confirmed: RwSignal<bool> = create_rw_signal(false);
@@ -367,6 +403,11 @@ pub fn Chat() -> impl IntoView {
         save_history(&messages.get());
     });
 
+    // Persist the in-flight pitch pipeline id so polling resumes after refresh
+    create_effect(move |_| {
+        save_pitch_pipeline(&pipeline_id.get());
+    });
+
     create_effect(move |_| {
         let _ = messages.get();
         let _ = is_loading.get();
@@ -380,16 +421,24 @@ pub fn Chat() -> impl IntoView {
     });
 
     // ── Pitch result poll ─────────────────────────────────────────────────────
+    // Resolves to one of three terminal states (never spins forever):
+    //   • ready  → pitch published (served from Postgres, survives restart)
+    //   • failed → pipeline marked `failed`, its record is gone (restart), or
+    //              the safety-net timeout fired
+    //   • else   → keep polling
     let sid_pitch = session_id.clone();
     create_effect(move |_| {
-        let _tick = pitch_poll_tick.get();
+        let attempt = pitch_poll_tick.get();
         if !pitch_loading.get_untracked() { return; }
         let sid = sid_pitch.clone();
+        let pid = pipeline_id.get_untracked();
         spawn_local(async move {
             sleep_ms(3000).await;
-            match Request::get(&format!("/api/pitch/result?sid={}", sid)).send().await {
-                Ok(r) => match r.json::<PitchPollResponse>().await {
-                    Ok(data) if data.ready => {
+
+            // 1) Pitch ready?
+            if let Ok(r) = Request::get(&format!("/api/pitch/result?sid={}", sid)).send().await {
+                if let Ok(data) = r.json::<PitchPollResponse>().await {
+                    if data.ready {
                         let slides       = data.slides;
                         let manual_quote = data.manual_quote;
                         let cents        = data.price_eur_cents;
@@ -401,11 +450,36 @@ pub fn Chat() -> impl IntoView {
                             pitch_price_validity.set(validity);
                             pitch_loading.set(false);
                         });
+                        return;
                     }
-                    _ => pitch_poll_tick.update(|t| *t += 1),
-                },
-                Err(_) => pitch_poll_tick.update(|t| *t += 1),
+                }
             }
+
+            // 2) Hard failure? Pipeline marked `failed`, or its record is gone
+            //    (in-memory store wiped by a restart — can't recover this run).
+            if let Some(pid) = pid {
+                if let Ok(resp) = Request::get(&format!("/api/pipeline/{}", pid)).send().await {
+                    let failed = if resp.status() == 404 {
+                        attempt >= 2 // tolerate a brief startup race, then give up
+                    } else {
+                        resp.json::<PipelineStatusResponse>().await.ok()
+                            .and_then(|s| s.stage.get("stage").and_then(|v| v.as_str()).map(|v| v == "failed"))
+                            .unwrap_or(false)
+                    };
+                    if failed {
+                        batch(move || { pitch_failed.set(true); pitch_loading.set(false); });
+                        return;
+                    }
+                }
+            }
+
+            // 3) Safety net (~5 min) — never poll indefinitely.
+            if attempt >= 100 {
+                batch(move || { pitch_failed.set(true); pitch_loading.set(false); });
+                return;
+            }
+
+            pitch_poll_tick.update(|t| *t += 1);
         });
     });
 
@@ -510,6 +584,7 @@ pub fn Chat() -> impl IntoView {
                                 messages_used.set(data.messages_used);
                                 if let Some(pid) = data.pipeline_id {
                                     pipeline_id.set(Some(pid));
+                                    pitch_failed.set(false);
                                     pitch_loading.set(true);
                                     pitch_poll_tick.update(|t| *t += 1);
                                 }
@@ -932,9 +1007,10 @@ pub fn Chat() -> impl IntoView {
                                 })
                             }}
                             {move || {
-                                let show = current_pitch.get().is_some()
-                                    || pitch_loading.get()
-                                    || pitch_manual_quote.get();
+                                let show = !pitch_failed.get()
+                                    && (current_pitch.get().is_some()
+                                        || pitch_loading.get()
+                                        || pitch_manual_quote.get());
                                 show.then(|| view! {
                                     <button
                                         class=move || if pitch_loading.get() {
@@ -952,6 +1028,11 @@ pub fn Chat() -> impl IntoView {
                                     </button>
                                 })
                             }}
+                            {move || pitch_failed.get().then(|| view! {
+                                <div class="pitch-failed-note">
+                                    "⚠️ Un souci technique a interrompu la préparation de votre proposition. Notre équipe a été notifiée et reviendra vers vous rapidement."
+                                </div>
+                            })}
                         </div>
                     </div>
                 </div>

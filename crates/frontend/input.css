@@ -1972,6 +1972,18 @@ html.dark {
   text-align: center;
 }
 
+.pitch-failed-note {
+  margin-top: 8px;
+  max-width: 320px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #fca5a5;
+  background: rgba(220, 38, 38, 0.08);
+  border: 1px solid rgba(220, 38, 38, 0.25);
+  border-radius: 12px;
+  padding: 10px 14px;
+}
+
 /* ── Consent banner ──────────────────────────────────────────────── */
 .consent-banner {
   position: fixed;
