@@ -312,93 +312,6 @@ async fn send_confirm_email(
         .inspect(|_| tracing::info!("Confirmation email sent to {to_email}"))
 }
 
-// ── Pitch: send proposal by email ────────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct SendQuoteRequest {
-    email: String,
-    slides: Vec<serde_json::Value>,
-}
-
-async fn handle_send_quote(
-    State(state): State<Arc<AppState>>,
-    Json(payload): Json<SendQuoteRequest>,
-) -> Json<serde_json::Value> {
-    let api_key = match &state.resend_api_key {
-        Some(k) => k.clone(),
-        None => {
-            tracing::warn!("[quote] RESEND_API_KEY not set");
-            return Json(serde_json::json!({ "ok": false, "error": "email not configured" }));
-        }
-    };
-
-    let client_email = payload.email.trim().to_lowercase();
-    if !client_email.contains('@') {
-        return Json(serde_json::json!({ "ok": false, "error": "invalid email" }));
-    }
-
-    // Build slide HTML
-    let slides_html = payload.slides.iter().map(|s| {
-        let title  = s["title"].as_str().unwrap_or("");
-        let body   = s["body"].as_str().unwrap_or("");
-        let points = s["points"].as_array().map(|arr|
-            arr.iter().map(|p| format!(
-                "<li style='margin:4px 0;color:#d1d5db'>{}</li>",
-                p.as_str().unwrap_or("")
-            )).collect::<String>()
-        ).unwrap_or_default();
-        format!(
-            "<div style='margin-bottom:24px'>\
-               <h3 style='color:#f3f4f6;font-size:15px;margin:0 0 6px'>{title}</h3>\
-               <p style='color:#9ca3af;font-size:13px;margin:0 0 8px'>{body}</p>\
-               {}</div>",
-            if points.is_empty() { String::new() }
-            else { format!("<ul style='margin:0;padding-left:20px'>{points}</ul>") }
-        )
-    }).collect::<String>();
-
-    let client_html = format!(
-        r#"<!DOCTYPE html><html><body style="font-family:sans-serif;background:#0a0a0a;margin:0;padding:40px 20px">
-<div style="max-width:560px;margin:auto;background:#111;border-radius:16px;padding:40px;border:1px solid #222">
-  <p style="color:#dc2626;font-size:20px;font-weight:700;margin:0 0 24px">pointe.dev</p>
-  <h1 style="color:#f3f4f6;font-size:20px;font-weight:600;margin:0 0 24px">Votre proposition</h1>
-  {slides_html}
-  <p style="color:#6b7280;font-size:12px;margin-top:28px">Notre équipe vous contactera prochainement avec une estimation détaillée.</p>
-</div></body></html>"#
-    );
-
-    // Notify owner in background
-    if let Some(owner) = &state.owner_email {
-        let owner_html = format!(
-            "<div style='font-family:sans-serif;padding:24px'>\
-               <h2>Nouvelle proposition demandée</h2>\
-               <p><b>Client :</b> {client_email}</p>\
-             </div>"
-        );
-        let http2  = state.http.clone();
-        let api2   = api_key.clone();
-        let owner  = owner.clone();
-        tokio::spawn(async move {
-            if let Err(e) = resend_send(&http2, &api2, &owner,
-                "🎯 Nouvelle proposition demandée — pointe.dev", &owner_html).await {
-                tracing::warn!("[quote] owner notify failed: {e}");
-            }
-        });
-    }
-
-    match resend_send(&state.http, &api_key, &client_email,
-        "Votre proposition pointe.dev", &client_html).await {
-        Ok(()) => {
-            tracing::info!("[quote] proposal sent to {client_email}");
-            Json(serde_json::json!({ "ok": true }))
-        }
-        Err(e) => {
-            tracing::error!("[quote] send failed: {e}");
-            Json(serde_json::json!({ "ok": false, "error": e }))
-        }
-    }
-}
-
 // ── Pitch: n8n pipeline callback ─────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -768,7 +681,6 @@ async fn main() {
         .route("/api/ai/chat", post(handle_ai_chat))
         .route("/api/auth/unlock", post(handle_unlock))
         .route("/api/auth/confirm", get(handle_confirm))
-        .route("/api/pitch/send-quote", post(handle_send_quote))
         .route("/api/pitch/pipeline-result", post(handle_pipeline_result))
         .route("/api/pitch/result", get(handle_pitch_poll))
         .route("/api/auth/status", get(handle_auth_status))
