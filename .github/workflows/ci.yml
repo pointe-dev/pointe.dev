@@ -12,8 +12,11 @@ name: CI
 # AFTER a deploy, never gate it — gating deploy on prod health was circular).
 
 on:
+  # Feature branches are validated via the pull_request event; restricting
+  # push to main avoids a duplicate run when a branch is pushed AND a PR is
+  # opened for the same commit. main still gets CI on the post-merge push.
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
     branches: ["**"]
   workflow_dispatch:
