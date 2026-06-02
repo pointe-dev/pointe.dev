@@ -41,6 +41,41 @@ fn strip_fences(s: &str) -> &str {
         .trim()
 }
 
+/// Extracts the first balanced JSON value (object or array) from an LLM
+/// response, tolerating a prose preamble/suffix and ``` fences — e.g. a critic
+/// that prepends "I need to check the connections carefully." before the JSON.
+/// Falls back to the fence-stripped string when no JSON delimiters are found,
+/// so the caller's own parse error still surfaces.
+fn extract_json(s: &str) -> &str {
+    let stripped = strip_fences(s);
+    let bytes = stripped.as_bytes();
+    let Some(start) = bytes.iter().position(|&b| b == b'{' || b == b'[') else {
+        return stripped;
+    };
+    let open = bytes[start];
+    let close = if open == b'{' { b'}' } else { b']' };
+    let (mut depth, mut in_str, mut escaped) = (0i32, false, false);
+    for i in start..bytes.len() {
+        let b = bytes[i];
+        if in_str {
+            if escaped { escaped = false; }
+            else if b == b'\\' { escaped = true; }
+            else if b == b'"' { in_str = false; }
+            continue;
+        }
+        match b {
+            b'"' => in_str = true,
+            b if b == open => depth += 1,
+            b if b == close => {
+                depth -= 1;
+                if depth == 0 { return &stripped[start..=i]; }
+            }
+            _ => {}
+        }
+    }
+    stripped // unbalanced — let the caller's parse error surface
+}
+
 /// Single-turn call with prompt caching.
 /// `system` is always cached — static instructions shared across all pipeline runs.
 /// `user` is dynamic per-request context — not cached.
@@ -262,7 +297,7 @@ real and specific, and nothing is padded. Apply the same discipline.";
         SYSTEM, &user,
     ).await.map_err(|e| AgentError(format!("research: {e}")))?;
 
-    let structured: serde_json::Value = serde_json::from_str(strip_fences(&raw))
+    let structured: serde_json::Value = serde_json::from_str(extract_json(&raw))
         .map_err(|e| AgentError(format!("research JSON parse: {e} — raw: {raw}")))?;
 
     let summary = format!(
@@ -430,7 +465,7 @@ unknown node type makes the entire workflow fail to import and blocks deployment
     ).await.map_err(|e| AgentError(format!("builder: {e}")))?;
 
     ctx.workflow_json = Some(
-        serde_json::from_str(strip_fences(&raw)).map_err(|e| {
+        serde_json::from_str(extract_json(&raw)).map_err(|e| {
             let preview = &raw[..raw.len().min(500)];
             AgentError(format!("workflow JSON parse: {e}\nRaw (first 500): {preview}"))
         })?
@@ -536,8 +571,21 @@ verdict.";
     #[derive(serde::Deserialize)]
     struct Verdict { approved: bool, feedback: Option<String> }
 
-    let verdict: Verdict = serde_json::from_str(strip_fences(&raw))
-        .map_err(|e| AgentError(format!("critic verdict parse: {e} — raw: {raw}")))?;
+    // The critic occasionally answers in prose instead of JSON. Don't let that
+    // kill the whole pipeline (which would publish no pitch at all) — treat an
+    // unparseable verdict as a soft rejection so the builder retries and, after
+    // MAX_BUILD_ATTEMPTS, publish_manual_pitch still produces a proposal.
+    let verdict: Verdict = match serde_json::from_str(extract_json(&raw)) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("[critic] verdict parse failed: {e} — treating as rejection. raw: {raw}");
+            ctx.critic_feedback.push(
+                "Réponds UNIQUEMENT avec le JSON {\"approved\":bool,\"feedback\":string}, \
+                 sans aucun texte avant ou après.".to_string(),
+            );
+            return Ok(false);
+        }
+    };
 
     if verdict.approved {
         tracing::info!("[critic] approved on attempt {}", ctx.build_attempts);
@@ -712,7 +760,7 @@ Setup: {setup}€ (one-time) + {monthly}€/month\nJustification: {just}",
         &app.http, &app.anthropic_key, HAIKU, 600,
         SLIDES_SYSTEM, &slides_user,
     ).await {
-        Ok(raw) => serde_json::from_str(strip_fences(&raw)).ok(),
+        Ok(raw) => serde_json::from_str(extract_json(&raw)).ok(),
         Err(_) => {
             tracing::warn!("[pricing] slide generation failed — fallback used at publish");
             None
@@ -864,7 +912,7 @@ Integrations: {integrations}\nRisks: {risks}\n\
         feasibility_score: Option<f32>,
     }
 
-    let verdict: CriticOutput = match serde_json::from_str(strip_fences(&raw)) {
+    let verdict: CriticOutput = match serde_json::from_str(extract_json(&raw)) {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!("[pricing-critic] JSON parse failed: {e} — auto-approving");
@@ -1116,6 +1164,58 @@ mod tests {
     fn strip_fences_trims_surrounding_whitespace() {
         let input = "  \n{\"x\":1}\n  ";
         assert_eq!(strip_fences(input), "{\"x\":1}");
+    }
+
+    // ── extract_json ───────────────────────────────────────────────────────
+
+    #[test]
+    fn extract_json_strips_prose_preamble() {
+        // The exact shape that hard-failed a prod pipeline.
+        let input = "I need to check the connections carefully.\n{\"approved\":false,\"feedback\":\"x\"}";
+        assert_eq!(extract_json(input), "{\"approved\":false,\"feedback\":\"x\"}");
+    }
+
+    #[test]
+    fn extract_json_strips_prose_suffix() {
+        let input = "{\"approved\":true} — looks good to me!";
+        assert_eq!(extract_json(input), "{\"approved\":true}");
+    }
+
+    #[test]
+    fn extract_json_handles_nested_braces_and_arrays() {
+        let input = "here:\n{\"a\":[1,2],\"b\":{\"c\":3}} trailing";
+        assert_eq!(extract_json(input), "{\"a\":[1,2],\"b\":{\"c\":3}}");
+    }
+
+    #[test]
+    fn extract_json_ignores_braces_inside_strings() {
+        let input = "x {\"msg\":\"a } b { c\"} y";
+        assert_eq!(extract_json(input), "{\"msg\":\"a } b { c\"}");
+    }
+
+    #[test]
+    fn extract_json_handles_top_level_array() {
+        let input = "Réponse: [{\"label\":\"A\"}] voilà";
+        assert_eq!(extract_json(input), "[{\"label\":\"A\"}]");
+    }
+
+    #[test]
+    fn extract_json_strips_fences_then_extracts() {
+        let input = "```json\nblah {\"k\":1}\n```";
+        assert_eq!(extract_json(input), "{\"k\":1}");
+    }
+
+    #[test]
+    fn extract_json_no_json_returns_stripped() {
+        let input = "no json here at all";
+        assert_eq!(extract_json(input), "no json here at all");
+    }
+
+    #[test]
+    fn extract_json_unbalanced_returns_stripped() {
+        // Missing closing brace — fall back so the caller's parse error surfaces.
+        let input = "{\"a\":1";
+        assert_eq!(extract_json(input), "{\"a\":1");
     }
 
     // ── cache_1h ───────────────────────────────────────────────────────────
