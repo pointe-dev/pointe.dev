@@ -124,6 +124,16 @@ struct UnlockResponse {
     ok: bool,
 }
 
+#[derive(Serialize)]
+struct CheckoutRequest {
+    pipeline_id: String,
+}
+
+#[derive(Deserialize)]
+struct CheckoutResponse {
+    checkout_url: String,
+}
+
 #[derive(Deserialize, Clone)]
 struct PitchSlide {
     title: String,
@@ -389,6 +399,9 @@ pub fn Chat() -> impl IntoView {
     let pitch_price_cents: RwSignal<u32>      = create_rw_signal(0);
     let pitch_price_validity: RwSignal<String> = create_rw_signal(String::new());
     let pitch_poll_tick: RwSignal<u32>        = create_rw_signal(0);
+    // Stripe checkout (priced pitches only)
+    let checkout_pending: RwSignal<bool>      = create_rw_signal(false);
+    let checkout_error: RwSignal<bool>        = create_rw_signal(false);
     // Set when the pipeline hard-fails (agent error / record gone after restart)
     // so we stop the spinner and show a real message instead of polling forever.
     let pitch_failed: RwSignal<bool>          = create_rw_signal(false);
@@ -965,7 +978,39 @@ pub fn Chat() -> impl IntoView {
                                                         }
                                                     })
                                                 }}
-                                                <p class="pitch-quote-sent">"✓ Cette proposition a été envoyée à votre adresse email."</p>
+                                                <p class="pitch-quote-sent">"✓ Cette proposition vous a été envoyée par email."</p>
+                                                {move || pipeline_id.get().map(|pid| view! {
+                                                    <button
+                                                        class="btn-primary w-full pitch-checkout-btn"
+                                                        prop:disabled=move || checkout_pending.get()
+                                                        on:click=move |_| {
+                                                            if checkout_pending.get_untracked() { return; }
+                                                            let pid = pid.clone();
+                                                            batch(move || { checkout_pending.set(true); checkout_error.set(false); });
+                                                            spawn_local(async move {
+                                                                let resp = Request::post("/api/stripe/checkout")
+                                                                    .json(&CheckoutRequest { pipeline_id: pid }).unwrap()
+                                                                    .send().await;
+                                                                match resp {
+                                                                    Ok(r) if r.ok() => {
+                                                                        if let Ok(d) = r.json::<CheckoutResponse>().await {
+                                                                            let _ = web_sys::window()
+                                                                                .and_then(|w| w.location().set_href(&d.checkout_url).ok());
+                                                                            return;
+                                                                        }
+                                                                        batch(move || { checkout_error.set(true); checkout_pending.set(false); });
+                                                                    }
+                                                                    _ => batch(move || { checkout_error.set(true); checkout_pending.set(false); }),
+                                                                }
+                                                            });
+                                                        }
+                                                    >
+                                                        {move || if checkout_pending.get() { "Redirection…" } else { "Démarrer le projet →" }}
+                                                    </button>
+                                                })}
+                                                {move || checkout_error.get().then(|| view! {
+                                                    <p class="text-xs text-red-400 mt-2">"Paiement momentanément indisponible — réessayez ou contactez-nous."</p>
+                                                })}
                                                 </div>
                                             }.into_view()
                                         }}
