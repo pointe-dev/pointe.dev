@@ -11,6 +11,7 @@ pub mod email;
 pub mod embeddings;
 pub mod handlers;
 pub mod langfuse;
+pub mod pending;
 pub mod pipeline;
 pub mod pitch;
 pub mod qdrant;

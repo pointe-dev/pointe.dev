@@ -38,6 +38,7 @@ fn test_state() -> Arc<AppState> {
         langfuse: None,
         sessions: SessionStore::new(),
         pipelines: PipelineStore::new(),
+        pending: backend_lib::pending::PendingStore::new(),
         pitches: PitchStore::new(None),
         qdrant: None,
         embeddings: None,
