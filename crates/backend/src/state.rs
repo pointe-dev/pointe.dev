@@ -1,5 +1,6 @@
 use crate::embeddings::EmbeddingEngine;
 use crate::langfuse::LangfuseClient;
+use crate::pending::PendingStore;
 use crate::pipeline::PipelineStore;
 use crate::pitch::PitchStore;
 use crate::qdrant::QdrantStore;
@@ -13,6 +14,9 @@ pub struct AppState {
     pub langfuse: Option<LangfuseClient>,
     pub sessions: SessionStore,
     pub pipelines: PipelineStore,
+    /// Qualifications stashed between the chat gate and email confirmation,
+    /// then the pipeline id spawned after confirmation. Keyed by session_id.
+    pub pending: PendingStore,
     pub pitches: PitchStore,
     pub qdrant: Option<QdrantStore>,
     pub embeddings: Option<EmbeddingEngine>,

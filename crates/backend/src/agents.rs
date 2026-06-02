@@ -1266,6 +1266,7 @@ mod tests {
             langfuse: None,
             sessions: SessionStore::new(),
             pipelines: PipelineStore::new(),
+            pending: crate::pending::PendingStore::new(),
             pitches: PitchStore::new(None),
             qdrant: None,
             embeddings: None,

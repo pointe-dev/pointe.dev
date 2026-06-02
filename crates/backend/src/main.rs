@@ -22,6 +22,7 @@ mod email;
 mod embeddings;
 mod handlers;
 mod langfuse;
+mod pending;
 mod pipeline;
 mod pitch;
 mod qdrant;
@@ -71,6 +72,11 @@ struct ChatResponse {
     pipeline_id: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     options: Vec<ChatOption>,
+    /// True when the visitor qualified but isn't unlocked yet: the pipeline is
+    /// stashed (not spawned) until they confirm their email. The frontend opens
+    /// the email modal in response.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    needs_unlock: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -252,8 +258,24 @@ async fn handle_confirm(
     }
 
     let signed = SessionStore::sign_token(&email, &state.session_secret);
-    state.sessions.unlock_with_email(&session_id, email.clone(), &signed).await;
+    let first_unlock = state.sessions.unlock_with_email(&session_id, email.clone(), &signed).await;
     tracing::info!("Email confirmed — session unlocked for: {email}");
+
+    // First confirmation only: spawn the pipeline that was gated behind the
+    // email. `unlock_with_email` returns false on replays, so we never spawn
+    // twice from repeated link clicks.
+    if first_unlock {
+        if let Some(q) = state.pending.take_qualify(&session_id).await {
+            let id = state.pipelines.create(
+                session_id.clone(),
+                q.client_need,
+                Some(q.summary),
+            ).await;
+            pipeline::spawn(id, state.pipelines.clone(), state.clone());
+            state.pending.set_spawned(session_id.clone(), id.to_string()).await;
+            tracing::info!("Pipeline {id} launched after email unlock for session={session_id}");
+        }
+    }
 
     let redirect_url = format!("/?_sid={}", signed);
     Redirect::to(&redirect_url)
@@ -433,7 +455,10 @@ async fn handle_auth_status(
 ) -> Json<serde_json::Value> {
     let unlocked = state.sessions.is_unlocked(&params.sid).await;
     let email    = state.sessions.get_email(&params.sid).await;
-    Json(serde_json::json!({ "unlocked": unlocked, "email": email }))
+    // Present only when a gated pipeline was spawned on confirm — lets the
+    // polling tab start watching the pitch without a page reload.
+    let pipeline_id = state.pending.spawned_id(&params.sid).await;
+    Json(serde_json::json!({ "unlocked": unlocked, "email": email, "pipeline_id": pipeline_id }))
 }
 
 /// Extract the best-guess real IP from the request.
@@ -535,23 +560,34 @@ async fn handle_ai_chat(
         .unwrap_or_default();
     let end = Utc::now();
 
-    // Strip qualify block and launch pipeline if the AI decided to qualify
-    let (display_text, pipeline_id, options) = {
+    // Strip qualify block. If the AI qualified, the pipeline launches only for
+    // an unlocked (email-confirmed) session; otherwise we stash the
+    // qualification and ask the visitor to confirm their email first.
+    let (display_text, pipeline_id, options, needs_unlock) = {
         let (after_qualify, maybe_qualify) = parse_qualify(&raw_text);
-        let pid = if let Some(q) = maybe_qualify {
-            let id = state.pipelines.create(
-                payload.session_id.clone(),
-                q.client_need,
-                Some(q.summary),
-            ).await;
-            pipeline::spawn(id, state.pipelines.clone(), state.clone());
-            tracing::info!("Pipeline {id} launched from chat session={}", payload.session_id);
-            Some(id.to_string())
+        let (pid, gate) = if let Some(q) = maybe_qualify {
+            if state.sessions.is_unlocked(&session_key).await {
+                let id = state.pipelines.create(
+                    payload.session_id.clone(),
+                    q.client_need,
+                    Some(q.summary),
+                ).await;
+                pipeline::spawn(id, state.pipelines.clone(), state.clone());
+                tracing::info!("Pipeline {id} launched from chat session={}", payload.session_id);
+                (Some(id.to_string()), false)
+            } else {
+                state.pending.stash(
+                    session_key.clone(),
+                    pending::PendingQualification { client_need: q.client_need, summary: q.summary },
+                ).await;
+                tracing::info!("Qualification stashed — awaiting email unlock for session={session_key}");
+                (None, true)
+            }
         } else {
-            None
+            (None, false)
         };
         let (display, opts) = parse_options(&after_qualify);
-        (display, pid, opts)
+        (display, pid, opts, gate)
     };
 
     if state.langfuse.is_some() {
@@ -571,6 +607,7 @@ async fn handle_ai_chat(
         messages_free: FREE_MESSAGES,
         pipeline_id,
         options,
+        needs_unlock,
     }))
 }
 
@@ -712,6 +749,7 @@ async fn main() {
         langfuse,
         sessions,
         pipelines: PipelineStore::new(),
+        pending: pending::PendingStore::new(),
         pitches: PitchStore::new(db.clone()),
         qdrant,
         embeddings,

@@ -102,6 +102,10 @@ struct ChatResponse {
     pipeline_id: Option<String>,
     #[serde(default)]
     options: Vec<ChatOption>,
+    /// Set when the visitor qualified but must confirm their email before the
+    /// pipeline runs. The frontend opens the email modal in response.
+    #[serde(default)]
+    needs_unlock: bool,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -155,6 +159,10 @@ struct PitchPollResponse {
 #[derive(Deserialize)]
 struct AuthStatusResponse {
     unlocked: bool,
+    /// Present once a gated pipeline was spawned on confirm — the polling tab
+    /// uses it to start watching the pitch without a page reload.
+    #[serde(default)]
+    pipeline_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -368,6 +376,9 @@ pub fn Chat() -> impl IntoView {
     let current_pitch: RwSignal<Option<PitchData>> = create_rw_signal(None);
     let messages_used: RwSignal<u32> = create_rw_signal(0);
     let show_unlock: RwSignal<bool> = create_rw_signal(false);
+    // Why the unlock modal is open: false = free-message quota hit,
+    // true = qualified and the pipeline is gated behind email confirmation.
+    let unlock_for_pipeline: RwSignal<bool> = create_rw_signal(false);
     let email_input = create_rw_signal(String::new());
     let unlock_error = create_rw_signal(false);
     let email_pending = create_rw_signal(false);
@@ -516,9 +527,19 @@ pub fn Chat() -> impl IntoView {
             match Request::get(&format!("/api/auth/status?sid={}", sid)).send().await {
                 Ok(r) => match r.json::<AuthStatusResponse>().await {
                     Ok(s) if s.unlocked => {
+                        let gated_pipeline = s.pipeline_id;
                         batch(move || {
                             email_confirmed.set(true);
                             is_unlocked.set(true);
+                            // A gated pipeline was spawned on confirm — start
+                            // watching the pitch without a page reload.
+                            if let Some(pid) = gated_pipeline {
+                                pipeline_id.set(Some(pid));
+                                pitch_failed.set(false);
+                                pitch_stage.set("Analyse en cours…".to_string());
+                                pitch_loading.set(true);
+                                pitch_poll_tick.update(|t| *t += 1);
+                            }
                         });
                         if !show_unlock.get_untracked() && !show_pitch.get_untracked() {
                             toast_msg.set(Some("✓ Email confirmé — conversation déverrouillée.".to_string()));
@@ -583,6 +604,7 @@ pub fn Chat() -> impl IntoView {
                         messages.update(|v| { v.pop(); });
                         batch(move || {
                             input_text.set(msg_restore);
+                            unlock_for_pipeline.set(false);
                             show_unlock.set(true);
                             is_loading.set(false);
                         });
@@ -608,6 +630,13 @@ pub fn Chat() -> impl IntoView {
                                     pitch_stage.set("Analyse en cours…".to_string());
                                     pitch_loading.set(true);
                                     pitch_poll_tick.update(|t| *t += 1);
+                                }
+                                // Qualified but not unlocked: collect the email
+                                // before the pipeline runs (the backend stashed
+                                // the qualification and will spawn on confirm).
+                                if data.needs_unlock {
+                                    unlock_for_pipeline.set(true);
+                                    show_unlock.set(true);
                                 }
                                 is_loading.set(false);
                             });
@@ -743,10 +772,22 @@ pub fn Chat() -> impl IntoView {
                             view! {
                                 <div>
                                     <h3 class="text-lg font-bold text-primary mb-2">
-                                        "Continuez gratuitement"
+                                        {move || if unlock_for_pipeline.get() {
+                                            "Lançons votre analyse"
+                                        } else {
+                                            "Continuez gratuitement"
+                                        }}
                                     </h3>
                                     <p class="text-sm text-secondary mb-6 leading-relaxed">
-                                        "Vous avez utilisé vos " {FREE_MESSAGES} " messages gratuits. Entrez votre email pour continuer — sans spam, promis."
+                                        {move || if unlock_for_pipeline.get() {
+                                            view! {
+                                                "Confirmez votre email et nous construisons votre solution sur mesure — vous recevrez la proposition par email. Sans spam, promis."
+                                            }.into_view()
+                                        } else {
+                                            view! {
+                                                "Vous avez utilisé vos " {FREE_MESSAGES} " messages gratuits. Entrez votre email pour continuer — sans spam, promis."
+                                            }.into_view()
+                                        }}
                                     </p>
                                     <form on:submit=move |ev| on_unlock_submit.with_value(|f| f(ev)) class="flex flex-col gap-3">
                                         <input
