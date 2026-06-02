@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="High-end AI agency turning complex engineering into effortless elegance.">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com https://cdn.jsdelivr.net https://api.fontshare.com https://cdn.fontshare.com; script-src 'self' 'unsafe-eval' 'unsafe-inline' https://cdn.jsdelivr.net https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://api.fontshare.com; img-src 'self' data: blob:; font-src 'self' data: https://fonts.gstatic.com https://cdn.fontshare.com;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com https://api.fontshare.com https://cdn.fontshare.com; script-src 'self' 'unsafe-eval' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://api.fontshare.com; img-src 'self' data: blob:; font-src 'self' data: https://fonts.gstatic.com https://cdn.fontshare.com;">
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png">
     <title>pointe.dev — Automatisation pointue.</title>
@@ -21,67 +21,30 @@
         body { font-family: 'Satoshi', system-ui, sans-serif; font-weight: 400; }
         h1, h2, h3, h4, h5, h6 { font-family: 'Clash Display', system-ui, sans-serif; font-weight: 600; }
         strong, .font-bold { font-weight: 700; }
-        /* Mermaid SVG responsive */
-        #mermaid-canvas svg {
-            width: 100% !important;
-            height: auto !important;
-            max-width: 100%;
-            display: block;
-        }
-        #mermaid-canvas .node rect {
-            rx: 8;
-            ry: 8;
-        }
-        #mermaid-canvas .node .label {
-            font-family: 'Ubuntu', sans-serif !important;
-        }
-        #mermaid-canvas .edgePath path {
-            stroke-width: 2px;
-        }
     </style>
-    <!-- Mermaid for workflow diagrams -->
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-    <script>
-        const isDark = document.documentElement.classList.contains('dark') ||
-            window.matchMedia('(prefers-color-scheme: dark)').matches;
-
-        mermaid.initialize({
-            startOnLoad: false,
-            theme: 'base',
-            themeVariables: {
-                primaryColor: isDark ? '#1a1320' : '#f8fafc',
-                primaryBorderColor: isDark ? '#3d2030' : '#e2c4cc',
-                primaryTextColor: isDark ? '#f1f5f9' : '#0f172a',
-                lineColor: '#c4122f',
-                secondaryColor: isDark ? '#24182a' : '#fff0f2',
-                tertiaryColor: isDark ? '#140f15' : '#f1f5f9',
-                edgeLabelBackground: isDark ? '#1a1320' : '#f8fafc',
-                fontFamily: "'Ubuntu', sans-serif",
-                fontSize: '14px',
-                nodeSpacing: 50,
-                rankSpacing: 64,
-            },
-            flowchart: { curve: 'basis', padding: 28, useMaxWidth: true },
-            securityLevel: 'loose'
-        });
-
-        async function renderMermaidTo(code, elementId) {
-            try {
-                const id = 'mg-' + Math.random().toString(36).substr(2, 8);
-                const { svg } = await mermaid.render(id, code);
-                const el = document.getElementById(elementId);
-                if (el) el.innerHTML = svg;
-            } catch(e) {
-                console.warn('Mermaid render error:', e);
-            }
-        }
-    </script>
 </head>
 <body class="bg-black text-white">
     <div id="app">
-        <!-- Static LCP skeleton — replaced by Leptos on hydration -->
-        <div id="app-skeleton" style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0B0B0B;">
-            <div style="width:10px;height:10px;border-radius:50%;background:#D32F2F;"></div>
+        <!-- Static LCP hero — paints immediately with the loaded stylesheet, before
+             WASM downloads. Leptos removes #app-skeleton on mount and renders the
+             interactive hero. Inline dark colors (no theme-dependent classes) avoid a
+             light→dark flash, and no opacity:0 entrance so the H1 is a real first paint. -->
+        <div id="app-skeleton" style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:5rem 1.5rem;background:#0f0c10;">
+            <span style="display:inline-flex;align-items:center;gap:0.5rem;padding:0.5rem 1rem;margin-bottom:2.5rem;border-radius:999px;background:rgba(232,22,60,0.1);border:1px solid rgba(232,22,60,0.25);color:#f87171;font-size:0.75rem;font-weight:600;letter-spacing:0.15em;text-transform:uppercase;">
+                <span style="width:0.5rem;height:0.5rem;border-radius:50%;background:#ef4444;display:inline-block;"></span>
+                Agence IA
+            </span>
+            <h1 style="font-family:'Clash Display',system-ui,sans-serif;font-weight:700;letter-spacing:-0.02em;line-height:1;margin:0 0 0.25em;max-width:64rem;">
+                <span style="display:block;font-size:clamp(3rem,8vw,4.5rem);background:linear-gradient(135deg,#f1f5f9 0%,#e8163c 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;">
+                    Déléguez ce qui vous pèse.
+                </span>
+                <span style="display:block;font-size:clamp(3rem,8vw,4.5rem);color:#e8163c;margin-top:0.05em;">
+                    Pour les fondateurs.
+                </span>
+            </h1>
+            <p style="font-size:clamp(1.25rem,2.5vw,1.5rem);color:#94a3b8;font-weight:300;line-height:1.6;margin:2rem auto 0;max-width:42rem;">
+                Confiez vos tâches répétitives à des collaborateurs IA conçus sur mesure. Vous gardez le pilotage, ils font le reste — et vous gagnez du temps comme de l'argent.
+            </p>
         </div>
     </div>
     <script type="module">
