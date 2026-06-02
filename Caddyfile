@@ -14,3 +14,9 @@ go.pointe.dev {
 n8n.pointe.dev {
     reverse_proxy n8n:5678
 }
+
+# Ephemeral per-PR staging backend (see docker-compose.staging.yml).
+# Returns 502 when staging is down — expected; prod hosts are unaffected.
+staging.pointe.dev {
+    reverse_proxy pointe-backend-staging:3001
+}

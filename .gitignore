@@ -26,6 +26,8 @@ Thumbs.db
 .env.prod
 .env.n8n
 .env.langfuse
+.env.staging
+!.env.staging.example
 secrets/
 
 # Claude memory backup (local only)
