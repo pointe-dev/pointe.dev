@@ -1,0 +1,5 @@
+# Code owners.
+# Advisory until branch protection is enabled (scripts/enable-branch-protection.sh):
+# with protection on, PRs auto-request review from the owner and (if configured)
+# require a code-owner approval before merge. Solo today, so this is future-proofing.
+* @pointe-dev
