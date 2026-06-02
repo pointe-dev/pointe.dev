@@ -1,0 +1,33 @@
+# Ephemeral per-PR staging stack.
+# Brought up by .github/workflows/deploy-staging.yml when a PR is labelled
+# `staging`, torn down when the label is removed or the PR is closed.
+#
+# DATA ISOLATION vs prod (this is the whole point):
+#   - Postgres : SAME server, SEPARATE database `pointe_staging` (in .env.staging)
+#   - n8n      : DISABLED (no N8N_API_KEY) — staging never fires a prod automation
+#   - Stripe   : TEST keys; Resend : unset → confirm links logged, no real email
+#   - SESSION_SECRET : its own value (tokens don't cross envs); Langfuse : unset
+#   - No prod volumes are mounted (logs go to stdout only)
+#
+# Shares only the stateless edge: the prod Caddy (a staging.pointe.dev vhost) and
+# the prod Postgres *server*. Always run namespaced so nothing clobbers prod:
+#   IMAGE_TAG=sha-<commit> docker compose -p pointe-staging -f docker-compose.staging.yml up -d
+
+services:
+  backend-staging:
+    image: ghcr.io/pointe-dev/pointe.dev:${IMAGE_TAG:?set IMAGE_TAG to the PR commit image tag}
+    container_name: pointe-backend-staging
+    environment:
+      RUST_LOG: info
+      BIND_ADDR: "0.0.0.0:3001"
+      # Deliberately no LOG_DIR  → logs to stdout, never touches the prod backend_logs volume.
+      # Deliberately no N8N_URL  → the deploy stage no-ops; the pitch still publishes.
+    env_file: .env.staging
+    networks: [pointe-net]
+    restart: "no"        # jetable — pas de redémarrage automatique
+    mem_limit: 256m      # garde-fou mémoire sur la box 4 Go (un binaire Rust tient large)
+
+networks:
+  pointe-net:
+    external: true
+    name: pointe_pointe-net   # rejoint le réseau de la stack prod (Caddy + Postgres)

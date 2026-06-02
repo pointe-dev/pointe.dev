@@ -1,0 +1,143 @@
+name: Staging (per-PR)
+
+# Ephemeral staging for a single PR, on the same Hetzner box as prod but fully
+# data-isolated (separate DB, n8n off, test Stripe, own secret — see
+# docker-compose.staging.yml). Opt-in via the `staging` label so normal PRs are
+# unaffected; torn down when the label is removed or the PR closes.
+#
+# One-time server setup (DNS, database, Caddy vhost): see docs/STAGING.md.
+
+on:
+  pull_request:
+    types: [labeled, synchronize, unlabeled, closed]
+
+# One staging instance at a time per PR; a new push supersedes an in-flight deploy.
+concurrency:
+  group: staging-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # ── Deploy the PR commit to staging + run the gated funnel smoke ──────────────
+  deploy:
+    name: Deploy PR to staging
+    runs-on: ubuntu-latest
+    if: >
+      (github.event.action == 'labeled' && github.event.label.name == 'staging') ||
+      (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'staging'))
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      # Staging deploys a PR commit, whose image CI does not push (it pushes only
+      # on main). Build & push it here, gha-cached so it's mostly a cache hit.
+      - name: Build & push the PR image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/${{ github.repository }}:sha-${{ github.event.pull_request.head.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Copy staging compose + smoke script to the server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.HETZNER_HOST }}
+          username: ${{ secrets.HETZNER_USER }}
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          source: "docker-compose.staging.yml,scripts/smoke-qualifier.sh"
+          target: "/opt/pointe"
+
+      - name: Bring up staging + run the gated funnel smoke
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HETZNER_HOST }}
+          username: ${{ secrets.HETZNER_USER }}
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          command_timeout: 15m
+          script: |
+            set -euo pipefail
+            cd /opt/pointe
+            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin
+
+            # Ensure the ISOLATED staging database exists (idempotent). Forces TCP
+            # so it works regardless of pg_hba — needs the password from the secret.
+            PGPW="$(cat secrets/pg_password.txt)"
+            docker exec -e PGPASSWORD="$PGPW" pointe-postgres \
+              psql -U pointe -h 127.0.0.1 -d pointe -tAc \
+              "SELECT 1 FROM pg_database WHERE datname='pointe_staging'" | grep -q 1 || \
+            docker exec -e PGPASSWORD="$PGPW" pointe-postgres \
+              psql -U pointe -h 127.0.0.1 -d pointe -c "CREATE DATABASE pointe_staging"
+
+            export IMAGE_TAG="sha-${{ github.event.pull_request.head.sha }}"
+            docker compose -p pointe-staging -f docker-compose.staging.yml pull
+            docker compose -p pointe-staging -f docker-compose.staging.yml up -d
+
+            echo "⏳ waiting for staging backend health…"
+            for i in $(seq 1 30); do
+              if docker run --rm --network pointe_pointe-net curlimages/curl:latest \
+                   -sf http://pointe-backend-staging:3001/api/health >/dev/null; then
+                echo "✓ healthy"; break
+              fi
+              if [ "$i" = "30" ]; then
+                echo "✗ staging never became healthy"; docker logs --tail 50 pointe-backend-staging; exit 1
+              fi
+              sleep 2
+            done
+
+            echo "▶ running the gated funnel smoke against staging…"
+            set -a; source <(sed 's/\r//' .env.staging); set +a
+            DOCKER_NET=pointe_pointe-net BASE_URL=http://pointe-backend-staging:3001 \
+              bash scripts/smoke-qualifier.sh
+
+      - name: Comment the staging URL on the PR
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '🟢 Staging déployé → https://staging.pointe.dev — smoke du funnel gaté ✅ (`sha-${{ github.event.pull_request.head.sha }}`)'
+            })
+
+  # ── Tear down when the label is removed or the PR closes ──────────────────────
+  teardown:
+    name: Tear down staging
+    runs-on: ubuntu-latest
+    if: >
+      (github.event.action == 'unlabeled' && github.event.label.name == 'staging') ||
+      (github.event.action == 'closed' && contains(github.event.pull_request.labels.*.name, 'staging'))
+
+    steps:
+      - name: Stop & remove the staging stack
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HETZNER_HOST }}
+          username: ${{ secrets.HETZNER_USER }}
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/pointe
+            docker compose -p pointe-staging -f docker-compose.staging.yml down || true
+            docker image prune -f
+            # The empty `pointe_staging` database is kept — isolated and ~free.
+            echo "🧹 staging torn down"
