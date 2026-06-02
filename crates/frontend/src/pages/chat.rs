@@ -137,12 +137,6 @@ struct PitchData {
     slides: Vec<PitchSlide>,
 }
 
-#[derive(Serialize)]
-struct SendQuoteRequest {
-    email: String,
-    slides: Vec<serde_json::Value>,
-}
-
 #[derive(Deserialize)]
 struct PitchPollResponse {
     ready: bool,
@@ -385,9 +379,6 @@ pub fn Chat() -> impl IntoView {
     let pipeline_id: RwSignal<Option<String>> = create_rw_signal(None);
     let show_pitch: RwSignal<bool> = create_rw_signal(false);
     let pitch_page: RwSignal<usize> = create_rw_signal(0);
-    let quote_email = create_rw_signal(String::new());
-    let quote_sent  = create_rw_signal(false);
-    let quote_error = create_rw_signal(false);
 
     // Selectable options shown below the last assistant message
     let pending_options: RwSignal<Vec<ChatOption>> = create_rw_signal(vec![]);
@@ -974,54 +965,7 @@ pub fn Chat() -> impl IntoView {
                                                         }
                                                     })
                                                 }}
-                                                {move || if quote_sent.get() {
-                                                    view! {
-                                                        <p class="pitch-quote-sent">"✓ Proposition envoyée — nous revenons vers vous rapidement."</p>
-                                                    }.into_view()
-                                                } else {
-                                                    view! {
-                                                        <div class="pitch-quote-form">
-                                                            <input
-                                                                type="email"
-                                                                placeholder="Recevoir cette proposition par email"
-                                                                class="pitch-quote-input"
-                                                                prop:value=move || quote_email.get()
-                                                                on:input=move |ev| quote_email.set(event_target_value(&ev))
-                                                            />
-                                                            {move || quote_error.get().then(|| view! {
-                                                                <p class="text-xs text-red-400">"Erreur lors de l'envoi, réessayez."</p>
-                                                            })}
-                                                            <button
-                                                                class="btn-primary w-full"
-                                                                on:click=move |_| {
-                                                                    let email = quote_email.get_untracked().trim().to_string();
-                                                                    if email.is_empty() { return; }
-                                                                    let slides = current_pitch.get_untracked()
-                                                                        .map(|p| p.slides.iter().map(|s| serde_json::json!({
-                                                                            "title": s.title,
-                                                                            "body": s.body,
-                                                                            "points": s.points,
-                                                                        })).collect::<Vec<_>>())
-                                                                        .unwrap_or_default();
-                                                                    let req = SendQuoteRequest { email, slides };
-                                                                    spawn_local(async move {
-                                                                        match Request::post("/api/pitch/send-quote")
-                                                                            .json(&req).unwrap().send().await
-                                                                        {
-                                                                            Ok(r) => {
-                                                                                let ok = r.json::<serde_json::Value>().await
-                                                                                    .ok().and_then(|v| v["ok"].as_bool()).unwrap_or(false);
-                                                                                if ok { quote_sent.set(true); }
-                                                                                else  { quote_error.set(true); }
-                                                                            }
-                                                                            Err(_) => quote_error.set(true),
-                                                                        }
-                                                                    });
-                                                                }
-                                                            >"Envoyer →"</button>
-                                                        </div>
-                                                    }.into_view()
-                                                }}
+                                                <p class="pitch-quote-sent">"✓ Cette proposition a été envoyée à votre adresse email."</p>
                                                 </div>
                                             }.into_view()
                                         }}
@@ -1077,7 +1021,7 @@ pub fn Chat() -> impl IntoView {
                                     <button
                                         class=move || if pitch_loading.get() {
                                             "pitch-trigger-btn pitch-trigger-loading"
-                                        } else { "pitch-trigger-btn" }
+                                        } else { "pitch-trigger-btn pitch-trigger-ready" }
                                         on:click=move |_| { pitch_page.set(0); show_pitch.set(true); }
                                     >
                                         {move || if pitch_loading.get() {

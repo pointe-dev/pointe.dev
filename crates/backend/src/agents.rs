@@ -937,6 +937,27 @@ Integrations: {integrations}\nRisks: {risks}\n\
     }
 }
 
+/// Best-effort: email the freshly published proposal to the session's confirmed
+/// address. No-op when Resend is unconfigured or the session has no stored email
+/// (shouldn't happen once the unlock gate ran, but we degrade gracefully). Runs
+/// detached so a slow/failing email never delays the pipeline.
+async fn email_proposal(app: &AppState, session_id: &str, slides: &[PitchSlide]) {
+    let Some(api_key) = app.resend_api_key.clone() else { return };
+    let Some(client_email) = app.sessions.get_email(session_id).await else {
+        tracing::info!("[quote] no confirmed email for session {session_id}; skip auto-send");
+        return;
+    };
+    let http   = app.http.clone();
+    let owner  = app.owner_email.clone();
+    let slides = slides.to_vec();
+    tokio::spawn(async move {
+        match crate::email::send_proposal(&http, &api_key, &client_email, owner.as_deref(), &slides).await {
+            Ok(())  => tracing::info!("[quote] proposal auto-sent to {client_email}"),
+            Err(e)  => tracing::error!("[quote] auto-send failed: {e}"),
+        }
+    });
+}
+
 async fn publish_pitch(app: &AppState, ctx: &PipelineContext) {
     let research = ctx.research_json.as_ref();
 
@@ -983,6 +1004,8 @@ async fn publish_pitch(app: &AppState, ctx: &PipelineContext) {
             },
         ]);
 
+    email_proposal(app, &ctx.session_id, &slides).await;
+
     app.pitches.set(&ctx.session_id, PitchResult {
         solution_desc,
         price_eur_cents: setup_price * 100,
@@ -1026,6 +1049,8 @@ pub async fn publish_manual_pitch(app: &AppState, ctx: &PipelineContext) {
     let solution_desc = research
         .and_then(|r| r["approach"].as_str())
         .unwrap_or(&ctx.client_need).to_string();
+
+    email_proposal(app, &ctx.session_id, &slides).await;
 
     app.pitches.set(&ctx.session_id, PitchResult {
         solution_desc,
