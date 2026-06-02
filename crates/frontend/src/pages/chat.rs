@@ -316,6 +316,21 @@ fn load_pitch_pipeline() -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+/// Maps a backend pipeline stage (snake_case from PipelineStage) to a
+/// client-facing label shown on the loading button while the proposal is built.
+fn stage_label(stage: &str) -> &'static str {
+    match stage {
+        "qualifying"         => "Qualification…",
+        "researching"        => "Recherche en cours…",
+        "building"           => "Conception du workflow…",
+        "validating"         => "Vérification…",
+        "pricing"            => "Chiffrage…",
+        "pricing_validating" => "Validation du tarif…",
+        "deploying"          => "Préparation…",
+        _                    => "Analyse en cours…",
+    }
+}
+
 fn render_markdown(input: &str) -> String {
     use pulldown_cmark::{html::push_html, Options, Parser};
     let opts = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES;
@@ -375,6 +390,8 @@ pub fn Chat() -> impl IntoView {
     // Set when the pipeline hard-fails (agent error / record gone after restart)
     // so we stop the spinner and show a real message instead of polling forever.
     let pitch_failed: RwSignal<bool>          = create_rw_signal(false);
+    // Live pipeline stage label shown on the loading button (streamed via polling).
+    let pitch_stage: RwSignal<String>         = create_rw_signal("Analyse en cours…".to_string());
 
     // Resume a pitch pipeline that was in flight (or completed) before a refresh.
     // The poll below resolves it to ready / failed via the server.
@@ -455,20 +472,23 @@ pub fn Chat() -> impl IntoView {
                 }
             }
 
-            // 2) Hard failure? Pipeline marked `failed`, or its record is gone
-            //    (in-memory store wiped by a restart — can't recover this run).
+            // 2) Read pipeline status: surface the live stage on the button, and
+            //    detect a hard failure (marked `failed`, or the record is gone
+            //    after a restart — can't recover that run).
             if let Some(pid) = pid {
                 if let Ok(resp) = Request::get(&format!("/api/pipeline/{}", pid)).send().await {
-                    let failed = if resp.status() == 404 {
-                        attempt >= 2 // tolerate a brief startup race, then give up
-                    } else {
-                        resp.json::<PipelineStatusResponse>().await.ok()
-                            .and_then(|s| s.stage.get("stage").and_then(|v| v.as_str()).map(|v| v == "failed"))
-                            .unwrap_or(false)
-                    };
-                    if failed {
-                        batch(move || { pitch_failed.set(true); pitch_loading.set(false); });
-                        return;
+                    if resp.status() == 404 {
+                        if attempt >= 2 { // tolerate a brief startup race, then give up
+                            batch(move || { pitch_failed.set(true); pitch_loading.set(false); });
+                            return;
+                        }
+                    } else if let Ok(s) = resp.json::<PipelineStatusResponse>().await {
+                        let stage = s.stage.get("stage").and_then(|v| v.as_str()).unwrap_or("");
+                        if stage == "failed" {
+                            batch(move || { pitch_failed.set(true); pitch_loading.set(false); });
+                            return;
+                        }
+                        pitch_stage.set(stage_label(stage).to_string());
                     }
                 }
             }
@@ -585,6 +605,7 @@ pub fn Chat() -> impl IntoView {
                                 if let Some(pid) = data.pipeline_id {
                                     pipeline_id.set(Some(pid));
                                     pitch_failed.set(false);
+                                    pitch_stage.set("Analyse en cours…".to_string());
                                     pitch_loading.set(true);
                                     pitch_poll_tick.update(|t| *t += 1);
                                 }
@@ -1019,11 +1040,11 @@ pub fn Chat() -> impl IntoView {
                                         on:click=move |_| { pitch_page.set(0); show_pitch.set(true); }
                                     >
                                         {move || if pitch_loading.get() {
-                                            "⏳ Analyse en cours…"
+                                            format!("⏳ {}", pitch_stage.get())
                                         } else if pitch_manual_quote.get() {
-                                            "📋 Voir la proposition"
+                                            "📋 Voir la proposition".to_string()
                                         } else {
-                                            "✨ Voir notre proposition"
+                                            "✨ Voir notre proposition".to_string()
                                         }}
                                     </button>
                                 })
