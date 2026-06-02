@@ -75,7 +75,10 @@ jobs:
       - name: Run integration tests
         run: cargo test -p backend --test integration
 
-  # ── 3. Build Docker image ─────────────────────────────────────────────────────
+  # ── 3. Build & push the deployable image ──────────────────────────────────────
+  # This is the ONLY image build. On main it pushes the deployable tags; deploy.yml
+  # then just pulls `latest` (no rebuild). On PRs it builds without pushing, so a
+  # broken Dockerfile is still caught before merge.
   build-docker:
     name: Build Docker Image
     runs-on: ubuntu-latest
@@ -98,13 +101,14 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GHCR_TOKEN }}
 
-      - name: Build (no push on non-main branches)
+      - name: Build (push deployable tags on main only)
         uses: docker/build-push-action@v5
         with:
           context: .
           push: ${{ github.ref == 'refs/heads/main' }}
           tags: |
-            ghcr.io/${{ github.repository }}:ci-${{ github.sha }}
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
