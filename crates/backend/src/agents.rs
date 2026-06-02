@@ -127,27 +127,72 @@ async fn anthropic_call_retryable(
     anthropic_raw(http, key, body).await
 }
 
+/// Total attempts (1 initial + retries) for a single Anthropic call.
+const ANTHROPIC_MAX_ATTEMPTS: u32 = 4;
+
+/// Exponential backoff with light jitter: ~0.5s, 1s, 2s, plus up to 250ms of
+/// jitter so concurrent agents don't retry in lockstep. Jitter is derived from
+/// the clock to stay dependency-free.
+fn anthropic_backoff(attempt: u32) -> std::time::Duration {
+    let base_ms = 500u64 * 2u64.pow(attempt.saturating_sub(1).min(4));
+    let jitter = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0) % 250;
+    std::time::Duration::from_millis(base_ms + jitter)
+}
+
 async fn anthropic_raw(
     http: &reqwest::Client,
     key: &str,
     body: serde_json::Value,
 ) -> Result<String, AgentError> {
-    let resp = http
-        .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", key)
-        .header("anthropic-version", "2023-06-01")
-        .header("anthropic-beta", CACHE_BETA)
-        .header("content-type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| AgentError(format!("Anthropic request: {e}")))?;
-
-    if !resp.status().is_success() {
-        let s = resp.status();
-        let b = resp.text().await.unwrap_or_default();
-        return Err(AgentError(format!("Anthropic {s}: {b}")));
-    }
+    // Transient failures (rate limits, overloaded 529, gateway/5xx, network
+    // blips) are retried with backoff so one hiccup doesn't kill a whole
+    // pipeline. 4xx other than 408/429 are permanent → fail fast.
+    let mut attempt = 0u32;
+    let resp = loop {
+        attempt += 1;
+        match http
+            .post("https://api.anthropic.com/v1/messages")
+            .header("x-api-key", key)
+            .header("anthropic-version", "2023-06-01")
+            .header("anthropic-beta", CACHE_BETA)
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() => break r,
+            Ok(r) => {
+                let status = r.status();
+                let retryable = matches!(status.as_u16(), 408 | 429 | 500 | 502 | 503 | 504 | 529);
+                if retryable && attempt < ANTHROPIC_MAX_ATTEMPTS {
+                    // Honour a server-provided Retry-After (seconds) over our backoff.
+                    let delay = r.headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|s| s.trim().parse::<u64>().ok())
+                        .map(std::time::Duration::from_secs)
+                        .unwrap_or_else(|| anthropic_backoff(attempt));
+                    tracing::warn!("[anthropic] {status} (attempt {attempt}/{ANTHROPIC_MAX_ATTEMPTS}); retrying in {delay:?}");
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                let b = r.text().await.unwrap_or_default();
+                return Err(AgentError(format!("Anthropic {status}: {b}")));
+            }
+            Err(e) => {
+                if attempt < ANTHROPIC_MAX_ATTEMPTS {
+                    let delay = anthropic_backoff(attempt);
+                    tracing::warn!("[anthropic] request error (attempt {attempt}/{ANTHROPIC_MAX_ATTEMPTS}): {e}; retrying in {delay:?}");
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                return Err(AgentError(format!("Anthropic request: {e}")));
+            }
+        }
+    };
 
     #[derive(serde::Deserialize)]
     struct Resp { content: Vec<Content> }
@@ -1164,6 +1209,21 @@ pub async fn run_deploy(app: &AppState, ctx: &mut PipelineContext) -> Result<(),
 mod tests {
     use super::*;
     use crate::pipeline::PipelineContext;
+
+    // ── anthropic_backoff ──────────────────────────────────────────────────
+
+    #[test]
+    fn backoff_grows_per_attempt_and_stays_bounded() {
+        // base doubles each attempt (0.5s, 1s, 2s) with <250ms jitter, so the
+        // ranges never overlap → strictly increasing.
+        let d1 = anthropic_backoff(1).as_millis();
+        let d2 = anthropic_backoff(2).as_millis();
+        let d3 = anthropic_backoff(3).as_millis();
+        assert!((500..750).contains(&(d1 as u64)), "d1={d1}");
+        assert!((1000..1250).contains(&(d2 as u64)), "d2={d2}");
+        assert!((2000..2250).contains(&(d3 as u64)), "d3={d3}");
+        assert!(d1 < d2 && d2 < d3);
+    }
 
     // ── strip_fences ───────────────────────────────────────────────────────
 
