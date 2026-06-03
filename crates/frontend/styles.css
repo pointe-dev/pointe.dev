@@ -2630,6 +2630,10 @@ html:not(.dark) .nav-glass {
   word-spacing: 0.06em;
 }
 
+.section-head {
+  margin-bottom: 4rem;
+}
+
 /* ── CTA finale ──────────────────────────────────────────────────────── */
 
 .cta-section {

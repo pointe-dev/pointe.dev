@@ -23,15 +23,17 @@ pub fn Home(on_chat_click: impl Fn() + Clone + 'static) -> impl IntoView {
             {/* ── PROCESS STRIP ─────────────────────────────────── */}
             <section class="section-deep border-t border-subtle py-28 px-6">
                 <div class="max-w-6xl mx-auto">
-                    <p class="eyebrow text-center mb-3">
-                        {move || t(lang.get(), "process.eyebrow")}
-                    </p>
-                    <h2 class="section-title text-center mb-4">
-                        {move || t(lang.get(), "process.title")}
-                    </h2>
-                    <p class="section-sub text-center mb-32 max-w-xl mx-auto">
-                        {move || t(lang.get(), "process.sub")}
-                    </p>
+                    <div class="section-head">
+                        <p class="eyebrow text-center">
+                            {move || t(lang.get(), "process.eyebrow")}
+                        </p>
+                        <h2 class="section-title text-center">
+                            {move || t(lang.get(), "process.title")}
+                        </h2>
+                        <p class="section-sub text-center max-w-xl mx-auto">
+                            {move || t(lang.get(), "process.sub")}
+                        </p>
+                    </div>
 
                     <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-6 md:gap-2">
 
@@ -129,15 +131,17 @@ pub fn Home(on_chat_click: impl Fn() + Clone + 'static) -> impl IntoView {
             {/* ── APPROCHE B2B ──────────────────────────────────── */}
             <section class="bg-surface border-t border-subtle py-28 px-6">
                 <div class="max-w-6xl mx-auto">
-                    <p class="eyebrow text-center mb-3">
-                        {move || t(lang.get(), "approach.eyebrow")}
-                    </p>
-                    <h2 class="section-title text-center mb-4">
-                        {move || t(lang.get(), "approach.title")}
-                    </h2>
-                    <p class="section-sub text-center mb-32">
-                        {move || t(lang.get(), "approach.sub")}
-                    </p>
+                    <div class="section-head">
+                        <p class="eyebrow text-center">
+                            {move || t(lang.get(), "approach.eyebrow")}
+                        </p>
+                        <h2 class="section-title text-center">
+                            {move || t(lang.get(), "approach.title")}
+                        </h2>
+                        <p class="section-sub text-center">
+                            {move || t(lang.get(), "approach.sub")}
+                        </p>
+                    </div>
 
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
 
@@ -178,12 +182,14 @@ pub fn Home(on_chat_click: impl Fn() + Clone + 'static) -> impl IntoView {
             {/* ── SERVICES ──────────────────────────────────────── */}
             <section class="section-deep border-t border-subtle py-28 px-6">
                 <div class="max-w-6xl mx-auto">
-                    <p class="eyebrow text-center mb-3">
-                        {move || t(lang.get(), "svc.eyebrow")}
-                    </p>
-                    <h2 class="section-title text-center mb-32">
-                        {move || t(lang.get(), "svc.title")}
-                    </h2>
+                    <div class="section-head">
+                        <p class="eyebrow text-center">
+                            {move || t(lang.get(), "svc.eyebrow")}
+                        </p>
+                        <h2 class="section-title text-center">
+                            {move || t(lang.get(), "svc.title")}
+                        </h2>
+                    </div>
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                         <div class="svc-card">
                             <p class="svc-num">"01"</p>
@@ -218,11 +224,11 @@ pub fn Home(on_chat_click: impl Fn() + Clone + 'static) -> impl IntoView {
 
             {/* ── SOLUTIONS TICKER ──────────────────────────────── */}
             <section id="solutions" class="bg-surface border-t border-subtle py-28 px-6 overflow-hidden">
-                <div class="max-w-6xl mx-auto mb-32">
-                    <p class="eyebrow text-center mb-3">
+                <div class="section-head max-w-6xl mx-auto">
+                    <p class="eyebrow text-center">
                         {move || t(lang.get(), "gal.eyebrow")}
                     </p>
-                    <h2 class="section-title text-center mb-4">
+                    <h2 class="section-title text-center">
                         {move || t(lang.get(), "gal.title")}
                     </h2>
                     <p class="section-sub text-center max-w-xl mx-auto">
@@ -285,15 +291,17 @@ pub fn Home(on_chat_click: impl Fn() + Clone + 'static) -> impl IntoView {
             {/* ── CTA FINALE ────────────────────────────────────── */}
             <section class="cta-section border-t border-subtle py-28 px-6 text-center">
                 <div class="max-w-2xl mx-auto">
-                    <p class="eyebrow mb-4">
-                        {move || t(lang.get(), "cta.eyebrow")}
-                    </p>
-                    <h2 class="section-title mb-6">
-                        {move || t(lang.get(), "cta.title")}
-                    </h2>
-                    <p class="section-sub mb-10 max-w-lg mx-auto">
-                        {move || t(lang.get(), "cta.sub")}
-                    </p>
+                    <div class="section-head">
+                        <p class="eyebrow">
+                            {move || t(lang.get(), "cta.eyebrow")}
+                        </p>
+                        <h2 class="section-title">
+                            {move || t(lang.get(), "cta.title")}
+                        </h2>
+                        <p class="section-sub max-w-lg mx-auto">
+                            {move || t(lang.get(), "cta.sub")}
+                        </p>
+                    </div>
                     <button on:click=move |_| c_cta() class="btn-primary mx-auto">
                         {move || t(lang.get(), "hero.cta")}
                     </button>

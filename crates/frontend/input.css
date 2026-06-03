@@ -687,6 +687,13 @@ html:not(.dark) .nav-glass {
   text-wrap: pretty;
 }
 
+/* Section header block (eyebrow + title + sub). One consistent gap to the
+   section content across every section — the eyebrow/title/sub keep their own
+   built-in vertical rhythm. */
+.section-head {
+  margin-bottom: 4rem;
+}
+
 /* ── CTA finale ──────────────────────────────────────────────────────── */
 
 .cta-section {
