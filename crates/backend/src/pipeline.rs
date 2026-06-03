@@ -93,13 +93,74 @@ pub struct PipelineRecord {
     pub updated_at: DateTime<Utc>,
 }
 
-/// In-memory pipeline store. Will be backed by a DB once stable.
+/// Pipeline store: in-memory (L1) with optional Postgres write-through (L2).
+/// Persistence matters mainly for the payment handoff — `/api/stripe/checkout`
+/// and the webhook's `resume_after_payment` both look the pipeline up by id, so
+/// without it a backend restart between pitch and payment would strand a paying
+/// customer's deploy. `.0` is the live map; `.1` is the optional pool.
 #[derive(Clone)]
-pub struct PipelineStore(pub Arc<RwLock<HashMap<Uuid, PipelineRecord>>>);
+pub struct PipelineStore(pub Arc<RwLock<HashMap<Uuid, PipelineRecord>>>, Option<sqlx::PgPool>);
 
 impl PipelineStore {
     pub fn new() -> Self {
-        Self(Arc::new(RwLock::new(HashMap::new())))
+        Self(Arc::new(RwLock::new(HashMap::new())), None)
+    }
+
+    /// Builds the store and hydrates the in-memory map from Postgres.
+    pub async fn with_db(db: Option<sqlx::PgPool>) -> Self {
+        let store = Self(Arc::new(RwLock::new(HashMap::new())), db);
+        store.hydrate().await;
+        store
+    }
+
+    async fn hydrate(&self) {
+        let Some(pool) = &self.1 else { return };
+        match sqlx::query_as::<_, (String, serde_json::Value, serde_json::Value)>(
+            "SELECT id, stage, ctx FROM pipelines",
+        )
+        .fetch_all(pool)
+        .await
+        {
+            Ok(rows) => {
+                let mut w = self.0.write().await;
+                for (id_str, stage_json, ctx_json) in rows {
+                    let (Ok(id), Ok(stage), Ok(ctx)) = (
+                        Uuid::parse_str(&id_str),
+                        serde_json::from_value::<PipelineStage>(stage_json),
+                        serde_json::from_value::<PipelineContext>(ctx_json),
+                    ) else { continue };
+                    w.insert(id, PipelineRecord { id, stage, ctx, updated_at: Utc::now() });
+                }
+                tracing::info!("[pipeline] hydrated {} pipelines from DB", w.len());
+            }
+            Err(e) => tracing::warn!("[pipeline] hydrate failed: {e}"),
+        }
+    }
+
+    /// Write-through upsert, called after the in-memory mutation with the lock
+    /// released, so a slow/failed DB write never blocks the pipeline.
+    async fn persist(&self, id: Uuid, stage: &PipelineStage, ctx: &PipelineContext) {
+        let Some(pool) = &self.1 else { return };
+        let (stage_json, ctx_json) = match (serde_json::to_value(stage), serde_json::to_value(ctx)) {
+            (Ok(s), Ok(c)) => (s, c),
+            _ => { tracing::warn!("[pipeline] serialise failed for {id}"); return; }
+        };
+        if let Err(e) = sqlx::query(
+            "INSERT INTO pipelines (id, stage, ctx, updated_at)
+             VALUES ($1, $2, $3, NOW())
+             ON CONFLICT (id) DO UPDATE SET
+                 stage = EXCLUDED.stage,
+                 ctx   = EXCLUDED.ctx,
+                 updated_at = NOW()",
+        )
+        .bind(id.to_string())
+        .bind(stage_json)
+        .bind(ctx_json)
+        .execute(pool)
+        .await
+        {
+            tracing::warn!("[pipeline] DB write failed for {id}: {e}");
+        }
     }
 
     /// Creates a new pipeline, returns its ID.
@@ -111,17 +172,20 @@ impl PipelineStore {
         qualification_summary: Option<String>,
     ) -> Uuid {
         let id = Uuid::new_v4();
+        let stage = PipelineStage::Qualifying;
+        let ctx = PipelineContext {
+            session_id,
+            client_need,
+            qualification_summary,
+            ..Default::default()
+        };
         self.0.write().await.insert(id, PipelineRecord {
             id,
-            stage: PipelineStage::Qualifying,
-            ctx: PipelineContext {
-                session_id,
-                client_need,
-                qualification_summary,
-                ..Default::default()
-            },
+            stage: stage.clone(),
+            ctx: ctx.clone(),
             updated_at: Utc::now(),
         });
+        self.persist(id, &stage, &ctx).await;
         id
     }
 
@@ -134,25 +198,58 @@ impl PipelineStore {
     }
 
     pub async fn advance(&self, id: Uuid, stage: PipelineStage, ctx: PipelineContext) {
-        if let Some(r) = self.0.write().await.get_mut(&id) {
-            r.stage = stage;
-            r.ctx = ctx;
-            r.updated_at = Utc::now();
+        let found = {
+            let mut w = self.0.write().await;
+            if let Some(r) = w.get_mut(&id) {
+                r.stage = stage.clone();
+                r.ctx = ctx.clone();
+                r.updated_at = Utc::now();
+                true
+            } else {
+                false
+            }
+        };
+        if found {
+            self.persist(id, &stage, &ctx).await;
         }
     }
 
     /// Resumes a pipeline that was paused at AwaitingPayment (Stripe webhook callback).
     pub async fn resume_after_payment(&self, id: Uuid) -> bool {
-        let mut guard = self.0.write().await;
-        if let Some(r) = guard.get_mut(&id) {
-            if r.stage == PipelineStage::AwaitingPayment {
-                r.stage = PipelineStage::Deploying;
-                r.updated_at = Utc::now();
-                return true;
+        let snapshot = {
+            let mut guard = self.0.write().await;
+            match guard.get_mut(&id) {
+                Some(r) if r.stage == PipelineStage::AwaitingPayment => {
+                    r.stage = PipelineStage::Deploying;
+                    r.updated_at = Utc::now();
+                    Some((r.stage.clone(), r.ctx.clone()))
+                }
+                _ => None,
             }
+        };
+        match snapshot {
+            Some((stage, ctx)) => {
+                self.persist(id, &stage, &ctx).await;
+                true
+            }
+            None => false,
         }
-        false
     }
+}
+
+/// Creates the pipelines table if it doesn't exist.
+pub async fn run_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS pipelines (
+            id         TEXT PRIMARY KEY,
+            stage      JSONB NOT NULL,
+            ctx        JSONB NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"
+    )
+    .execute(pool).await?;
+    tracing::info!("[pipeline] DB migration complete");
+    Ok(())
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
@@ -276,6 +373,41 @@ mod tests {
         let ctx = PipelineContext::default();
         // Should silently do nothing
         store.advance(Uuid::new_v4(), PipelineStage::Researching, ctx).await;
+    }
+
+    // ── Postgres persistence (gated on TEST_DATABASE_URL, skipped otherwise) ──
+    // Run locally with: TEST_DATABASE_URL=postgres://… cargo test -p backend
+    async fn test_pool() -> Option<sqlx::PgPool> {
+        let url = std::env::var("TEST_DATABASE_URL").ok()?;
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&url)
+            .await
+            .expect("TEST_DATABASE_URL set but connection failed");
+        run_migrations(&pool).await.unwrap();
+        Some(pool)
+    }
+
+    #[tokio::test]
+    async fn awaiting_payment_pipeline_survives_restart() {
+        let Some(pool) = test_pool().await else { return };
+
+        let store = PipelineStore::with_db(Some(pool.clone())).await;
+        let id = store.create("sess-persist".into(), "need persist".into(), None).await;
+        let mut ctx = store.get_ctx(id).await.unwrap();
+        ctx.price_quote = Some(4200);
+        store.advance(id, PipelineStage::AwaitingPayment, ctx).await;
+
+        // Simulate a restart: brand-new store, same pool → must hydrate.
+        let restarted = PipelineStore::with_db(Some(pool.clone())).await;
+        let (stage, _) = restarted.status(id).await.expect("pipeline must survive restart");
+        assert_eq!(stage, PipelineStage::AwaitingPayment);
+        assert_eq!(restarted.get_ctx(id).await.unwrap().price_quote, Some(4200));
+        // resume_after_payment must work on the hydrated record.
+        assert!(restarted.resume_after_payment(id).await);
+
+        sqlx::query("DELETE FROM pipelines WHERE id = $1")
+            .bind(id.to_string()).execute(&pool).await.unwrap();
     }
 }
 

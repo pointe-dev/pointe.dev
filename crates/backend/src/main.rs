@@ -636,8 +636,11 @@ async fn main() {
                     } else if let Err(e) = sessions::run_migrations(&pool).await {
                         tracing::warn!("Session DB migration failed: {e} — falling back to in-memory");
                         None
+                    } else if let Err(e) = pipeline::run_migrations(&pool).await {
+                        tracing::warn!("Pipeline DB migration failed: {e} — falling back to in-memory");
+                        None
                     } else {
-                        tracing::info!("Postgres connected — pitch + session persistence enabled");
+                        tracing::info!("Postgres connected — pitch + session + pipeline persistence enabled");
                         Some(pool)
                     }
                 }
@@ -654,6 +657,7 @@ async fn main() {
     };
 
     let sessions = SessionStore::with_db(db.clone()).await;
+    let pipelines = PipelineStore::with_db(db.clone()).await;
 
     let state = Arc::new(AppState {
         anthropic_key,
@@ -661,7 +665,7 @@ async fn main() {
         system_prompt,
         langfuse,
         sessions,
-        pipelines: PipelineStore::new(),
+        pipelines,
         pending: pending::PendingStore::new(),
         pitches: PitchStore::new(db.clone()),
         qdrant,
