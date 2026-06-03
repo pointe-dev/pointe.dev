@@ -608,21 +608,13 @@ verdict.";
         serde_json::to_string_pretty(workflow).unwrap_or_default(),
     );
 
-    // Prefill the assistant turn with "{" so the model is forced to emit the JSON
-    // verdict with no prose preamble (the prose was what kept failing to parse and
-    // sank otherwise-valid workflows after 3 attempts). 1024 tokens leaves room for
-    // the feedback string without truncating the JSON mid-object.
-    let body = serde_json::json!({
-        "model": SONNET,
-        "max_tokens": 1024,
-        "system": [{"type": "text", "text": SYSTEM, "cache_control": cache_1h()}],
-        "messages": [
-            {"role": "user", "content": user},
-            {"role": "assistant", "content": "{"}
-        ]
-    });
-    let raw = format!("{{{}", anthropic_raw(&app.http, &app.anthropic_key, body).await
-        .map_err(|e| AgentError(format!("critic: {e}")))?);
+    // 1024 (was 512) so the JSON verdict isn't truncated mid-object — a truncated
+    // verdict is unparseable and was failing otherwise-valid workflows after 3
+    // attempts. extract_json() below already tolerates a prose preamble.
+    let raw = anthropic_call(
+        &app.http, &app.anthropic_key, SONNET, 1024,
+        SYSTEM, &user,
+    ).await.map_err(|e| AgentError(format!("critic: {e}")))?;
 
     #[derive(serde::Deserialize)]
     struct Verdict { approved: bool, feedback: Option<String> }
