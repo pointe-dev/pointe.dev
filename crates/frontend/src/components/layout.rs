@@ -5,6 +5,7 @@ use crate::components::theme_toggle::ThemeToggle;
 use crate::pages::home::Home;
 use crate::pages::chat::Chat;
 use crate::pages::merci::Merci;
+use crate::pages::admin::Admin;
 use crate::i18n::{Lang, t};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -12,6 +13,7 @@ enum Page {
     Home,
     Chat,
     Merci,
+    Admin,
 }
 
 fn detect_initial_lang() -> Lang {
@@ -28,7 +30,11 @@ fn detect_initial_lang() -> Lang {
 fn detect_initial_page() -> Page {
     web_sys::window()
         .and_then(|w| w.location().pathname().ok())
-        .map(|p| if p.starts_with("/merci") { Page::Merci } else { Page::Home })
+        .map(|p| {
+            if p.starts_with("/merci") { Page::Merci }
+            else if p.starts_with("/admin") { Page::Admin }
+            else { Page::Home }
+        })
         .unwrap_or(Page::Home)
 }
 
@@ -150,6 +156,11 @@ pub fn Layout() -> impl IntoView {
                     Page::Merci => view! {
                         <div class="page-transition">
                             <Merci on_home_click=move |_| active_page.set(Page::Home) />
+                        </div>
+                    }.into_view(),
+                    Page::Admin => view! {
+                        <div class="page-transition">
+                            <Admin />
                         </div>
                     }.into_view(),
                 }}

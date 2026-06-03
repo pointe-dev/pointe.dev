@@ -13,7 +13,7 @@
 
 use axum::{
     extract::{ConnectInfo, Query, State},
-    http::{HeaderMap, HeaderValue, StatusCode},
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
     routing::{get, post},
     Json, Router,
 };
@@ -158,6 +158,60 @@ async fn admin_ingest_requires_token() {
 
     let resp = server.post("/api/admin/ingest").json(&json!([])).await;
     resp.assert_status(StatusCode::UNAUTHORIZED);
+}
+
+// ── GET /api/admin/dossiers ─────────────────────────────────────────────────────
+
+fn dossiers_router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/api/admin/dossiers", get(backend_lib::handlers::admin::dossiers))
+        .with_state(state)
+}
+
+#[tokio::test]
+async fn admin_dossiers_requires_token() {
+    let state = test_state();
+    let app = dossiers_router(state);
+    let server = TestServer::new(app).unwrap();
+
+    let resp = server.get("/api/admin/dossiers").await;
+    resp.assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn admin_dossiers_lists_pipeline_with_pitch_when_authed() {
+    let state = test_state();
+    let pid = state.pipelines.create(
+        "sess-admin".to_string(),
+        "Automatiser la relance client".to_string(),
+        Some("résumé qualif".to_string()),
+    ).await;
+    state.pitches.set(&pid.to_string(), PitchResult {
+        solution_desc: "Workflow de relance".to_string(),
+        price_eur_cents: 240_000,
+        price_validity: "valable 48h".to_string(),
+        externals_needed: vec![],
+        slides: vec![],
+        manual_quote: false,
+    }).await;
+
+    let app = dossiers_router(state);
+    let server = TestServer::new(app).unwrap();
+
+    let resp = server
+        .get("/api/admin/dossiers")
+        .add_header(HeaderName::from_static("x-admin-token"), HeaderValue::from_static("integration-admin-token"))
+        .await;
+    resp.assert_status_ok();
+
+    let body: Value = resp.json();
+    let arr = body.as_array().expect("dossiers is an array");
+    assert_eq!(arr.len(), 1);
+    let d = &arr[0];
+    assert_eq!(d["pipeline_id"], pid.to_string());
+    assert_eq!(d["client_need"], "Automatiser la relance client");
+    assert_eq!(d["stage"], "qualifying");
+    assert_eq!(d["pitch"]["price_eur_cents"], 240_000);
 }
 
 // ── GET /api/pitch/result — happy path ────────────────────────────────────────

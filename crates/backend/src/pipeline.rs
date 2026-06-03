@@ -240,6 +240,16 @@ impl PipelineStore {
             None => false,
         }
     }
+
+    /// All pipelines, most-recently-updated first. Backs the admin dossier view.
+    /// Clones each record's context — fine at demo volume, keeps the store generic.
+    pub async fn list_records(&self) -> Vec<(Uuid, PipelineStage, DateTime<Utc>, PipelineContext)> {
+        let mut v: Vec<_> = self.0.read().await.values()
+            .map(|r| (r.id, r.stage.clone(), r.updated_at, r.ctx.clone()))
+            .collect();
+        v.sort_by(|a, b| b.2.cmp(&a.2));
+        v
+    }
 }
 
 /// Creates the pipelines table if it doesn't exist.
@@ -307,6 +317,21 @@ mod tests {
     async fn status_returns_none_for_unknown_id() {
         let store = PipelineStore::new();
         assert!(store.status(Uuid::new_v4()).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn list_records_returns_all_most_recent_first() {
+        let store = PipelineStore::new();
+        let first = store.create("s1".to_string(), "need 1".to_string(), None).await;
+        let second = store.create("s2".to_string(), "need 2".to_string(), None).await;
+        // Touch `first` so it becomes the most recently updated.
+        let ctx = store.get_ctx(first).await.unwrap();
+        store.advance(first, PipelineStage::Researching, ctx).await;
+
+        let records = store.list_records().await;
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].0, first, "most recently updated comes first");
+        assert_eq!(records[1].0, second);
     }
 
     #[tokio::test]
