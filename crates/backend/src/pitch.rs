@@ -87,6 +87,20 @@ impl PitchStore {
         }
         None
     }
+
+    /// Drops a session's stored pitch (memory + DB). Called when a fresh pipeline
+    /// starts for the session, so a re-qualification never surfaces the previous
+    /// proposal while the new pipeline is still running.
+    pub async fn clear(&self, session_id: &str) {
+        self.cache.write().await.remove(session_id);
+        if let Some(pool) = &self.db {
+            if let Err(e) = sqlx::query("DELETE FROM pitches WHERE session_id = $1")
+                .bind(session_id)
+                .execute(pool).await {
+                tracing::warn!("[pitch] DB clear failed for {session_id}: {e}");
+            }
+        }
+    }
 }
 
 /// Creates the pitches table if it doesn't exist.
@@ -146,6 +160,15 @@ mod tests {
     async fn get_missing_key_returns_none() {
         let store = PitchStore::new(None);
         assert!(store.get("does-not-exist").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn clear_removes_a_stored_pitch() {
+        let store = PitchStore::new(None);
+        store.set("sess", sample_pitch()).await;
+        assert!(store.get("sess").await.is_some());
+        store.clear("sess").await;
+        assert!(store.get("sess").await.is_none(), "re-qualification must not see the old pitch");
     }
 
     #[tokio::test]

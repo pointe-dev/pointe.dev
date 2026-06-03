@@ -630,6 +630,9 @@ pub fn Chat() -> impl IntoView {
                                 messages_used.set(data.messages_used);
                                 if let Some(pid) = data.pipeline_id {
                                     pipeline_id.set(Some(pid));
+                                    // New qualification → drop any previously shown
+                                    // proposal so we display loading, not the old one.
+                                    current_pitch.set(None);
                                     pitch_failed.set(false);
                                     pitch_stage.set("Analyse en cours…".to_string());
                                     pitch_loading.set(true);
