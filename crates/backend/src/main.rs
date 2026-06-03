@@ -694,10 +694,12 @@ async fn main() {
         .route("/api/pipeline/:id", get(handlers::pipeline::status))
         .route("/api/pipeline/:id/resume", post(handlers::pipeline::resume))
         .route("/api/admin/ingest", post(handlers::ingest::ingest))
+        .route("/api/admin/dossiers", get(handlers::admin::dossiers))
         .route("/api/stripe/checkout", post(handlers::stripe::create_checkout))
         .route("/api/stripe/webhook", post(handlers::stripe::webhook))
         .route("/mcp", post(handlers::mcp::handle))
         .route("/merci", get(serve_index))
+        .route("/admin", get(serve_index))
         .with_state(state)
         .nest(
             "/pkg",
