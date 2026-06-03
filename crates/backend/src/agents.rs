@@ -608,8 +608,11 @@ verdict.";
         serde_json::to_string_pretty(workflow).unwrap_or_default(),
     );
 
+    // 1024 (was 512) so the JSON verdict isn't truncated mid-object — a truncated
+    // verdict is unparseable and was failing otherwise-valid workflows after 3
+    // attempts. extract_json() below already tolerates a prose preamble.
     let raw = anthropic_call(
-        &app.http, &app.anthropic_key, SONNET, 512,
+        &app.http, &app.anthropic_key, SONNET, 1024,
         SYSTEM, &user,
     ).await.map_err(|e| AgentError(format!("critic: {e}")))?;
 
@@ -1051,7 +1054,7 @@ async fn publish_pitch(app: &AppState, ctx: &PipelineContext) {
 
     email_proposal(app, &ctx.session_id, &slides).await;
 
-    app.pitches.set(&ctx.session_id, PitchResult {
+    app.pitches.set(&ctx.pipeline_id.to_string(), PitchResult {
         solution_desc,
         price_eur_cents: setup_price * 100,
         price_validity: "valable 48h".to_string(),
@@ -1097,7 +1100,7 @@ pub async fn publish_manual_pitch(app: &AppState, ctx: &PipelineContext) {
 
     email_proposal(app, &ctx.session_id, &slides).await;
 
-    app.pitches.set(&ctx.session_id, PitchResult {
+    app.pitches.set(&ctx.pipeline_id.to_string(), PitchResult {
         solution_desc,
         price_eur_cents: 0,
         price_validity: String::new(),

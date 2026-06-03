@@ -148,6 +148,7 @@ mod tests {
         assert!(store.get("does-not-exist").await.is_none());
     }
 
+
     #[tokio::test]
     async fn set_overwrites_previous_value() {
         let store = PitchStore::new(None);

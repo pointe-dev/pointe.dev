@@ -336,14 +336,16 @@ async fn handle_pipeline_result(
 
 #[derive(Deserialize)]
 struct PitchPollParams {
-    sid: String,
+    /// Pipeline id — pitches are keyed per pipeline so each qualification keeps
+    /// its own result (and a re-qualification never returns a previous one).
+    pid: String,
 }
 
 async fn handle_pitch_poll(
     State(state): State<Arc<AppState>>,
     Query(params): Query<PitchPollParams>,
 ) -> Json<serde_json::Value> {
-    match state.pitches.get(&params.sid).await {
+    match state.pitches.get(&params.pid).await {
         Some(r) => Json(serde_json::json!({
             "ready":            true,
             "manual_quote":     r.manual_quote,

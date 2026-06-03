@@ -42,6 +42,10 @@ pub enum PipelineStage {
 /// Accumulated context flowing through all pipeline stages.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PipelineContext {
+    /// The owning pipeline's id. Set at create(); also the key under which this
+    /// run's pitch is stored, so every qualification keeps its own pitch row.
+    #[serde(default)]
+    pub pipeline_id: Uuid,
     pub session_id: String,
     /// Raw description from the qualifier chat.
     pub client_need: String,
@@ -174,6 +178,7 @@ impl PipelineStore {
         let id = Uuid::new_v4();
         let stage = PipelineStage::Qualifying;
         let ctx = PipelineContext {
+            pipeline_id: id,
             session_id,
             client_need,
             qualification_summary,
