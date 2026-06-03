@@ -1062,7 +1062,7 @@ async fn publish_pitch(app: &AppState, ctx: &PipelineContext) {
 
     email_proposal(app, &ctx.session_id, &slides).await;
 
-    app.pitches.set(&ctx.session_id, PitchResult {
+    app.pitches.set(&ctx.pipeline_id.to_string(), PitchResult {
         solution_desc,
         price_eur_cents: setup_price * 100,
         price_validity: "valable 48h".to_string(),
@@ -1108,7 +1108,7 @@ pub async fn publish_manual_pitch(app: &AppState, ctx: &PipelineContext) {
 
     email_proposal(app, &ctx.session_id, &slides).await;
 
-    app.pitches.set(&ctx.session_id, PitchResult {
+    app.pitches.set(&ctx.pipeline_id.to_string(), PitchResult {
         solution_desc,
         price_eur_cents: 0,
         price_validity: String::new(),

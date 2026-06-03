@@ -458,17 +458,17 @@ pub fn Chat() -> impl IntoView {
     //   • failed → pipeline marked `failed`, its record is gone (restart), or
     //              the safety-net timeout fired
     //   • else   → keep polling
-    let sid_pitch = session_id.clone();
     create_effect(move |_| {
         let attempt = pitch_poll_tick.get();
         if !pitch_loading.get_untracked() { return; }
-        let sid = sid_pitch.clone();
         let pid = pipeline_id.get_untracked();
         spawn_local(async move {
             sleep_ms(3000).await;
 
-            // 1) Pitch ready?
-            if let Ok(r) = Request::get(&format!("/api/pitch/result?sid={}", sid)).send().await {
+            // 1) Pitch ready? Keyed by pipeline id, so each qualification polls
+            //    its own result (a re-qualification never sees a previous one).
+            if let Some(pid_str) = pid.clone() {
+            if let Ok(r) = Request::get(&format!("/api/pitch/result?pid={}", pid_str)).send().await {
                 if let Ok(data) = r.json::<PitchPollResponse>().await {
                     if data.ready {
                         let slides       = data.slides;
@@ -485,6 +485,7 @@ pub fn Chat() -> impl IntoView {
                         return;
                     }
                 }
+            }
             }
 
             // 2) Read pipeline status: surface the live stage on the button, and

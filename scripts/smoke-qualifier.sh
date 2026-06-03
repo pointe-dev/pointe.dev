@@ -149,7 +149,7 @@ echo "────────────────────────�
 echo "⏳ polling /api/pitch/result (timeout ${PITCH_TIMEOUT}s)…"
 deadline=$(( $(date +%s) + PITCH_TIMEOUT ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
-  pr=$(do_curl -s "$BASE_URL/api/pitch/result?sid=$SID" || echo '{}')
+  pr=$(do_curl -s "$BASE_URL/api/pitch/result?pid=$pipeline_id" || echo '{}')
   if [ "$(jq -r '.ready // false' <<<"$pr")" = "true" ]; then
     manual=$(jq -r '.manual_quote // false' <<<"$pr")
     cents=$(jq -r '.price_eur_cents // 0' <<<"$pr")

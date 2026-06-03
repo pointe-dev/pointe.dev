@@ -266,7 +266,6 @@ async fn handle_confirm(
     // twice from repeated link clicks.
     if first_unlock {
         if let Some(q) = state.pending.take_qualify(&session_id).await {
-            state.pitches.clear(&session_id).await;
             let id = state.pipelines.create(
                 session_id.clone(),
                 q.client_need,
@@ -337,14 +336,16 @@ async fn handle_pipeline_result(
 
 #[derive(Deserialize)]
 struct PitchPollParams {
-    sid: String,
+    /// Pipeline id — pitches are keyed per pipeline so each qualification keeps
+    /// its own result (and a re-qualification never returns a previous one).
+    pid: String,
 }
 
 async fn handle_pitch_poll(
     State(state): State<Arc<AppState>>,
     Query(params): Query<PitchPollParams>,
 ) -> Json<serde_json::Value> {
-    match state.pitches.get(&params.sid).await {
+    match state.pitches.get(&params.pid).await {
         Some(r) => Json(serde_json::json!({
             "ready":            true,
             "manual_quote":     r.manual_quote,
@@ -481,10 +482,6 @@ async fn handle_ai_chat(
         let (after_qualify, maybe_qualify) = parse_qualify(&raw_text);
         let (pid, gate) = if let Some(q) = maybe_qualify {
             if state.sessions.is_unlocked(&session_key).await {
-                // Fresh qualification: drop any previous pitch for this session so
-                // the poll shows loading until the NEW pipeline publishes, instead
-                // of instantly returning the prior (persisted) proposal.
-                state.pitches.clear(&payload.session_id).await;
                 let id = state.pipelines.create(
                     payload.session_id.clone(),
                     q.client_need,
