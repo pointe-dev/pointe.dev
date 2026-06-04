@@ -1011,19 +1011,27 @@ html:not(.dark) .nav-glass {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  border: 1px solid var(--border-subtle);
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 1rem;
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  border: 1px solid rgba(232, 22, 60, 0.45);
+  background: rgba(232, 22, 60, 0.10);
+  color: var(--red-bright);
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1;
   cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
+  transition: border-color 0.15s, color 0.15s, background 0.15s, transform 0.15s, box-shadow 0.15s;
 }
-.pitch-nav-btn:hover { border-color: var(--text-primary); color: var(--text-primary); }
-.pitch-nav-btn-ghost { opacity: 0.3; cursor: not-allowed; }
-.pitch-nav-btn-ghost:hover { border-color: var(--border-subtle); color: var(--text-secondary); }
+.pitch-nav-btn:hover {
+  border-color: var(--red-bright);
+  background: rgba(232, 22, 60, 0.18);
+  color: var(--red-bright);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(232, 22, 60, 0.20);
+}
+.pitch-nav-btn-ghost { opacity: 0.28; cursor: not-allowed; }
+.pitch-nav-btn-ghost:hover { transform: none; box-shadow: none; background: rgba(232, 22, 60, 0.10); border-color: rgba(232, 22, 60, 0.45); }
 .pitch-nav-count {
   font-size: 0.78rem;
   color: var(--text-muted);
