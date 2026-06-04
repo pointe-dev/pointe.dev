@@ -33,49 +33,6 @@ impl From<reqwest::Error> for AgentError {
 
 // ── Shared Anthropic primitives ───────────────────────────────────────────────
 
-fn strip_fences(s: &str) -> &str {
-    s.trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim()
-}
-
-/// Extracts the first balanced JSON value (object or array) from an LLM
-/// response, tolerating a prose preamble/suffix and ``` fences — e.g. a critic
-/// that prepends "I need to check the connections carefully." before the JSON.
-/// Falls back to the fence-stripped string when no JSON delimiters are found,
-/// so the caller's own parse error still surfaces.
-fn extract_json(s: &str) -> &str {
-    let stripped = strip_fences(s);
-    let bytes = stripped.as_bytes();
-    let Some(start) = bytes.iter().position(|&b| b == b'{' || b == b'[') else {
-        return stripped;
-    };
-    let open = bytes[start];
-    let close = if open == b'{' { b'}' } else { b']' };
-    let (mut depth, mut in_str, mut escaped) = (0i32, false, false);
-    for i in start..bytes.len() {
-        let b = bytes[i];
-        if in_str {
-            if escaped { escaped = false; }
-            else if b == b'\\' { escaped = true; }
-            else if b == b'"' { in_str = false; }
-            continue;
-        }
-        match b {
-            b'"' => in_str = true,
-            b if b == open => depth += 1,
-            b if b == close => {
-                depth -= 1;
-                if depth == 0 { return &stripped[start..=i]; }
-            }
-            _ => {}
-        }
-    }
-    stripped // unbalanced — let the caller's parse error surface
-}
-
 /// Single-turn call with prompt caching.
 /// `system` is always cached — static instructions shared across all pipeline runs.
 /// `user` is dynamic per-request context — not cached.
@@ -302,9 +259,9 @@ You are the solutions architect at pointe.dev. You scope automation projects tha
 will be built on n8n (a node-based workflow tool). Given a prospect's need, you \
 produce a rigorous, honest technical assessment that drives the build and the price.\n\
 \n\
-Output ONLY valid JSON — no prose, no markdown fences, no comments.\n\
+Submit your assessment by calling the submit_assessment tool.\n\
 \n\
-Schema:\n\
+Fields:\n\
 {sector, current_tools[], pain_points[],\n\
  integrations_required[{name, n8n_node, auth_type, notes}],\n\
  api_keys_to_acquire[], feasibility_score(0-10),\n\
@@ -365,13 +322,55 @@ real and specific, and nothing is padded. Apply the same discipline.";
         ctx.qualification_summary.as_deref().unwrap_or(""),
     );
 
-    let raw = anthropic_call(
-        &app.http, &app.anthropic_key, SONNET, 2048,
-        SYSTEM, &user,
-    ).await.map_err(|e| AgentError(format!("research: {e}")))?;
+    // Forced tool call → guaranteed-valid JSON. The model previously emitted
+    // free-text JSON that occasionally broke serde (e.g. a full-width comma),
+    // which failed the whole pipeline before it ever reached the builder.
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "sector": {"type": "string"},
+            "current_tools": {"type": "array", "items": {"type": "string"}},
+            "pain_points": {"type": "array", "items": {"type": "string"}},
+            "integrations_required": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "n8n_node": {"type": "string", "description": "real n8n node type, or n8n-nodes-base.httpRequest"},
+                        "auth_type": {"type": "string"},
+                        "notes": {"type": "string"}
+                    },
+                    "required": ["name", "n8n_node"]
+                }
+            },
+            "api_keys_to_acquire": {"type": "array", "items": {"type": "string"}},
+            "feasibility_score": {"type": "number", "description": "0-10"},
+            "complexity": {"type": "string", "enum": ["simple", "medium", "complex"]},
+            "estimated_build_hours": {"type": "string", "description": "plain number string, e.g. '14'"},
+            "approach": {"type": "string", "description": "one plain sentence"},
+            "risks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "description": {"type": "string"},
+                        "severity": {"type": "string", "enum": ["low", "medium", "high"]}
+                    },
+                    "required": ["description", "severity"]
+                },
+                "description": "max 3; empty array if none worth flagging"
+            }
+        },
+        "required": ["sector", "complexity", "feasibility_score", "estimated_build_hours", "integrations_required"]
+    });
 
-    let structured: serde_json::Value = serde_json::from_str(extract_json(&raw))
-        .map_err(|e| AgentError(format!("research JSON parse: {e} — raw: {raw}")))?;
+    let structured = anthropic_tool_call(
+        &app.http, &app.anthropic_key, SONNET, 2048,
+        SYSTEM, serde_json::Value::String(user),
+        "submit_assessment", "Submit the technical assessment.",
+        schema,
+    ).await.map_err(|e| AgentError(format!("research: {e}")))?;
 
     let summary = format!(
         "Sector: {sector}\n\
@@ -832,8 +831,8 @@ These three slides must feel tailor-made: the client should recognise their own 
 situation, see a credible solution, and know exactly what happens next. This is the \
 moment that converts interest into a signed project — make it land.\n\
 \n\
-Respond ONLY with a JSON array of exactly 3 objects, no prose, no markdown fences.\n\
-Schema: [{\"title\":\"...\",\"body\":\"...\",\"points\":[\"...\"]}]\n\
+Submit the slides by calling the submit_slides tool: exactly 3 slides, each \
+{title, body, points[]}.\n\
 \n\
 The 3 titles MUST be exactly these, in the SAME LANGUAGE as the Project field:\n\
   1. Ce que nous avons compris / What we understood / Was wir verstanden haben\n\
@@ -876,12 +875,37 @@ Setup: {setup}€ (one-time) + {monthly}€/month\nJustification: {just}",
         just     = justification,
     );
 
-    // Store parsed JSON directly — eliminates the double-encoding bug
-    ctx.pricing_slides_json = match anthropic_call(
+    // Forced tool call → the slides come back as a valid JSON array. Tool input
+    // must be an object, so the array is wrapped under `slides`; we store the
+    // inner array (the shape publish_pitch expects). On any error, leave None
+    // and let publish fall back.
+    let slides_schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "slides": {
+                "type": "array",
+                "description": "exactly 3 slides",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "body": {"type": "string", "description": "1-2 sentences"},
+                        "points": {"type": "array", "items": {"type": "string"}, "description": "max 3, each ≤10 words"}
+                    },
+                    "required": ["title", "body", "points"]
+                }
+            }
+        },
+        "required": ["slides"]
+    });
+
+    ctx.pricing_slides_json = match anthropic_tool_call(
         &app.http, &app.anthropic_key, HAIKU, 600,
-        SLIDES_SYSTEM, &slides_user,
+        SLIDES_SYSTEM, serde_json::Value::String(slides_user),
+        "submit_slides", "Submit the 3 proposal slides.",
+        slides_schema,
     ).await {
-        Ok(raw) => serde_json::from_str(extract_json(&raw)).ok(),
+        Ok(input) => input.get("slides").cloned(),
         Err(_) => {
             tracing::warn!("[pricing] slide generation failed — fallback used at publish");
             None
@@ -948,10 +972,7 @@ correction levers so the next pricing pass improves:\n\
 Do not reject a sound, fair quote to seem rigorous — approving a good price is the \
 right call. Be decisive.\n\
 \n\
-JSON schema:\n\
-{\"approved\":bool, \"reason\":\"1-2 sentences\",\
- \"complexity\":\"simple\"|\"medium\"|\"complex\"|null,\
- \"feasibility_score\":number|null}\n\
+Submit your verdict by calling the submit_pricing_verdict tool.\n\
 Set complexity/feasibility_score to null when the current values are acceptable.\n\
 \n\
 Worked examples (your output is JSON only):\n\
@@ -1013,30 +1034,39 @@ Integrations: {integrations}\nRisks: {risks}\n\
         rate         = hourly_rate,
     );
 
-    let raw = match anthropic_call(
-        &app.http, &app.anthropic_key, SONNET, 200,
-        SYSTEM, &user,
-    ).await {
-        Ok(r) => r,
-        Err(_) => {
-            tracing::warn!("[pricing-critic] call failed — auto-approving");
-            publish_pitch(app, ctx).await;
-            return Ok(true);
-        }
-    };
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "approved": {"type": "boolean"},
+            "reason": {"type": "string", "description": "1-2 sentences; specific and actionable when rejecting"},
+            "complexity": {"type": ["string", "null"], "enum": ["simple", "medium", "complex", null], "description": "corrected tier, or null if the current one is fine"},
+            "feasibility_score": {"type": ["number", "null"], "description": "override 0-10, or null if the current value is fine"}
+        },
+        "required": ["approved", "reason"]
+    });
 
     #[derive(serde::Deserialize)]
     struct CriticOutput {
         approved: bool,
         reason: String,
+        #[serde(default)]
         complexity: Option<String>,
+        #[serde(default)]
         feasibility_score: Option<f32>,
     }
 
-    let verdict: CriticOutput = match serde_json::from_str(extract_json(&raw)) {
+    // Forced tool call → valid JSON verdict. On a transport error or an
+    // unexpected shape, auto-approve (the deterministic price is already sound)
+    // rather than stalling the pipeline.
+    let verdict: CriticOutput = match anthropic_tool_call(
+        &app.http, &app.anthropic_key, SONNET, 200,
+        SYSTEM, serde_json::Value::String(user),
+        "submit_pricing_verdict", "Submit your pricing verdict.",
+        schema,
+    ).await.and_then(|v| serde_json::from_value(v).map_err(|e| AgentError(e.to_string()))) {
         Ok(v) => v,
         Err(e) => {
-            tracing::warn!("[pricing-critic] JSON parse failed: {e} — auto-approving");
+            tracing::warn!("[pricing-critic] verdict unavailable: {e} — auto-approving");
             publish_pitch(app, ctx).await;
             return Ok(true);
         }
@@ -1326,84 +1356,6 @@ mod tests {
         assert_eq!(text_block(&with_text), "hello");
         let no_text = serde_json::json!({"content": [{"type": "tool_use", "input": {}}]});
         assert_eq!(text_block(&no_text), "");
-    }
-
-    // ── strip_fences ───────────────────────────────────────────────────────
-
-    #[test]
-    fn strip_fences_removes_json_fence() {
-        let input = "```json\n{\"key\":\"value\"}\n```";
-        assert_eq!(strip_fences(input), "{\"key\":\"value\"}");
-    }
-
-    #[test]
-    fn strip_fences_removes_plain_fence() {
-        let input = "```\n{\"a\":1}\n```";
-        assert_eq!(strip_fences(input), "{\"a\":1}");
-    }
-
-    #[test]
-    fn strip_fences_leaves_plain_json_untouched() {
-        let input = "{\"key\":\"value\"}";
-        assert_eq!(strip_fences(input), input);
-    }
-
-    #[test]
-    fn strip_fences_trims_surrounding_whitespace() {
-        let input = "  \n{\"x\":1}\n  ";
-        assert_eq!(strip_fences(input), "{\"x\":1}");
-    }
-
-    // ── extract_json ───────────────────────────────────────────────────────
-
-    #[test]
-    fn extract_json_strips_prose_preamble() {
-        // The exact shape that hard-failed a prod pipeline.
-        let input = "I need to check the connections carefully.\n{\"approved\":false,\"feedback\":\"x\"}";
-        assert_eq!(extract_json(input), "{\"approved\":false,\"feedback\":\"x\"}");
-    }
-
-    #[test]
-    fn extract_json_strips_prose_suffix() {
-        let input = "{\"approved\":true} — looks good to me!";
-        assert_eq!(extract_json(input), "{\"approved\":true}");
-    }
-
-    #[test]
-    fn extract_json_handles_nested_braces_and_arrays() {
-        let input = "here:\n{\"a\":[1,2],\"b\":{\"c\":3}} trailing";
-        assert_eq!(extract_json(input), "{\"a\":[1,2],\"b\":{\"c\":3}}");
-    }
-
-    #[test]
-    fn extract_json_ignores_braces_inside_strings() {
-        let input = "x {\"msg\":\"a } b { c\"} y";
-        assert_eq!(extract_json(input), "{\"msg\":\"a } b { c\"}");
-    }
-
-    #[test]
-    fn extract_json_handles_top_level_array() {
-        let input = "Réponse: [{\"label\":\"A\"}] voilà";
-        assert_eq!(extract_json(input), "[{\"label\":\"A\"}]");
-    }
-
-    #[test]
-    fn extract_json_strips_fences_then_extracts() {
-        let input = "```json\nblah {\"k\":1}\n```";
-        assert_eq!(extract_json(input), "{\"k\":1}");
-    }
-
-    #[test]
-    fn extract_json_no_json_returns_stripped() {
-        let input = "no json here at all";
-        assert_eq!(extract_json(input), "no json here at all");
-    }
-
-    #[test]
-    fn extract_json_unbalanced_returns_stripped() {
-        // Missing closing brace — fall back so the caller's parse error surfaces.
-        let input = "{\"a\":1";
-        assert_eq!(extract_json(input), "{\"a\":1");
     }
 
     // ── cache_1h ───────────────────────────────────────────────────────────
