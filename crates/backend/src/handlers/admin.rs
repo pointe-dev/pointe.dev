@@ -6,12 +6,13 @@
 //! Does NOT cover: any mutation/validation action (read-only by design for v1).
 
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::{header, HeaderMap, StatusCode},
     Json,
 };
 use serde::Serialize;
 use std::sync::Arc;
+use uuid::Uuid;
 use crate::state::AppState;
 
 /// Reads the admin secret from `Authorization: Bearer …` or the `x-admin-token`
@@ -101,4 +102,31 @@ pub async fn dossiers(
         });
     }
     Ok(Json(out))
+}
+
+/// POST /api/admin/dossiers/:id/respawn — re-run a dossier's pipeline from its
+/// stored need + qualification summary (e.g. to recover a SavedForHuman/Failed
+/// one). Spawns a fresh pipeline keyed by a new id; on publish it also re-emails
+/// the client the proposal. Returns the new pipeline id.
+pub async fn respawn(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    check_admin(&state, &headers)?;
+
+    let pid = Uuid::parse_str(&id)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid pipeline id".to_string()))?;
+    let ctx = state.pipelines.get_ctx(pid).await
+        .ok_or((StatusCode::NOT_FOUND, "dossier not found".to_string()))?;
+
+    let new_id = state.pipelines.create(
+        ctx.session_id.clone(),
+        ctx.client_need.clone(),
+        ctx.qualification_summary.clone(),
+    ).await;
+    crate::pipeline::spawn(new_id, state.pipelines.clone(), state.clone());
+
+    tracing::info!("[admin] respawned dossier {pid} → new pipeline {new_id}");
+    Ok(Json(serde_json::json!({ "pipeline_id": new_id.to_string() })))
 }

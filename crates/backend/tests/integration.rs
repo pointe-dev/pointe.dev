@@ -214,6 +214,60 @@ async fn admin_dossiers_lists_pipeline_with_pitch_when_authed() {
     assert_eq!(d["pitch"]["price_eur_cents"], 240_000);
 }
 
+// ── POST /api/admin/dossiers/:id/respawn ────────────────────────────────────────
+
+fn respawn_router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/api/admin/dossiers/:id/respawn", post(backend_lib::handlers::admin::respawn))
+        .with_state(state)
+}
+
+#[tokio::test]
+async fn admin_respawn_requires_token() {
+    let state = test_state();
+    let app = respawn_router(state);
+    let server = TestServer::new(app).unwrap();
+
+    let resp = server.post("/api/admin/dossiers/whatever/respawn").await;
+    resp.assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn admin_respawn_unknown_dossier_returns_404() {
+    let state = test_state();
+    let app = respawn_router(state);
+    let server = TestServer::new(app).unwrap();
+
+    let resp = server
+        .post("/api/admin/dossiers/00000000-0000-0000-0000-000000000000/respawn")
+        .add_header(HeaderName::from_static("x-admin-token"), HeaderValue::from_static("integration-admin-token"))
+        .await;
+    resp.assert_status(StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_respawn_existing_dossier_returns_fresh_pipeline_id() {
+    let state = test_state();
+    let pid = state.pipelines.create(
+        "sess-respawn".to_string(),
+        "need to re-run".to_string(),
+        Some("résumé".to_string()),
+    ).await;
+
+    let app = respawn_router(state);
+    let server = TestServer::new(app).unwrap();
+
+    let resp = server
+        .post(&format!("/api/admin/dossiers/{}/respawn", pid))
+        .add_header(HeaderName::from_static("x-admin-token"), HeaderValue::from_static("integration-admin-token"))
+        .await;
+    resp.assert_status_ok();
+
+    let body: Value = resp.json();
+    let new_id = body["pipeline_id"].as_str().expect("new pipeline_id");
+    assert_ne!(new_id, pid.to_string(), "respawn creates a fresh pipeline keyed by a new id");
+}
+
 // ── GET /api/pitch/result — happy path ────────────────────────────────────────
 
 #[tokio::test]
