@@ -162,7 +162,7 @@ pub fn Admin() -> impl IntoView {
                         view! {
                             <div class="space-y-3">
                                 <p class="text-xs text-muted">{format!("{count} dossier(s)")}</p>
-                                {dossiers.into_iter().map(dossier_card).collect_view()}
+                                {dossiers.into_iter().map(|d| dossier_card(d, token, load)).collect_view()}
                             </div>
                         }.into_view()
                     }
@@ -173,10 +173,36 @@ pub fn Admin() -> impl IntoView {
     }
 }
 
-fn dossier_card(d: Dossier) -> impl IntoView {
+fn dossier_card(
+    d: Dossier,
+    token: RwSignal<String>,
+    load: Action<String, Result<Vec<Dossier>, String>>,
+) -> impl IntoView {
     let (stage_label, stage_class) = stage_badge(&d.stage);
     let price = d.pitch.as_ref().map(format_price);
     let updated = d.updated_at.split('T').next().unwrap_or(&d.updated_at).to_string();
+    let pid = d.pipeline_id.clone();
+    let email = d.email.unwrap_or_else(|| "— pas d'email".to_string());
+
+    // Re-run the dossier's pipeline (recovers a stuck/failed one). Confirmed
+    // because publish re-emails the client; on success we refresh the list.
+    let respawn = move |_| {
+        let confirmed = web_sys::window()
+            .and_then(|w| w.confirm_with_message(
+                "Relancer ce dossier ? Une nouvelle proposition sera générée et envoyée au client.",
+            ).ok())
+            .unwrap_or(false);
+        if !confirmed { return; }
+        let t = token.get_untracked();
+        let pid = pid.clone();
+        spawn_local(async move {
+            let _ = Request::post(&format!("/api/admin/dossiers/{pid}/respawn"))
+                .header("x-admin-token", &t)
+                .send()
+                .await;
+            load.dispatch(t);
+        });
+    };
 
     view! {
         <div class="glass rounded-2xl p-5 space-y-3">
@@ -204,8 +230,14 @@ fn dossier_card(d: Dossier) -> impl IntoView {
             })}
 
             <div class="flex items-center justify-between gap-3 flex-wrap pt-1 text-xs text-muted">
-                <span>{d.email.unwrap_or_else(|| "— pas d'email".to_string())}</span>
-                <span class="font-mono opacity-60">{d.pipeline_id}</span>
+                <span>{email}</span>
+                <div class="flex items-center gap-3">
+                    <button
+                        on:click=respawn
+                        class="text-xs font-medium px-2.5 py-1 rounded-md border border-red-500/40 bg-red-500/10 text-red-300 hover:bg-red-500/20 hover:border-red-400 transition-colors"
+                    >"↻ Relancer"</button>
+                    <span class="font-mono opacity-60">{d.pipeline_id}</span>
+                </div>
             </div>
         </div>
     }
