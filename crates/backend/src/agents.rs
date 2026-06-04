@@ -96,35 +96,59 @@ async fn anthropic_call(
     anthropic_raw(http, key, body).await
 }
 
-/// Variant for agents called multiple times per pipeline (builder retries, pricing retries).
-/// `context` is the large, stable part of the user message — cached within the pipeline.
-/// `suffix` is the small, changing part (critic feedback) — never cached.
-async fn anthropic_call_retryable(
+/// Forces the model to answer by calling a single tool, returning that tool's
+/// `input` as a JSON value. The Messages API guarantees the tool input is valid
+/// JSON shaped by `input_schema`, so this removes the "model replied in prose
+/// instead of JSON" failure class that `extract_json` was patching over.
+///
+/// `user_content` is the message content — a plain string, or a content-block
+/// array carrying `cache_control` for callers that cache a large stable prefix
+/// (the builder). Caching is preserved: `tools` render before `system`, so the
+/// system-block breakpoint caches tools+system together, and both the tool
+/// schema and `tool_choice` are constant across calls.
+async fn anthropic_tool_call(
     http: &reqwest::Client,
     key: &str,
     model: &'static str,
     max_tokens: u32,
     system: &str,
-    context: &str,
-    suffix: &str,
-) -> Result<String, AgentError> {
-    let user_content = if suffix.is_empty() {
-        serde_json::json!([
-            {"type": "text", "text": context, "cache_control": cache_1h()}
-        ])
-    } else {
-        serde_json::json!([
-            {"type": "text", "text": context, "cache_control": cache_1h()},
-            {"type": "text", "text": suffix}
-        ])
-    };
+    user_content: serde_json::Value,
+    tool_name: &str,
+    tool_description: &str,
+    input_schema: serde_json::Value,
+) -> Result<serde_json::Value, AgentError> {
     let body = serde_json::json!({
         "model": model,
         "max_tokens": max_tokens,
         "system": [{"type": "text", "text": system, "cache_control": cache_1h()}],
-        "messages": [{"role": "user", "content": user_content}]
+        "messages": [{"role": "user", "content": user_content}],
+        "tools": [{
+            "name": tool_name,
+            "description": tool_description,
+            "input_schema": input_schema,
+        }],
+        "tool_choice": {"type": "tool", "name": tool_name},
     });
-    anthropic_raw(http, key, body).await
+    let v = anthropic_send(http, key, body).await?;
+    tool_use_input(&v)
+        .ok_or_else(|| AgentError(format!("Anthropic: no tool_use block in response: {v}")))
+}
+
+/// First `tool_use` block's `input` from a Messages API response body.
+fn tool_use_input(resp: &serde_json::Value) -> Option<serde_json::Value> {
+    resp["content"].as_array()?
+        .iter()
+        .find(|b| b["type"] == "tool_use")
+        .map(|b| b["input"].clone())
+}
+
+/// First `text` block's text from a Messages API response body ("" if none).
+fn text_block(resp: &serde_json::Value) -> String {
+    resp["content"].as_array()
+        .and_then(|blocks| blocks.iter().find(|b| b["type"] == "text"))
+        .and_then(|b| b["text"].as_str())
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// Total attempts (1 initial + retries) for a single Anthropic call.
@@ -142,11 +166,14 @@ fn anthropic_backoff(attempt: u32) -> std::time::Duration {
     std::time::Duration::from_millis(base_ms + jitter)
 }
 
-async fn anthropic_raw(
+/// Sends a Messages API request with retry/backoff and returns the parsed JSON
+/// response body. Both the text extractor (`anthropic_raw`) and the tool-call
+/// extractor (`anthropic_tool_call`) build on this.
+async fn anthropic_send(
     http: &reqwest::Client,
     key: &str,
     body: serde_json::Value,
-) -> Result<String, AgentError> {
+) -> Result<serde_json::Value, AgentError> {
     // Transient failures (rate limits, overloaded 529, gateway/5xx, network
     // blips) are retried with backoff so one hiccup doesn't kill a whole
     // pipeline. 4xx other than 408/429 are permanent → fail fast.
@@ -194,17 +221,18 @@ async fn anthropic_raw(
         }
     };
 
-    #[derive(serde::Deserialize)]
-    struct Resp { content: Vec<Content> }
-    #[derive(serde::Deserialize)]
-    struct Content { #[serde(rename = "type")] kind: String, text: Option<String> }
+    resp.json::<serde_json::Value>().await
+        .map_err(|e| AgentError(format!("Anthropic parse: {e}")))
+}
 
-    let ant: Resp = resp.json().await
-        .map_err(|e| AgentError(format!("Anthropic parse: {e}")))?;
-    Ok(ant.content.into_iter()
-        .find(|c| c.kind == "text")
-        .and_then(|c| c.text)
-        .unwrap_or_default())
+/// Calls the Messages API and returns the first `text` content block.
+async fn anthropic_raw(
+    http: &reqwest::Client,
+    key: &str,
+    body: serde_json::Value,
+) -> Result<String, AgentError> {
+    let v = anthropic_send(http, key, body).await?;
+    Ok(text_block(&v))
 }
 
 // ── Agents ────────────────────────────────────────────────────────────────────
@@ -419,7 +447,7 @@ You are the workflow engineer at pointe.dev. You produce production-grade n8n \
 workflow JSON that solves the client's need end-to-end. Reference templates may be \
 provided — adapt their proven structure, do not copy blindly.\n\
 \n\
-Output ONLY valid n8n workflow JSON. No prose, no markdown fences, no position fields.\n\
+Return the workflow by calling the build_workflow tool. No position fields.\n\
 \n\
 Structure:\n\
 - Required top-level keys: name, nodes[], connections{}.\n\
@@ -504,17 +532,44 @@ unknown node type makes the entire workflow fail to import and blocks deployment
         )
     };
 
-    let raw = anthropic_call_retryable(
+    // Stable context cached within the pipeline; the changing critic feedback
+    // (suffix) is appended uncached. Same caching shape as before — only the
+    // delivery mechanism (forced tool call) changed.
+    let user_content = if suffix.is_empty() {
+        serde_json::json!([
+            {"type": "text", "text": context, "cache_control": cache_1h()}
+        ])
+    } else {
+        serde_json::json!([
+            {"type": "text", "text": context, "cache_control": cache_1h()},
+            {"type": "text", "text": suffix}
+        ])
+    };
+
+    // Forced tool call → the API returns the workflow as a valid JSON object,
+    // so there is no prose/fence to strip and no parse-failure path.
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "Human-readable workflow name"},
+            "nodes": {
+                "type": "array",
+                "items": {"type": "object"},
+                "description": "n8n nodes: each has type, name, typeVersion, parameters, and credentials ({} when none)"
+            },
+            "connections": {"type": "object", "description": "Wiring keyed by source node name"}
+        },
+        "required": ["name", "nodes", "connections"]
+    });
+
+    let workflow = anthropic_tool_call(
         &app.http, &app.anthropic_key, SONNET, 8192,
-        SYSTEM, &context, &suffix,
+        SYSTEM, user_content,
+        "build_workflow", "Submit the complete n8n workflow JSON.",
+        schema,
     ).await.map_err(|e| AgentError(format!("builder: {e}")))?;
 
-    ctx.workflow_json = Some(
-        serde_json::from_str(extract_json(&raw)).map_err(|e| {
-            let preview = &raw[..raw.len().min(500)];
-            AgentError(format!("workflow JSON parse: {e}\nRaw (first 500): {preview}"))
-        })?
-    );
+    ctx.workflow_json = Some(workflow);
     Ok(())
 }
 
@@ -533,10 +588,8 @@ nitpick style. A workflow you approve will be deployed and billed, so correctnes
 is non-negotiable — but blocking a sound workflow over a trivial preference wastes a \
 build cycle.\n\
 \n\
-Output ONLY one of:\n\
-  {\"approved\":true}\n\
-  {\"approved\":false,\"feedback\":\"max 3 concrete, actionable issues\"}\n\
-No prose, no markdown fences.\n\
+Submit your verdict by calling the submit_review tool: approved=true for a sound \
+workflow, or approved=false with feedback listing max 3 concrete, actionable issues.\n\
 \n\
 Reject (approved:false) if ANY of these fail:\n\
 1. Node types — any type that isn't a real n8n node, or is clearly wrong for its job.\n\
@@ -608,29 +661,49 @@ verdict.";
         serde_json::to_string_pretty(workflow).unwrap_or_default(),
     );
 
-    // 1024 (was 512) so the JSON verdict isn't truncated mid-object — a truncated
-    // verdict is unparseable and was failing otherwise-valid workflows after 3
-    // attempts. extract_json() below already tolerates a prose preamble.
-    let raw = anthropic_call(
-        &app.http, &app.anthropic_key, SONNET, 1024,
-        SYSTEM, &user,
-    ).await.map_err(|e| AgentError(format!("critic: {e}")))?;
-
     #[derive(serde::Deserialize)]
     struct Verdict { approved: bool, feedback: Option<String> }
 
-    // The critic occasionally answers in prose instead of JSON. Don't let that
-    // kill the whole pipeline (which would publish no pitch at all) — treat an
-    // unparseable verdict as a soft rejection so the builder retries and, after
-    // MAX_BUILD_ATTEMPTS, publish_manual_pitch still produces a proposal.
-    let verdict: Verdict = match serde_json::from_str(extract_json(&raw)) {
+    // Forced tool call → the verdict comes back as a valid JSON object, which
+    // ends the recurring "critic answered in prose" failure that previously
+    // burned all 3 build attempts and stranded the pipeline at SavedForHuman.
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "approved": {
+                "type": "boolean",
+                "description": "true if the workflow is correct, complete, wired, authenticated, and appropriately scoped"
+            },
+            "feedback": {
+                "type": "string",
+                "description": "Required when approved is false: max 3 concrete, actionable issues citing node names. Omit when approved is true."
+            }
+        },
+        "required": ["approved"]
+    });
+
+    // A transport error still shouldn't kill the pipeline — fall back to a soft
+    // rejection so the builder retries and, after MAX_BUILD_ATTEMPTS,
+    // publish_manual_pitch still produces a proposal.
+    let input = match anthropic_tool_call(
+        &app.http, &app.anthropic_key, SONNET, 1024,
+        SYSTEM, serde_json::Value::String(user),
+        "submit_review", "Submit your review verdict for the workflow.",
+        schema,
+    ).await {
         Ok(v) => v,
         Err(e) => {
-            tracing::warn!("[critic] verdict parse failed: {e} — treating as rejection. raw: {raw}");
-            ctx.critic_feedback.push(
-                "Réponds UNIQUEMENT avec le JSON {\"approved\":bool,\"feedback\":string}, \
-                 sans aucun texte avant ou après.".to_string(),
-            );
+            tracing::warn!("[critic] tool call failed: {e} — treating as rejection");
+            ctx.critic_feedback.push("Le critique n'a pas pu rendre de verdict; nouvelle tentative.".to_string());
+            return Ok(false);
+        }
+    };
+
+    let verdict: Verdict = match serde_json::from_value(input.clone()) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("[critic] unexpected verdict shape: {e} (input={input}) — treating as rejection");
+            ctx.critic_feedback.push("Verdict mal formé; nouvelle tentative.".to_string());
             return Ok(false);
         }
     };
@@ -1226,6 +1299,33 @@ mod tests {
         assert!((1000..1250).contains(&(d2 as u64)), "d2={d2}");
         assert!((2000..2250).contains(&(d3 as u64)), "d3={d3}");
         assert!(d1 < d2 && d2 < d3);
+    }
+
+    // ── tool_use_input / text_block (forced tool-call response parsing) ──────
+
+    #[test]
+    fn tool_use_input_extracts_first_tool_use_block() {
+        let resp = serde_json::json!({
+            "content": [
+                {"type": "text", "text": "Let me review."},
+                {"type": "tool_use", "name": "submit_review", "input": {"approved": true}}
+            ]
+        });
+        assert_eq!(tool_use_input(&resp), Some(serde_json::json!({"approved": true})));
+    }
+
+    #[test]
+    fn tool_use_input_none_when_no_tool_use_block() {
+        let resp = serde_json::json!({"content": [{"type": "text", "text": "hi"}]});
+        assert_eq!(tool_use_input(&resp), None);
+    }
+
+    #[test]
+    fn text_block_extracts_first_text_and_defaults_empty() {
+        let with_text = serde_json::json!({"content": [{"type": "text", "text": "hello"}]});
+        assert_eq!(text_block(&with_text), "hello");
+        let no_text = serde_json::json!({"content": [{"type": "tool_use", "input": {}}]});
+        assert_eq!(text_block(&no_text), "");
     }
 
     // ── strip_fences ───────────────────────────────────────────────────────
