@@ -393,6 +393,19 @@ pub fn Chat() -> impl IntoView {
     // Selectable options shown below the last assistant message
     let pending_options: RwSignal<Vec<ChatOption>> = create_rw_signal(vec![]);
 
+    // Cold visitor (no saved history) → seed starter prompts so the chat is
+    // never a blank page. The welcome line is rendered as an empty-state bubble
+    // (in the view), deliberately NOT pushed into `messages` — keeping it out of
+    // saved history and out of the conversation sent to the qualifier.
+    if messages.get_untracked().is_empty() {
+        let l = lang.get_untracked();
+        pending_options.set(vec![
+            ChatOption { label: t(l, "chat.starter1").to_string() },
+            ChatOption { label: t(l, "chat.starter2").to_string() },
+            ChatOption { label: t(l, "chat.starter3").to_string() },
+        ]);
+    }
+
     // Pitch pipeline polling
     let pitch_loading: RwSignal<bool>         = create_rw_signal(false);
     let pitch_manual_quote: RwSignal<bool>    = create_rw_signal(false);
@@ -1095,6 +1108,14 @@ pub fn Chat() -> impl IntoView {
                 {/* Messages */}
                 <div class="chat-scroll flex-1 overflow-y-auto px-6 py-6">
                     <div class="max-w-3xl mx-auto space-y-5">
+                        {/* Welcome — empty-state only, not part of the saved conversation */}
+                        {move || messages.get().is_empty().then(|| view! {
+                            <div class="flex justify-start">
+                                <div class="chat-md max-w-[80%] px-5 py-4 glass text-secondary rounded-2xl rounded-tl-sm text-base leading-relaxed">
+                                    {move || t(lang.get(), "chat.welcome")}
+                                </div>
+                            </div>
+                        })}
                         {move || {
                             messages.get().into_iter().enumerate().map(|(i, (is_user, raw, html))| {
                                 let (outer, inner) = if is_user {
@@ -1204,7 +1225,7 @@ pub fn Chat() -> impl IntoView {
                 {move || is_unlocked.get().then(|| view! {
                     <div class="px-6 py-2 border-t border-subtle">
                         <div class="max-w-3xl mx-auto flex items-center gap-3">
-                            <span class="text-xs text-muted">"Continuer sur"</span>
+                            <span class="text-xs text-muted">{move || t(lang.get(), "chat.continueOn")}</span>
                             <a
                                 href="https://wa.me/33600000000"
                                 target="_blank"

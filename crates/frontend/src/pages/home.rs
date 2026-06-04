@@ -156,7 +156,7 @@ pub fn Home(on_chat_click: impl Fn() + Clone + 'static) -> impl IntoView {
                         </div>
 
                         <div class="approach-card approach-card-featured">
-                            <div class="approach-metric approach-metric-crimson">"0"</div>
+                            <div class="approach-metric approach-metric-crimson">"0%"</div>
                             <h3 class="approach-name">
                                 {move || t(lang.get(), "approach.02.name")}
                             </h3>
