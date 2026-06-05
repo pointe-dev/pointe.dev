@@ -53,6 +53,19 @@ pub fn Layout() -> impl IntoView {
 
     provide_context(lang);
 
+    // Keep <html lang> in sync with the active language (the static index.html
+    // ships a fixed value). Wrong lang makes screen readers mispronounce the
+    // content and weakens SEO; this fires on mount and on every toggle.
+    create_effect(move |_| {
+        let code = match lang.get() { Lang::Fr => "fr", Lang::En => "en", Lang::De => "de" };
+        if let Some(el) = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.document_element())
+        {
+            let _ = el.set_attribute("lang", code);
+        }
+    });
+
     let on_contact = move |_| is_contact_open.set(true);
 
     log::info!("Layout rendering...");
@@ -122,16 +135,19 @@ pub fn Layout() -> impl IntoView {
                             <button
                                 on:click=move |_| lang.set(Lang::Fr)
                                 class=move || lang_btn_class(Lang::Fr)
+                                aria-pressed=move || (lang.get() == Lang::Fr).to_string()
                             >"FR"</button>
                             <span class="text-muted text-xs">"·"</span>
                             <button
                                 on:click=move |_| lang.set(Lang::En)
                                 class=move || lang_btn_class(Lang::En)
+                                aria-pressed=move || (lang.get() == Lang::En).to_string()
                             >"EN"</button>
                             <span class="text-muted text-xs">"·"</span>
                             <button
                                 on:click=move |_| lang.set(Lang::De)
                                 class=move || lang_btn_class(Lang::De)
+                                aria-pressed=move || (lang.get() == Lang::De).to_string()
                             >"DE"</button>
                         </div>
 
