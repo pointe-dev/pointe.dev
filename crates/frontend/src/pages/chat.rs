@@ -836,7 +836,7 @@ pub fn Chat() -> impl IntoView {
             {move || show_pitch.get().then(|| view! {
                 <div class="absolute inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md">
                     <div class="pitch-card" style="pointer-events: auto;">
-                        <button class="pitch-close" on:click=move |_| show_pitch.set(false)>"✕"</button>
+                        <button class="pitch-close" aria-label="Fermer" on:click=move |_| show_pitch.set(false)>"✕"</button>
 
                         {move || if pitch_loading.get() {
                             // ── Loading state ──────────────────────────────
@@ -888,6 +888,7 @@ pub fn Chat() -> impl IntoView {
                                         <button
                                             class=move || if pitch_page.get() == 0 { "pitch-nav-btn pitch-nav-btn-ghost" } else { "pitch-nav-btn" }
                                             disabled=move || pitch_page.get() == 0
+                                            aria-label="Diapositive précédente"
                                             on:click=move |_| pitch_page.update(|p| *p = p.saturating_sub(1))
                                         >"←"</button>
                                         <span class="pitch-nav-count">
@@ -896,6 +897,7 @@ pub fn Chat() -> impl IntoView {
                                         {move || if pitch_page.get() + 1 < total {
                                             view! {
                                                 <button class="pitch-nav-btn"
+                                                    aria-label="Diapositive suivante"
                                                     on:click=move |_| pitch_page.update(|p| *p += 1)
                                                 >"→"</button>
                                             }.into_view()
