@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["pointe.dev team"]
 repository = "https://github.com/pointe-dev/pointe.dev"
-license = "MIT"
+license = "Elastic-2.0"
 
 [workspace.dependencies]
 # Async Runtime
