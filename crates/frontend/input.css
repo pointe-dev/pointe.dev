@@ -2297,4 +2297,24 @@ html.dark {
   to   { opacity: 1; transform: translateX(-50%) translateY(0)    scale(1); }
 }
 
+/* ── Reduced motion ──────────────────────────────────────────────────────
+   Honour the OS "reduce motion" setting. Entrance animations (fade-up,
+   c-appear, modal/step-enter…) all resolve to their visible end-state, so
+   snapping them to ~instant keeps content visible without the motion.
+   Decorative loops (ballet blurs, tickers, glows) stop animating.        */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* word-cycle holds opacity:0 at 100%, so snapping all five slots would
+     hide the headline's second line. Pin the first word, drop the rest. */
+  .word-slot { animation: none !important; opacity: 0 !important; transform: none !important; }
+  .word-slot-1 { opacity: 1 !important; }
+}
+
 
