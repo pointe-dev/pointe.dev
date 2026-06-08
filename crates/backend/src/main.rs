@@ -17,6 +17,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::EnvFilter;
 
 mod agents;
+mod cloudflare;
 mod config;
 mod email;
 mod embeddings;
@@ -594,6 +595,14 @@ async fn main() {
         tracing::info!("Embedding engine ready (BGE-M3, 1024 dims, local)");
     }
 
+    // Managed RAG on Cloudflare (Workers AI + Vectorize). Takes precedence over the
+    // local qdrant+fastembed path when CF_ACCOUNT_ID + CF_API_TOKEN are set.
+    let cloudflare = cloudflare::CloudflareRag::from_env(http.clone());
+    match &cloudflare {
+        Some(_) => tracing::info!("Cloudflare RAG configured (Workers AI bge-m3 + Vectorize)"),
+        None => tracing::info!("CF_ACCOUNT_ID/CF_API_TOKEN not set — Cloudflare RAG off"),
+    }
+
     let stripe = match (
         std::env::var("STRIPE_SECRET_KEY").ok(),
         std::env::var("STRIPE_WEBHOOK_SECRET").ok(),
@@ -672,6 +681,7 @@ async fn main() {
         pitches: PitchStore::new(db.clone()),
         qdrant,
         embeddings,
+        cloudflare,
         stripe,
         session_secret,
         admin_ingest_token,

@@ -6,6 +6,7 @@
 //!                 fastembed model loading, or database migrations.
 
 pub mod agents;
+pub mod cloudflare;
 pub mod config;
 pub mod email;
 pub mod embeddings;

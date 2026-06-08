@@ -415,30 +415,60 @@ Risks: {risks}",
 pub async fn run_builder(app: &AppState, ctx: &mut PipelineContext) -> Result<(), AgentError> {
     tracing::info!("[builder] session={} attempt={}", ctx.session_id, ctx.build_attempts);
 
-    let rag_block = match (&app.qdrant, &app.embeddings) {
-        (Some(qdrant), Some(engine)) => {
-            let query = format!(
-                "{} {}",
-                ctx.client_need,
-                ctx.research_output.as_deref().unwrap_or_default()
-            );
-            match engine.embed(query).await {
-                Ok(vector) => match qdrant.search(vector, 3).await {
-                    Ok(hits) if !hits.is_empty() => {
-                        let s = hits.iter().map(|h| format!(
-                            "Template: {}\nDescription: {}\nTags: {}",
-                            h.name, h.description, h.tags.join(", ")
-                        )).collect::<Vec<_>>().join("\n\n---\n\n");
-                        tracing::info!("[builder] retrieved {} RAG templates", hits.len());
-                        format!("\n\nSimilar workflow templates for reference:\n{s}")
-                    }
-                    Ok(_)  => { tracing::warn!("[builder] Qdrant returned no hits"); String::new() }
-                    Err(e) => { tracing::warn!("[builder] Qdrant search failed: {e}"); String::new() }
-                },
-                Err(e) => { tracing::warn!("[builder] embed failed: {e}"); String::new() }
-            }
+    let rag_query = format!(
+        "{} {}",
+        ctx.client_need,
+        ctx.research_output.as_deref().unwrap_or_default()
+    );
+
+    // Format retrieved templates identically whatever the backend (Cloudflare or
+    // Qdrant) — both expose name/description/tags.
+    let format_templates = |rows: &[(String, String, String)]| {
+        let s = rows
+            .iter()
+            .map(|(name, desc, tags)| {
+                format!("Template: {name}\nDescription: {desc}\nTags: {tags}")
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n---\n\n");
+        format!("\n\nSimilar workflow templates for reference:\n{s}")
+    };
+
+    let rag_block = if let Some(cf) = &app.cloudflare {
+        match cf.embed(rag_query).await {
+            Ok(vector) => match cf.query(vector, 3, None).await {
+                Ok(hits) if !hits.is_empty() => {
+                    tracing::info!("[builder] retrieved {} RAG templates (cloudflare)", hits.len());
+                    let rows: Vec<_> = hits.iter()
+                        .map(|h| (h.name.clone(), h.description.clone(), h.tags.join(", ")))
+                        .collect();
+                    format_templates(&rows)
+                }
+                Ok(_)  => { tracing::warn!("[builder] Vectorize returned no hits"); String::new() }
+                Err(e) => { tracing::warn!("[builder] Vectorize query failed: {e}"); String::new() }
+            },
+            Err(e) => { tracing::warn!("[builder] embed failed: {e}"); String::new() }
         }
-        _ => { tracing::warn!("[builder] RAG disabled"); String::new() }
+    } else {
+        match (&app.qdrant, &app.embeddings) {
+            (Some(qdrant), Some(engine)) => {
+                match engine.embed(rag_query).await {
+                    Ok(vector) => match qdrant.search(vector, 3).await {
+                        Ok(hits) if !hits.is_empty() => {
+                            tracing::info!("[builder] retrieved {} RAG templates", hits.len());
+                            let rows: Vec<_> = hits.iter()
+                                .map(|h| (h.name.clone(), h.description.clone(), h.tags.join(", ")))
+                                .collect();
+                            format_templates(&rows)
+                        }
+                        Ok(_)  => { tracing::warn!("[builder] Qdrant returned no hits"); String::new() }
+                        Err(e) => { tracing::warn!("[builder] Qdrant search failed: {e}"); String::new() }
+                    },
+                    Err(e) => { tracing::warn!("[builder] embed failed: {e}"); String::new() }
+                }
+            }
+            _ => { tracing::warn!("[builder] RAG disabled"); String::new() }
+        }
     };
 
     const SYSTEM: &str = "\
@@ -1410,6 +1440,7 @@ mod tests {
             pitches: PitchStore::new(None),
             qdrant: None,
             embeddings: None,
+            cloudflare: None,
             stripe: None,
             session_secret: b"test".to_vec(),
             admin_ingest_token: None,

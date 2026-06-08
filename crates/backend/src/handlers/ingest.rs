@@ -5,8 +5,19 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use crate::cloudflare::TemplateDoc;
 use crate::qdrant::{TemplatePayload, TemplatePoint};
 use crate::state::AppState;
+
+/// Stable, length-bounded id from a template name, so re-ingesting upserts in
+/// place instead of accumulating duplicates.
+fn slug_id(name: &str) -> String {
+    let s: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .collect();
+    s.trim_matches('-').chars().take(64).collect()
+}
 
 #[derive(Deserialize)]
 pub struct IngestTemplate {
@@ -57,6 +68,28 @@ pub async fn ingest(
 
     if provided_token != expected_token {
         return Err((StatusCode::UNAUTHORIZED, "invalid admin token".to_string()));
+    }
+
+    // Cloudflare RAG takes precedence when configured. workflow_json is intentionally
+    // not stored (the builder uses only name/description/tags; Vectorize caps metadata).
+    if let Some(cf) = &state.cloudflare {
+        let mut items = Vec::with_capacity(templates.len());
+        for t in templates {
+            let embed_text = format!("{} — {} — {}", t.name, t.description, t.tags.join(", "));
+            let vector = cf.embed(embed_text).await.map_err(|e| {
+                tracing::error!("[ingest] embed failed for '{}': {e}", t.name);
+                (StatusCode::INTERNAL_SERVER_ERROR, e)
+            })?;
+            items.push((slug_id(&t.name), vector, TemplateDoc {
+                name: t.name,
+                description: t.description,
+                tags: t.tags,
+                lang: "fr".to_string(),
+                source: "n8n".to_string(),
+            }));
+        }
+        let ingested = cf.upsert(items).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        return Ok(Json(IngestResponse { ingested }));
     }
 
     let (Some(qdrant), Some(engine)) = (&state.qdrant, &state.embeddings) else {
