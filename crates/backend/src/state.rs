@@ -1,3 +1,4 @@
+use crate::cloudflare::CloudflareRag;
 use crate::embeddings::EmbeddingEngine;
 use crate::langfuse::LangfuseClient;
 use crate::pending::PendingStore;
@@ -20,6 +21,9 @@ pub struct AppState {
     pub pitches: PitchStore,
     pub qdrant: Option<QdrantStore>,
     pub embeddings: Option<EmbeddingEngine>,
+    /// Managed RAG on Cloudflare (Workers AI + Vectorize). When set, the builder
+    /// and ingest use it instead of the local qdrant+embeddings pair.
+    pub cloudflare: Option<CloudflareRag>,
     pub stripe: Option<StripeClient>,
     /// HMAC secret for signing persistent session tokens and confirm links.
     pub session_secret: Vec<u8>,

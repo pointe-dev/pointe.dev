@@ -42,6 +42,7 @@ fn test_state() -> Arc<AppState> {
         pitches: PitchStore::new(None),
         qdrant: None,
         embeddings: None,
+        cloudflare: None,
         stripe: Some(StripeClient::new(
             reqwest::Client::new(),
             "sk_test_fake".to_string(),
