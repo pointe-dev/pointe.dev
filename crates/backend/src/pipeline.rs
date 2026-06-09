@@ -9,6 +9,7 @@ use crate::state::AppState;
 
 pub const MAX_BUILD_ATTEMPTS: u8 = 3;
 pub const MAX_PRICING_ATTEMPTS: u8 = 2;
+pub const MAX_DESIGN_ATTEMPTS: u8 = 3;
 
 /// The stage an automation pipeline is currently in.
 /// Serialized as `{ "stage": "building", ... }` for the status API.
@@ -19,9 +20,14 @@ pub enum PipelineStage {
     Qualifying,
     /// Research agent running.
     Researching,
+    /// Designer agent drafting the high-level solution outline (no JSON).
+    Designing,
+    /// Design critic validating viability/completeness before quoting.
+    DesignValidating,
     /// Workflow builder running (attempt tracked in ctx.build_attempts).
+    /// Reached only POST-payment — the real JSON is built after the client pays.
     Building,
-    /// Critic agent validating the latest draft.
+    /// Critic agent validating the latest JSON draft (post-payment).
     Validating,
     /// Pricing agent computing the quote.
     Pricing,
@@ -55,7 +61,18 @@ pub struct PipelineContext {
     pub research_output: Option<String>,
     /// Structured research data (integrations, complexity, risks) — used by pricing.
     pub research_json: Option<serde_json::Value>,
-    /// n8n workflow JSON produced by run_builder.
+    /// Ordered, high-level solution outline from run_designer (NO JSON). Reviewed
+    /// by run_design_critic, priced, shown to the client, and later handed to
+    /// run_builder (post-payment) as the approved blueprint.
+    #[serde(default)]
+    pub design_summary: Option<String>,
+    /// Design critic feedback accumulated across design attempts.
+    #[serde(default)]
+    pub design_critic_feedback: Vec<String>,
+    /// Number of design attempts so far.
+    #[serde(default)]
+    pub design_attempts: u8,
+    /// n8n workflow JSON produced by run_builder (post-payment).
     pub workflow_json: Option<serde_json::Value>,
     /// Critic feedback accumulated across build attempts.
     pub critic_feedback: Vec<String>,
@@ -225,7 +242,9 @@ impl PipelineStore {
             let mut guard = self.0.write().await;
             match guard.get_mut(&id) {
                 Some(r) if r.stage == PipelineStage::AwaitingPayment => {
-                    r.stage = PipelineStage::Deploying;
+                    // Post-payment, the real JSON gets built first, then deployed:
+                    // AwaitingPayment → Building → Validating → Deploying → Live.
+                    r.stage = PipelineStage::Building;
                     r.updated_at = Utc::now();
                     Some((r.stage.clone(), r.ctx.clone()))
                 }
@@ -341,7 +360,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resume_after_payment_transitions_awaiting_to_deploying() {
+    async fn resume_after_payment_transitions_awaiting_to_building() {
         let store = PipelineStore::new();
         let id = store.create("sess-pay".to_string(), "need".to_string(), None).await;
         // Manually advance to AwaitingPayment
@@ -351,8 +370,9 @@ mod tests {
         let resumed = store.resume_after_payment(id).await;
         assert!(resumed, "should return true when in AwaitingPayment");
 
+        // Post-payment now builds the JSON first (then validates, then deploys).
         let (stage, _) = store.status(id).await.unwrap();
-        assert_eq!(stage, PipelineStage::Deploying);
+        assert_eq!(stage, PipelineStage::Building);
     }
 
     #[tokio::test]
@@ -488,7 +508,33 @@ async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(),
 
             PipelineStage::Researching => {
                 agents::run_research(app, &mut ctx).await.map_err(|e| e.to_string())?;
-                store.advance(id, PipelineStage::Building, ctx).await;
+                store.advance(id, PipelineStage::Designing, ctx).await;
+            }
+
+            PipelineStage::Designing => {
+                ctx.design_attempts += 1;
+                agents::run_designer(app, &mut ctx).await.map_err(|e| e.to_string())?;
+                store.advance(id, PipelineStage::DesignValidating, ctx).await;
+            }
+
+            PipelineStage::DesignValidating => {
+                let approved = agents::run_design_critic(app, &mut ctx).await.map_err(|e| e.to_string())?;
+                if approved {
+                    store.advance(id, PipelineStage::Pricing, ctx).await;
+                } else if ctx.design_attempts >= MAX_DESIGN_ATTEMPTS {
+                    // Pre-payment: a design we can't make sound → a human writes the proposal.
+                    agents::publish_manual_pitch(app, &ctx).await;
+                    let reason = format!(
+                        "design critic rejected after {} attempts: {}",
+                        ctx.design_attempts,
+                        ctx.design_critic_feedback.last().cloned().unwrap_or_default()
+                    );
+                    notify_owner_failure(app, id, &ctx.session_id, &reason).await;
+                    store.advance(id, PipelineStage::SavedForHuman { reason }, ctx).await;
+                    break;
+                } else {
+                    store.advance(id, PipelineStage::Designing, ctx).await;
+                }
             }
 
             PipelineStage::Building => {
@@ -500,11 +546,13 @@ async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(),
             PipelineStage::Validating => {
                 let approved = agents::run_critic(app, &mut ctx).await.map_err(|e| e.to_string())?;
                 if approved {
-                    store.advance(id, PipelineStage::Pricing, ctx).await;
+                    store.advance(id, PipelineStage::Deploying, ctx).await;
                 } else if ctx.build_attempts >= MAX_BUILD_ATTEMPTS {
-                    agents::publish_manual_pitch(app, &ctx).await;
+                    // Post-payment: the client has already paid, so we do NOT re-pitch.
+                    // Alert the owner and hand off to manual delivery — we honor the
+                    // quote by building it by hand.
                     let reason = format!(
-                        "critic rejected after {} attempts: {}",
+                        "post-payment build rejected after {} attempts — manual delivery required: {}",
                         ctx.build_attempts,
                         ctx.critic_feedback.last().cloned().unwrap_or_default()
                     );
@@ -550,7 +598,7 @@ async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(),
             }
 
             // Terminal or externally-driven stages — stop the loop.
-            // AwaitingPayment resumes via resume_after_payment() → Deploying.
+            // AwaitingPayment resumes via resume_after_payment() → Building.
             PipelineStage::AwaitingPayment
             | PipelineStage::Live
             | PipelineStage::SavedForHuman { .. }

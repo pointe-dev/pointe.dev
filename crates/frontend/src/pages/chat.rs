@@ -334,6 +334,8 @@ fn stage_label(stage: &str) -> &'static str {
     match stage {
         "qualifying"         => "Qualification…",
         "researching"        => "Recherche en cours…",
+        "designing"          => "Conception de la solution…",
+        "design_validating"  => "Vérification de la faisabilité…",
         "building"           => "Conception du workflow…",
         "validating"         => "Vérification…",
         "pricing"            => "Chiffrage…",

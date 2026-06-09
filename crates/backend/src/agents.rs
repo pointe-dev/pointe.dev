@@ -410,6 +410,161 @@ Risks: {risks}",
     Ok(())
 }
 
+/// Drafts the high-level solution outline — an ordered list of blocks that solves
+/// the need, each naming the action and the integration from research. NO JSON:
+/// this blueprint is what the design critic reviews, pricing quotes, and the client
+/// reads. The real workflow JSON is built later (post-payment) from this outline.
+pub async fn run_designer(app: &AppState, ctx: &mut PipelineContext) -> Result<(), AgentError> {
+    tracing::info!("[designer] session={} attempt={}", ctx.session_id, ctx.design_attempts);
+
+    const SYSTEM: &str = "\
+You are the solution designer at pointe.dev. Given a prospect's need and the \
+technical research, you produce the HIGH-LEVEL design of the automation as an \
+ordered outline of blocks — NOT JSON. This outline is reviewed, priced, and shown \
+to the client; the real n8n workflow is built later, only AFTER the client pays, \
+from THIS blueprint. So it must be complete and honest.\n\
+\n\
+Output a numbered list of steps. For EACH step, one line:\n\
+  <n>. <what happens> — <integration / n8n node> — <why it matters>\n\
+Start with the trigger, end with the final client-visible outcome. Cover the WHOLE \
+need end-to-end: if the need implies several outputs (e.g. publish to two \
+platforms), each gets its own step. Use the integrations named in the research; if \
+a step needs an external service with no dedicated node, say 'via HTTP API'. After \
+the steps, add two short lines:\n\
+  Blocs clés: <distinct integrations/services involved, comma-separated>\n\
+  Points de vigilance: <max 2 real risks or client-provided prerequisites (API \
+approval, credentials, paid account), or 'aucun'>\n\
+\n\
+Rules:\n\
+- Same language as the client's need (FR/EN/DE).\n\
+- Concrete and tied to THIS need — no generic boilerplate.\n\
+- Do NOT emit JSON, node parameters, or code. This is a blueprint, not an \
+implementation.\n\
+- Do NOT pad: every block must be justified by the need — honesty drives a correct \
+quote. Keep it tight: readable in 30 seconds.";
+
+    let feedback = ctx.design_critic_feedback.last()
+        .map(|fb| format!("\n\nThe previous design was rejected. Address this feedback:\n{fb}"))
+        .unwrap_or_default();
+
+    let user = format!(
+        "Client need: {}\nQualification: {}\nTechnical research: {}{}",
+        ctx.client_need,
+        ctx.qualification_summary.as_deref().unwrap_or(""),
+        ctx.research_output.as_deref().unwrap_or(""),
+        feedback,
+    );
+
+    let outline = anthropic_call(
+        &app.http, &app.anthropic_key, SONNET, 1200,
+        SYSTEM, &user,
+    ).await.map_err(|e| AgentError(format!("designer: {e}")))?;
+
+    if outline.trim().is_empty() {
+        return Err(AgentError("designer returned an empty outline".into()));
+    }
+    ctx.design_summary = Some(outline);
+    Ok(())
+}
+
+/// Gates the SOLUTION DESIGN before it is priced and quoted. Because the real
+/// workflow is built only after payment, a gap here means we quote for the wrong
+/// thing — so this critic checks completeness/viability of the blueprint, not JSON.
+/// Returns true if approved; rejection feedback is appended to ctx.design_critic_feedback.
+pub async fn run_design_critic(app: &AppState, ctx: &mut PipelineContext) -> Result<bool, AgentError> {
+    tracing::info!("[design_critic] session={} attempt={}", ctx.session_id, ctx.design_attempts);
+
+    let design = ctx.design_summary.as_deref()
+        .ok_or_else(|| AgentError("design critic called with no design_summary".to_string()))?;
+
+    const SYSTEM: &str = "\
+You are the design reviewer at pointe.dev. You gate the SOLUTION DESIGN before it is \
+priced and quoted to the client. Critically: the real workflow is built only AFTER \
+the client pays, from this design — so a gap here means we quote for the wrong thing \
+and then fail post-payment. Be demanding on substance, not style.\n\
+\n\
+Submit your verdict via submit_review: approved=true if the design is viable and \
+complete, or approved=false with feedback (max 3 concrete, actionable points).\n\
+\n\
+Reject (approved:false) if ANY fail:\n\
+1. Completeness — the design does NOT solve the stated need end-to-end. Every \
+outcome the client asked for must have a step (e.g. publish to YouTube AND \
+Instagram → both must appear). Missing output, missing trigger, or a gap in the \
+chain → reject.\n\
+2. Viability — a named integration is wrong for its job, or a step depends on \
+something infeasible/unavailable without that being flagged as a risk (e.g. an API \
+that requires approval).\n\
+3. Scope sanity — drastically over- or under-engineered for the need.\n\
+4. Honesty — a real prerequisite the client must provide (credentials, paid \
+account, API approval) is silently assumed instead of flagged.\n\
+\n\
+Do NOT review JSON, exact node-type strings, or parameters — there is NO workflow \
+yet; that is the builder's job post-payment. Judge the BLUEPRINT: does it fully and \
+feasibly solve the need, and is it the right size to price fairly? When the design \
+is sound and complete, approve it without inventing objections. Feedback must be \
+specific enough for the designer to fix in one pass. Output only the verdict.";
+
+    let user = format!(
+        "Client need: {}\nResearch: {}\nProposed design:\n{}",
+        ctx.client_need,
+        ctx.research_output.as_deref().unwrap_or(""),
+        design,
+    );
+
+    #[derive(serde::Deserialize)]
+    struct Verdict { approved: bool, feedback: Option<String> }
+
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "approved": {
+                "type": "boolean",
+                "description": "true if the design solves the need end-to-end, is viable, honest about prerequisites, and appropriately scoped"
+            },
+            "feedback": {
+                "type": "string",
+                "description": "Required when approved is false: max 3 concrete, actionable issues. Omit when approved is true."
+            }
+        },
+        "required": ["approved"]
+    });
+
+    // A transport error shouldn't kill the pipeline — soft-reject so the designer
+    // retries; after MAX_DESIGN_ATTEMPTS the human takes over the proposal.
+    let input = match anthropic_tool_call(
+        &app.http, &app.anthropic_key, SONNET, 1024,
+        SYSTEM, serde_json::Value::String(user),
+        "submit_review", "Submit your review verdict for the solution design.",
+        schema,
+    ).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("[design_critic] tool call failed: {e} — treating as rejection");
+            ctx.design_critic_feedback.push("Le critique de design n'a pas pu rendre de verdict; nouvelle tentative.".to_string());
+            return Ok(false);
+        }
+    };
+
+    let verdict: Verdict = match serde_json::from_value(input.clone()) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("[design_critic] unexpected verdict shape: {e} (input={input}) — treating as rejection");
+            ctx.design_critic_feedback.push("Verdict mal formé; nouvelle tentative.".to_string());
+            return Ok(false);
+        }
+    };
+
+    if verdict.approved {
+        tracing::info!("[design_critic] approved on attempt {}", ctx.design_attempts);
+        Ok(true)
+    } else {
+        let fb = verdict.feedback.unwrap_or_else(|| "unspecified issues".to_string());
+        tracing::warn!("[design_critic] rejected attempt {}: {fb}", ctx.design_attempts);
+        ctx.design_critic_feedback.push(fb);
+        Ok(false)
+    }
+}
+
 /// Builds an n8n workflow JSON using Qdrant RAG over n8n templates.
 /// Runs up to MAX_BUILD_ATTEMPTS times; the large context is cached between retries.
 pub async fn run_builder(app: &AppState, ctx: &mut PipelineContext) -> Result<(), AgentError> {
@@ -543,9 +698,10 @@ unknown node type makes the entire workflow fail to import and blocks deployment
 
     // Stable across retries → cached after the first attempt
     let context = format!(
-        "Client: {}\nResearch: {}{}",
+        "Client: {}\nResearch: {}\nApproved design (build exactly this blueprint, end-to-end):\n{}{}",
         ctx.client_need,
         ctx.research_output.as_deref().unwrap_or(""),
+        ctx.design_summary.as_deref().unwrap_or(""),
         rag_block,
     );
 
@@ -779,9 +935,10 @@ pub async fn run_pricing(app: &AppState, ctx: &mut PipelineContext) -> Result<()
     let base: u32 = match complexity { "simple" => 900, "complex" => 6000, _ => 2500 };
     let integration_premium  = (integration_count.saturating_sub(2) as u32) * 200;
     let feasibility_buffer: u32 = if feasibility < 6.0 { 600 } else { 0 };
-    let node_count = ctx.workflow_json.as_ref()
-        .and_then(|w| w["nodes"].as_array()).map(|n| n.len()).unwrap_or(0);
-    let node_premium = (node_count.saturating_sub(5) as u32) * 60;
+    // Pre-payment the JSON isn't built yet, so estimate node count from the scope:
+    // ~2 nodes per integration + a couple of control/trigger nodes.
+    let est_node_count = integration_count * 2 + 2;
+    let node_premium = (est_node_count.saturating_sub(5) as u32) * 60;
     let subtotal    = base + integration_premium + risk_premium + feasibility_buffer + node_premium;
     let setup_price = ((subtotal + 49) / 50) * 50;
 
