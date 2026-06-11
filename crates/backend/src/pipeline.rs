@@ -45,6 +45,27 @@ pub enum PipelineStage {
     Failed { reason: String },
 }
 
+/// One sub-flow in a decomposed automation: a self-contained n8n workflow of ≤8
+/// nodes that the builder can construct reliably. Produced by run_decomposer when
+/// a tunnel is too large to fit a single workflow; chained to its neighbours
+/// through an explicit input/output contract so the n8n execution context (which
+/// breaks after a trigger node) survives the hop between sub-flows.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SubWorkflowPlan {
+    /// Short ordered name, e.g. "WF-A — Ingest & Select".
+    pub name: String,
+    /// The subset of the approved design this sub-flow implements.
+    pub description: String,
+    /// How this sub-flow starts: the real trigger (schedule/webhook) for the first
+    /// one, or how the previous sub-flow hands off (executeWorkflow / webhook) for
+    /// the rest.
+    pub trigger: String,
+    /// What this sub-flow receives from the previous one (empty for the first).
+    pub input_contract: String,
+    /// What this sub-flow hands to the next one (empty for the last).
+    pub output_contract: String,
+}
+
 /// Accumulated context flowing through all pipeline stages.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PipelineContext {
@@ -74,6 +95,12 @@ pub struct PipelineContext {
     pub design_attempts: u8,
     /// n8n workflow JSON produced by run_builder (post-payment).
     pub workflow_json: Option<serde_json::Value>,
+    /// Decomposition plan from run_decomposer: ordered sub-flows, each ≤8 nodes.
+    /// Empty means no decomposition — a single mono-workflow (the default, and the
+    /// N=1 case). The per-sub-flow build/deploy loop that consumes this plan is a
+    /// follow-up; for now it records how a large tunnel would be split.
+    #[serde(default)]
+    pub sub_workflows: Vec<SubWorkflowPlan>,
     /// Critic feedback accumulated across build attempts.
     pub critic_feedback: Vec<String>,
     /// Number of build attempts so far.
@@ -409,6 +436,31 @@ mod tests {
         let json2 = serde_json::to_value(&failed).unwrap();
         assert_eq!(json2["stage"], "failed");
         assert_eq!(json2["reason"], "test error");
+    }
+
+    #[test]
+    fn ctx_without_sub_workflows_field_defaults_empty() {
+        // Rows persisted before sub_workflows existed must hydrate cleanly: take a
+        // real serialised ctx, drop the new key, and confirm it deserialises to empty.
+        let mut json = serde_json::to_value(PipelineContext::default()).unwrap();
+        json.as_object_mut().unwrap().remove("sub_workflows");
+        assert!(json.get("sub_workflows").is_none(), "precondition: key removed");
+        let old: PipelineContext = serde_json::from_value(json).unwrap();
+        assert!(old.sub_workflows.is_empty());
+    }
+
+    #[test]
+    fn sub_workflow_plan_roundtrips() {
+        let plan = SubWorkflowPlan {
+            name: "WF-A — Ingest".to_string(),
+            description: "fetch & rank".to_string(),
+            trigger: "scheduleTrigger".to_string(),
+            input_contract: String::new(),
+            output_contract: "topic, script".to_string(),
+        };
+        let back: SubWorkflowPlan =
+            serde_json::from_value(serde_json::to_value(&plan).unwrap()).unwrap();
+        assert_eq!(plan, back);
     }
 
     #[test]

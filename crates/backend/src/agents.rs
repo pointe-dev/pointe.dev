@@ -751,6 +751,120 @@ specific enough for the designer to fix in one pass. Output only the verdict.";
     }
 }
 
+/// Cheap pre-check: is this automation large enough to warrant splitting into
+/// sub-workflows? A tunnel with many integrations or a long blueprint will not fit
+/// one ≤8-node workflow reliably (the builder tops out around there). Mirrors the
+/// research complexity buckets (5+ integrations = complex) and keeps the decomposer
+/// LLM call off the simple majority of leads.
+pub fn needs_decomposition(ctx: &PipelineContext) -> bool {
+    let integrations = ctx.research_json.as_ref()
+        .and_then(|j| j["integrations_required"].as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+
+    let design_steps = ctx.design_summary.as_deref()
+        .map(count_design_steps)
+        .unwrap_or(0);
+
+    integrations >= 5 || design_steps > 8
+}
+
+/// Counts the numbered steps ("1. …", "2) …") in a designer blueprint.
+fn count_design_steps(design: &str) -> usize {
+    design.lines().filter(|l| is_numbered_step(l)).count()
+}
+
+/// True if a line begins (after indentation) with a number followed by '.' or ')'.
+fn is_numbered_step(line: &str) -> bool {
+    let t = line.trim_start();
+    let digits = t.chars().take_while(|c| c.is_ascii_digit()).count();
+    digits > 0 && matches!(t[digits..].chars().next(), Some('.') | Some(')'))
+}
+
+/// Splits a large approved design into an ordered list of self-contained sub-flows
+/// (each ≤8 nodes), so the post-payment builder constructs simple workflows that
+/// stay under the node budget where it succeeds. Chains them through explicit
+/// input/output contracts (executeWorkflow / webhook) so the n8n execution context
+/// — which breaks after a trigger node — survives the hop between sub-flows.
+/// Only worth calling when `needs_decomposition` trips; populates ctx.sub_workflows.
+/// May legitimately return a single entry if the design fits one workflow (N=1).
+pub async fn run_decomposer(app: &AppState, ctx: &mut PipelineContext) -> Result<(), AgentError> {
+    tracing::info!("[decomposer] session={}", ctx.session_id);
+
+    const SYSTEM: &str = "\
+You are the workflow architect at pointe.dev. You are given an APPROVED automation \
+design (an ordered blueprint) that is too large to build as one n8n workflow. Split \
+it into an ORDERED list of self-contained sub-flows, each a separate n8n workflow.\n\
+\n\
+Hard rules:\n\
+- Each sub-flow is ≤8 nodes. If a stage needs more, split it further.\n\
+- Cut along natural boundaries of the blueprint (e.g. Ingest → Produce → Publish → \
+Analytics), never mid-action. Every block of the design must land in exactly one \
+sub-flow; together they must cover the WHOLE design end-to-end, in order.\n\
+- The FIRST sub-flow owns the real trigger (schedule/webhook/app trigger). Each \
+later sub-flow is started by the previous one — via an n8n 'Execute Workflow' call \
+or an inbound webhook.\n\
+- CRITICAL: the n8n execution context does NOT cross a trigger boundary \
+($('Node').item.json from an earlier sub-flow is unreachable downstream). So each \
+hop must pass its data EXPLICITLY. State, per sub-flow, the input_contract (the \
+exact fields it receives from the previous sub-flow, empty for the first) and the \
+output_contract (the exact fields it hands to the next, empty for the last). Make the \
+contracts concrete field lists, not vague prose.\n\
+\n\
+Submit the plan via submit_decomposition. Prefer the FEWEST sub-flows that respect \
+the ≤8-node rule — do not over-split. If the whole design genuinely fits one ≤8-node \
+workflow, return a single sub-flow. Same language as the design (FR/EN/DE) for names \
+and descriptions.";
+
+    let user = format!(
+        "Client need: {}\nResearch: {}\nApproved design (split THIS, end-to-end):\n{}",
+        ctx.client_need,
+        ctx.research_output.as_deref().unwrap_or(""),
+        ctx.design_summary.as_deref().unwrap_or(""),
+    );
+
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "sub_workflows": {
+                "type": "array",
+                "description": "Ordered sub-flows, each ≤8 nodes, together covering the whole design.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Short ordered name, e.g. 'WF-A — Ingest & Select'"},
+                        "description": {"type": "string", "description": "The subset of the design this sub-flow implements"},
+                        "trigger": {"type": "string", "description": "Real trigger for the first sub-flow; how the previous one hands off (Execute Workflow / webhook) for the rest"},
+                        "input_contract": {"type": "string", "description": "Exact fields received from the previous sub-flow; empty for the first"},
+                        "output_contract": {"type": "string", "description": "Exact fields handed to the next sub-flow; empty for the last"}
+                    },
+                    "required": ["name", "description", "trigger", "input_contract", "output_contract"]
+                }
+            }
+        },
+        "required": ["sub_workflows"]
+    });
+
+    let input = anthropic_tool_call(
+        &app.http, &app.anthropic_key, SONNET, 2048,
+        SYSTEM, serde_json::Value::String(user),
+        "submit_decomposition", "Submit the ordered list of sub-workflows.",
+        schema,
+    ).await.map_err(|e| AgentError(format!("decomposer: {e}")))?;
+
+    let plan: Vec<crate::pipeline::SubWorkflowPlan> =
+        serde_json::from_value(input["sub_workflows"].clone())
+            .map_err(|e| AgentError(format!("decomposer: malformed plan: {e}")))?;
+
+    if plan.is_empty() {
+        return Err(AgentError("decomposer returned an empty plan".into()));
+    }
+
+    tracing::info!("[decomposer] session={} split into {} sub-flows", ctx.session_id, plan.len());
+    ctx.sub_workflows = plan;
+    Ok(())
+}
+
 /// Builds an n8n workflow JSON using Qdrant RAG over n8n templates.
 /// Runs up to MAX_BUILD_ATTEMPTS times; the large context is cached between retries.
 pub async fn run_builder(app: &AppState, ctx: &mut PipelineContext) -> Result<(), AgentError> {
@@ -1776,6 +1890,71 @@ mod tests {
     fn agent_error_display_shows_message() {
         let e = AgentError("something went wrong".to_string());
         assert_eq!(format!("{e}"), "something went wrong");
+    }
+
+    // ── decomposition gate ─────────────────────────────────────────────────
+
+    #[test]
+    fn is_numbered_step_matches_dot_and_paren() {
+        assert!(is_numbered_step("1. Surveiller les flux RSS"));
+        assert!(is_numbered_step("  2) générer la voix off"));
+        assert!(is_numbered_step("10. publier sur YouTube"));
+        assert!(!is_numbered_step("Blocs clés: RSS, ElevenLabs"));
+        assert!(!is_numbered_step("- bullet point"));
+        assert!(!is_numbered_step(""));
+    }
+
+    #[test]
+    fn count_design_steps_counts_only_numbered_lines() {
+        let design = "1. Trigger schedule — scheduleTrigger — lance chaque jour\n\
+                      2. Récupère les actus — httpRequest — flux RSS\n\
+                      3. Choisit le sujet — code — ranking\n\
+                      Blocs clés: RSS, OpenAI\n\
+                      Points de vigilance: aucun";
+        assert_eq!(count_design_steps(design), 3);
+    }
+
+    #[test]
+    fn needs_decomposition_false_for_simple_lead() {
+        let ctx = PipelineContext {
+            research_json: Some(serde_json::json!({
+                "integrations_required": [{"name": "Shopify"}, {"name": "Pennylane"}]
+            })),
+            design_summary: Some("1. a\n2. b\n3. c".to_string()),
+            ..Default::default()
+        };
+        assert!(!needs_decomposition(&ctx));
+    }
+
+    #[test]
+    fn needs_decomposition_true_when_five_integrations() {
+        let ctx = PipelineContext {
+            research_json: Some(serde_json::json!({
+                "integrations_required": [
+                    {"name": "RSS"}, {"name": "X"}, {"name": "ElevenLabs"},
+                    {"name": "Creatomate"}, {"name": "YouTube"}
+                ]
+            })),
+            design_summary: Some("1. a\n2. b".to_string()),
+            ..Default::default()
+        };
+        assert!(needs_decomposition(&ctx));
+    }
+
+    #[test]
+    fn needs_decomposition_true_when_blueprint_exceeds_eight_steps() {
+        let design = (1..=9).map(|n| format!("{n}. step")).collect::<Vec<_>>().join("\n");
+        let ctx = PipelineContext {
+            research_json: Some(serde_json::json!({ "integrations_required": [{"name": "A"}] })),
+            design_summary: Some(design),
+            ..Default::default()
+        };
+        assert!(needs_decomposition(&ctx));
+    }
+
+    #[test]
+    fn needs_decomposition_false_for_empty_context() {
+        assert!(!needs_decomposition(&PipelineContext::default()));
     }
 
     #[test]

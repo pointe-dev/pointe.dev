@@ -128,3 +128,45 @@ async fn dogfood_full_pipeline() {
     println!("\n========== FIN — design_ok={design_ok} build_ok={build_ok} ==========\n");
     assert!(ctx.workflow_json.is_some(), "builder should have produced something to inspect");
 }
+
+/// Drives qualifier → research → designer, then the decomposition gate +
+/// run_decomposer on the hard "chaîne IA" brief, and prints the split. Lets us see
+/// whether the 7-integration tunnel is cut into sensible ≤8-node sub-flows with
+/// real input/output contracts. Same env gating as dogfood_full_pipeline.
+///
+/// Run:
+///   cargo test -p backend --test dogfood -- --ignored --nocapture dogfood_decomposition
+#[tokio::test]
+#[ignore]
+async fn dogfood_decomposition() {
+    use backend_lib::agents::{needs_decomposition, run_decomposer};
+
+    let app = dogfood_state();
+    println!("\n========== DOGFOOD: décomposition « chaîne IA » ==========");
+
+    let store = PipelineStore::new();
+    let id = store
+        .create("dogfood-decomp".to_string(), BRIEF.to_string(), None)
+        .await;
+    let mut ctx = store.get_ctx(id).await.expect("ctx");
+
+    backend_lib::agents::run_qualifier(&app, &mut ctx).await.expect("qualifier");
+    backend_lib::agents::run_research(&app, &mut ctx).await.expect("research");
+    ctx.design_attempts += 1;
+    backend_lib::agents::run_designer(&app, &mut ctx).await.expect("designer");
+    println!("\n----- SOLUTION DESIGN -----\n{}",
+        ctx.design_summary.as_deref().unwrap_or("(none)"));
+
+    let gate = needs_decomposition(&ctx);
+    println!("\n----- GATE: needs_decomposition = {gate} -----");
+    assert!(gate, "the 7-integration AI-video brief must trip the decomposition gate");
+
+    run_decomposer(&app, &mut ctx).await.expect("decomposer");
+    println!("\n----- DÉCOMPOSITION: {} sous-flux -----", ctx.sub_workflows.len());
+    for (i, wf) in ctx.sub_workflows.iter().enumerate() {
+        println!("\n[{}] {}\n  rôle:    {}\n  trigger: {}\n  in:      {}\n  out:     {}",
+            i + 1, wf.name, wf.description, wf.trigger, wf.input_contract, wf.output_contract);
+    }
+
+    assert!(ctx.sub_workflows.len() >= 2, "a 7-integration tunnel should split into multiple sub-flows");
+}
