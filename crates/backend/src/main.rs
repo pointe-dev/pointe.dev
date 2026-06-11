@@ -23,6 +23,7 @@ mod email;
 mod embeddings;
 mod handlers;
 mod langfuse;
+mod mcp;
 mod pending;
 mod pipeline;
 mod pitch;
@@ -603,6 +604,13 @@ async fn main() {
         None => tracing::info!("CF_ACCOUNT_ID/CF_API_TOKEN not set — Cloudflare RAG off"),
     }
 
+    // n8n MCP connector: grounds the build pipeline on the real node catalogue.
+    let n8n_mcp = mcp::N8nMcpConfig::from_env();
+    match &n8n_mcp {
+        Some(_) => tracing::info!("n8n MCP connector configured (builder/critic/designer grounded on live node catalogue)"),
+        None => tracing::info!("N8N_MCP_URL/N8N_MCP_TOKEN not set — n8n MCP grounding off"),
+    }
+
     let stripe = match (
         std::env::var("STRIPE_SECRET_KEY").ok(),
         std::env::var("STRIPE_WEBHOOK_SECRET").ok(),
@@ -682,6 +690,7 @@ async fn main() {
         qdrant,
         embeddings,
         cloudflare,
+        n8n_mcp,
         stripe,
         session_secret,
         admin_ingest_token,

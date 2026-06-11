@@ -42,6 +42,7 @@ fn dogfood_state() -> Arc<AppState> {
         qdrant: None,
         embeddings: None,
         cloudflare,
+        n8n_mcp: backend_lib::mcp::N8nMcpConfig::from_env(),
         stripe: None,
         session_secret: b"dogfood-secret".to_vec(),
         resend_api_key: None,

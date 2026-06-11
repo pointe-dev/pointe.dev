@@ -1,3 +1,4 @@
+use crate::mcp::N8nMcpConfig;
 use crate::pipeline::PipelineContext;
 use crate::pitch::{PitchResult, PitchSlide};
 use crate::state::AppState;
@@ -10,6 +11,39 @@ const HAIKU:  &str = "claude-haiku-4-5-20251001";
 /// NOTE: prompt caching is GA on Claude 4.x, so the old `prompt-caching-2024-07-31`
 /// beta must NOT be sent — combining it here makes Anthropic ignore cache_control.
 const CACHE_BETA: &str = "extended-cache-ttl-2025-04-11";
+
+// n8n MCP read-only tool allowlists, per agent. These are the catalogue/grounding
+// tools — never the write/deploy tools (create_workflow_from_code, update_workflow…),
+// which stay out of reach. Exposed to the model as client-side tools and executed
+// by the backend against the n8n MCP server (the hosted connector can't reach it).
+const BUILDER_GROUNDING_TOOLS:  &[&str] = &["get_suggested_nodes", "search_nodes", "get_node_types"];
+const CRITIC_GROUNDING_TOOLS:   &[&str] = &["search_nodes", "get_node_types"];
+const DESIGNER_GROUNDING_TOOLS: &[&str] = &["get_suggested_nodes", "search_nodes"];
+
+const BUILDER_MCP_ADDENDUM: &str = "\
+You have LIVE access to the real n8n node catalogue through tools: get_suggested_nodes \
+(workflow technique → recommended nodes), search_nodes (find a node by service or \
+function), get_node_types (exact type id, typeVersion, and parameter names). GROUND \
+every node you emit: before using a node, confirm its real type string and typeVersion \
+via the catalogue, use the exact parameter names it returns, and prefer a real \
+dedicated node over httpRequest when one exists. Never invent a type string. When the \
+workflow is complete and every node is verified, call build_workflow with the final JSON.";
+
+const CRITIC_MCP_ADDENDUM: &str = "\
+You have LIVE access to the real n8n node catalogue through tools: search_nodes (find a \
+node by service or function) and get_node_types (exact type id, typeVersion, and \
+parameter names). Use them to VERIFY, not guess: check that each node 'type' in the \
+workflow is a real n8n node and that its parameters exist. A type the catalogue does \
+not have is grounds to reject (it fails to import). When done verifying, call \
+submit_review with your verdict.";
+
+const DESIGNER_MCP_ADDENDUM: &str = "\
+You may consult the LIVE n8n node catalogue through tools: get_suggested_nodes \
+(technique → recommended nodes) and search_nodes (find a node by service or function). \
+Use them to ground the blueprint in integrations/nodes that actually exist, and to \
+flag honestly when a needed service has no dedicated node (note it as 'via HTTP API'). \
+Still output ONLY the blueprint outline exactly as specified — no JSON, no tool \
+commentary in your final answer.";
 
 /// cache_control marker for a 1-hour ephemeral cache breakpoint.
 fn cache_1h() -> serde_json::Value {
@@ -190,6 +224,144 @@ async fn anthropic_raw(
 ) -> Result<String, AgentError> {
     let v = anthropic_send(http, key, body).await?;
     Ok(text_block(&v))
+}
+
+// ── MCP-grounded calls ────────────────────────────────────────────────────────
+
+/// Hard ceiling on tool-loop iterations for a grounded call. Each round-trip
+/// where the model calls catalogue tools costs one; a well-behaved grounding
+/// session needs 1–3. The cap stops a runaway loop.
+const GROUNDING_MAX_TURNS: u32 = 6;
+
+/// Drives a client-side tool loop: the model is given the n8n catalogue tools
+/// (`tools`, allowlisted), and whenever it calls one of `grounding_names` we
+/// execute it against the n8n MCP server and feed the result back, until the
+/// model produces a terminal message (calls `finish_tool`, or — when that is
+/// None — answers with text). Returns the final response body for the caller to
+/// extract from. `tool_choice` is implicit (`auto`).
+async fn anthropic_grounded_loop(
+    http: &reqwest::Client,
+    key: &str,
+    mcp: &N8nMcpConfig,
+    model: &'static str,
+    max_tokens: u32,
+    system: &str,
+    user_content: serde_json::Value,
+    tools: Vec<serde_json::Value>,
+    finish_tool: Option<&str>,
+    grounding_names: &[&str],
+) -> Result<serde_json::Value, AgentError> {
+    let mut messages = vec![serde_json::json!({ "role": "user", "content": user_content })];
+    for _ in 0..GROUNDING_MAX_TURNS {
+        let body = serde_json::json!({
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": [{"type": "text", "text": system, "cache_control": cache_1h()}],
+            "messages": messages,
+            "tools": tools,
+        });
+        let resp = anthropic_send(http, key, body).await?;
+        let content = resp["content"].as_array().cloned().unwrap_or_default();
+
+        // Terminal: the model called the structured finish tool — hand it back.
+        if let Some(ft) = finish_tool {
+            if content.iter().any(|b| b["type"] == "tool_use" && b["name"] == ft) {
+                return Ok(resp);
+            }
+        }
+
+        // Collect the catalogue tool calls this turn (skip the finish tool).
+        let calls: Vec<&serde_json::Value> = content.iter()
+            .filter(|b| b["type"] == "tool_use"
+                && grounding_names.contains(&b["name"].as_str().unwrap_or("")))
+            .collect();
+
+        // No catalogue call and finish not matched → terminal (text answer, or
+        // the model stopped). Hand the body back; the caller decides if it's usable.
+        if calls.is_empty() {
+            return Ok(resp);
+        }
+
+        // Execute each catalogue call and feed the results back as tool_results.
+        // A tool failure becomes an `is_error` result, not a pipeline abort, so
+        // the model can recover (retry a different query) rather than dying.
+        let mut tool_results = Vec::with_capacity(calls.len());
+        for c in &calls {
+            let name = c["name"].as_str().unwrap_or_default();
+            let (text, is_error) = match mcp.call_tool(http, name, c["input"].clone()).await {
+                Ok(t) => {
+                    tracing::info!("[grounding] {name}({}) → {} chars", c["input"], t.len());
+                    (t, false)
+                }
+                Err(e) => {
+                    tracing::warn!("[grounding] {name} failed: {e}");
+                    (format!("Tool error: {e}"), true)
+                }
+            };
+            tool_results.push(serde_json::json!({
+                "type": "tool_result",
+                "tool_use_id": c["id"].clone(),
+                "content": text,
+                "is_error": is_error,
+            }));
+        }
+        messages.push(serde_json::json!({ "role": "assistant", "content": content }));
+        messages.push(serde_json::json!({ "role": "user", "content": tool_results }));
+    }
+    Err(AgentError(format!("grounding loop exceeded {GROUNDING_MAX_TURNS} turns without a terminal response")))
+}
+
+/// Grounded counterpart of `anthropic_tool_call`: the model grounds itself on the
+/// n8n catalogue (via client-side tools we proxy), then returns structured output
+/// by calling `tool_name`. Returns that tool's `input`.
+async fn anthropic_grounded_tool_call(
+    http: &reqwest::Client,
+    key: &str,
+    mcp: &N8nMcpConfig,
+    model: &'static str,
+    max_tokens: u32,
+    system: &str,
+    user_content: serde_json::Value,
+    tool_name: &str,
+    tool_description: &str,
+    input_schema: serde_json::Value,
+    allowed: &[&str],
+) -> Result<serde_json::Value, AgentError> {
+    let mut tools = mcp.grounding_tools(allowed);
+    tools.push(serde_json::json!({
+        "name": tool_name,
+        "description": tool_description,
+        "input_schema": input_schema,
+    }));
+    let resp = anthropic_grounded_loop(
+        http, key, mcp, model, max_tokens, system, user_content, tools, Some(tool_name), allowed,
+    ).await?;
+    resp["content"].as_array()
+        .and_then(|blocks| blocks.iter().find(|b| b["type"] == "tool_use" && b["name"] == tool_name))
+        .map(|b| b["input"].clone())
+        .ok_or_else(|| AgentError(format!(
+            "grounded: model did not call {tool_name} (stop_reason={})", resp["stop_reason"]
+        )))
+}
+
+/// Grounded counterpart of `anthropic_call`: the model grounds itself on the n8n
+/// catalogue, then returns its answer as text (used by the prose designer).
+async fn anthropic_grounded_call(
+    http: &reqwest::Client,
+    key: &str,
+    mcp: &N8nMcpConfig,
+    model: &'static str,
+    max_tokens: u32,
+    system: &str,
+    user: &str,
+    allowed: &[&str],
+) -> Result<String, AgentError> {
+    let tools = mcp.grounding_tools(allowed);
+    let resp = anthropic_grounded_loop(
+        http, key, mcp, model, max_tokens, system,
+        serde_json::Value::String(user.to_string()), tools, None, allowed,
+    ).await?;
+    Ok(text_block(&resp))
 }
 
 // ── Agents ────────────────────────────────────────────────────────────────────
@@ -455,10 +627,24 @@ quote. Keep it tight: readable in 30 seconds.";
         feedback,
     );
 
-    let outline = anthropic_call(
-        &app.http, &app.anthropic_key, SONNET, 1200,
-        SYSTEM, &user,
-    ).await.map_err(|e| AgentError(format!("designer: {e}")))?;
+    // Grounded path: the blueprint is anchored in nodes that actually exist (and
+    // honestly flags services with no dedicated node) so the post-payment build
+    // matches the quote. NOTE: the designer is PRE-payment, so MCP calls add
+    // latency on unpaid leads — gated on env so it can be split off if conversion
+    // latency matters. Higher token cap leaves room for the catalogue tool blocks.
+    let outline = match &app.n8n_mcp {
+        Some(mcp) => {
+            let system = format!("{SYSTEM}\n\n{DESIGNER_MCP_ADDENDUM}");
+            anthropic_grounded_call(
+                &app.http, &app.anthropic_key, mcp, SONNET, 2500,
+                &system, &user, DESIGNER_GROUNDING_TOOLS,
+            ).await
+        }
+        None => anthropic_call(
+            &app.http, &app.anthropic_key, SONNET, 1200,
+            SYSTEM, &user,
+        ).await,
+    }.map_err(|e| AgentError(format!("designer: {e}")))?;
 
     if outline.trim().is_empty() {
         return Err(AgentError("designer returned an empty outline".into()));
@@ -747,12 +933,28 @@ unknown node type makes the entire workflow fail to import and blocks deployment
         "required": ["name", "nodes", "connections"]
     });
 
-    let workflow = anthropic_tool_call(
-        &app.http, &app.anthropic_key, SONNET, 8192,
-        SYSTEM, user_content,
-        "build_workflow", "Submit the complete n8n workflow JSON.",
-        schema,
-    ).await.map_err(|e| AgentError(format!("builder: {e}")))?;
+    // When the n8n MCP connector is configured, the builder grounds itself on the
+    // real node catalogue (verifies type ids/versions/params) before emitting —
+    // killing the invented-node-type failure class. Otherwise it falls back to the
+    // hardcoded-node-list prompt above. Post-payment, so the extra loop latency is
+    // acceptable; gated on env so it can be toggled and measured.
+    let workflow = match &app.n8n_mcp {
+        Some(mcp) => {
+            let system = format!("{SYSTEM}\n\n{BUILDER_MCP_ADDENDUM}");
+            anthropic_grounded_tool_call(
+                &app.http, &app.anthropic_key, mcp, SONNET, 8192,
+                &system, user_content,
+                "build_workflow", "Submit the complete n8n workflow JSON.",
+                schema, BUILDER_GROUNDING_TOOLS,
+            ).await
+        }
+        None => anthropic_tool_call(
+            &app.http, &app.anthropic_key, SONNET, 8192,
+            SYSTEM, user_content,
+            "build_workflow", "Submit the complete n8n workflow JSON.",
+            schema,
+        ).await,
+    }.map_err(|e| AgentError(format!("builder: {e}")))?;
 
     ctx.workflow_json = Some(workflow);
     Ok(())
@@ -870,12 +1072,26 @@ verdict.";
     // A transport error still shouldn't kill the pipeline — fall back to a soft
     // rejection so the builder retries and, after MAX_BUILD_ATTEMPTS,
     // publish_manual_pitch still produces a proposal.
-    let input = match anthropic_tool_call(
-        &app.http, &app.anthropic_key, SONNET, 1024,
-        SYSTEM, serde_json::Value::String(user),
-        "submit_review", "Submit your review verdict for the workflow.",
-        schema,
-    ).await {
+    // Grounded path: verify every node 'type' against the live catalogue rather
+    // than judging "real node?" from memory. Falls back to the single-shot critic.
+    let critic_call = match &app.n8n_mcp {
+        Some(mcp) => {
+            let system = format!("{SYSTEM}\n\n{CRITIC_MCP_ADDENDUM}");
+            anthropic_grounded_tool_call(
+                &app.http, &app.anthropic_key, mcp, SONNET, 2048,
+                &system, serde_json::Value::String(user),
+                "submit_review", "Submit your review verdict for the workflow.",
+                schema, CRITIC_GROUNDING_TOOLS,
+            ).await
+        }
+        None => anthropic_tool_call(
+            &app.http, &app.anthropic_key, SONNET, 1024,
+            SYSTEM, serde_json::Value::String(user),
+            "submit_review", "Submit your review verdict for the workflow.",
+            schema,
+        ).await,
+    };
+    let input = match critic_call {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!("[critic] tool call failed: {e} — treating as rejection");
@@ -1598,6 +1814,7 @@ mod tests {
             qdrant: None,
             embeddings: None,
             cloudflare: None,
+            n8n_mcp: None,
             stripe: None,
             session_secret: b"test".to_vec(),
             admin_ingest_token: None,
