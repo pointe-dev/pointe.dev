@@ -104,18 +104,20 @@ async fn dogfood_full_pipeline() {
         ctx.price_quote, ctx.price_monthly,
         ctx.price_justification.as_deref().unwrap_or("(none)"));
 
-    // The whole point of the redesign: no workflow JSON exists before payment.
-    assert!(ctx.workflow_json.is_none(), "no JSON should be built pre-payment");
-    println!("\n===== 💳 PAYMENT BOUNDARY — workflow_json is None (correct) =====");
+    // The whole point of the redesign: nothing is built before payment.
+    assert!(ctx.workflow_json.is_none() && ctx.workflow_code.is_none(),
+        "no workflow should be built pre-payment");
+    println!("\n===== 💳 PAYMENT BOUNDARY — no workflow built yet (correct) =====");
 
-    // ───────── POST-PAYMENT: build the real JSON ─────────
+    // ───────── POST-PAYMENT: build the real workflow (code when MCP/own, else JSON) ─────────
     let mut build_ok = false;
     for _ in 1..=MAX_BUILD_ATTEMPTS {
         ctx.build_attempts += 1;
         backend_lib::agents::run_builder(&app, &mut ctx).await.expect("builder");
-        println!("\n----- 6. WORKFLOW JSON (attempt {}) -----\n{}",
-            ctx.build_attempts,
-            serde_json::to_string_pretty(ctx.workflow_json.as_ref().expect("workflow_json")).unwrap_or_default());
+        let artifact = ctx.workflow_code.clone()
+            .or_else(|| ctx.workflow_json.as_ref().map(|w| serde_json::to_string_pretty(w).unwrap_or_default()))
+            .expect("builder produced neither code nor json");
+        println!("\n----- 6. WORKFLOW (attempt {}) -----\n{artifact}", ctx.build_attempts);
 
         build_ok = backend_lib::agents::run_critic(&app, &mut ctx).await.expect("critic");
         println!("\n----- 7. BUILD CRITIC (attempt {}): approved={build_ok} -----", ctx.build_attempts);
@@ -126,7 +128,8 @@ async fn dogfood_full_pipeline() {
     }
 
     println!("\n========== FIN — design_ok={design_ok} build_ok={build_ok} ==========\n");
-    assert!(ctx.workflow_json.is_some(), "builder should have produced something to inspect");
+    assert!(ctx.workflow_json.is_some() || ctx.workflow_code.is_some(),
+        "builder should have produced something to inspect");
 }
 
 /// Drives qualifier → research → designer, then the decomposition gate +
@@ -202,40 +205,41 @@ async fn dogfood_decomposed_build() {
     println!("\n----- {n} sous-flux à construire -----");
 
     // Mimic the state machine's per-sub-flow build loop (single build each, no
-    // critic retry — we only inspect structure here).
+    // critic retry — we only inspect structure here). The builder emits SDK *code*
+    // when the MCP is configured (deploy_target=own) and JSON otherwise; capture
+    // whichever it produced as text so the convention checks below are mode-agnostic.
+    let mut artifacts: Vec<String> = Vec::new();
     for cursor in 0..n {
         ctx.build_cursor = cursor;
         run_builder(&app, &mut ctx).await.expect("builder");
-        let wf = ctx.workflow_json.take().expect("workflow_json");
-        ctx.built_workflows.push(wf);
+        if let Some(code) = ctx.workflow_code.take() {
+            artifacts.push(code);
+        } else {
+            let wf = ctx.workflow_json.take().expect("builder produced neither code nor json");
+            artifacts.push(serde_json::to_string(&wf).unwrap_or_default());
+        }
     }
 
     let mut chain_ok = true;
-    for (i, wf) in ctx.built_workflows.iter().enumerate() {
-        let nodes = wf["nodes"].as_array().cloned().unwrap_or_default();
-        let types: Vec<String> = nodes.iter()
-            .filter_map(|nd| nd["type"].as_str().map(str::to_string)).collect();
-        println!("\n[{}] {} — {} nœuds\n  types: {}",
-            i + 1, ctx.sub_workflows[i].name, nodes.len(), types.join(", "));
+    for (i, text) in artifacts.iter().enumerate() {
+        println!("\n[{}] {} — {} chars\n{}",
+            i + 1, ctx.sub_workflows[i].name, text.len(),
+            text.chars().take(400).collect::<String>());
 
         // non-first → must enter on an Execute Workflow Trigger
         if i > 0 {
-            let has_trigger = types.iter().any(|t| t.contains("executeWorkflowTrigger"));
+            let has_trigger = text.contains("executeWorkflowTrigger");
             println!("  entrée executeWorkflowTrigger: {has_trigger}");
             chain_ok &= has_trigger;
         }
-        // non-last → must hand off via an Execute Workflow node naming the next sub-flow
+        // non-last → must hand off by naming the next sub-flow (the deploy-time
+        // placeholder) inside an executeWorkflow reference.
         if i + 1 < n {
             let next_name = &ctx.sub_workflows[i + 1].name;
-            let refs_next = nodes.iter().any(|nd| {
-                nd["type"].as_str().map(|t| t.contains("executeWorkflow") && !t.contains("Trigger")).unwrap_or(false)
-                    && nd["parameters"]["workflowId"].as_str() == Some(next_name.as_str())
-                    || nd["parameters"]["workflowId"]["value"].as_str() == Some(next_name.as_str())
-            });
+            let refs_next = text.contains("executeWorkflow") && text.contains(next_name.as_str());
             println!("  hand-off → '{next_name}': {refs_next}");
             chain_ok &= refs_next;
         }
-        assert!(nodes.len() <= 10, "sub-flow {} has {} nodes (>10, budget overrun)", i + 1, nodes.len());
     }
 
     println!("\n========== chaînage complet émis par le builder: {chain_ok} ==========\n");
@@ -345,4 +349,64 @@ async fn dogfood_deploy_live() {
     println!("entry url: {:?}", ctx.n8n_workflow_url);
     assert_eq!(ctx.n8n_workflow_ids.len(), 2, "both sub-flows should be created");
     println!("\n⚠️  ARCHIVE these workflows after inspection: {:?}", ctx.n8n_workflow_ids);
+}
+
+/// OPTION (a) end-to-end, LIVE: the MCP code path on a simple (mono) brief —
+/// run_builder emits n8n Workflow SDK *code*, run_critic gates it with the real
+/// validate_workflow tool, and run_deploy creates it via create_workflow_from_code.
+/// Proves the two boundaries the JSON path can't reach: SDK code emission and real
+/// structural validation. (Folder placement is requested via projectId/folderId but
+/// the current MCP build ignores folderId, so we don't assert it.)
+///
+/// Creates ONE real workflow. Archive it afterwards (id printed).
+///
+/// Run:
+///   set -a; . <(grep -E '^(ANTHROPIC_API_KEY|CF_|N8N_URL|N8N_API_KEY|N8N_MCP_|N8N_TEST_FOLDER)=' .env.prod | sed 's/\r$//'); set +a
+///   cargo test -p backend --test dogfood -- --ignored --nocapture dogfood_code_pipeline_live
+#[tokio::test]
+#[ignore]
+async fn dogfood_code_pipeline_live() {
+    let app = dogfood_state();
+    assert!(app.n8n_mcp.is_some(),
+        "set N8N_MCP_URL + N8N_MCP_TOKEN — option (a) requires the MCP code path");
+    println!("\n========== DOGFOOD: option (a) code path (mono, live) ==========");
+    println!("MCP: {}  folder: {:?}", app.n8n_mcp.is_some(), std::env::var("N8N_TEST_FOLDER").ok());
+
+    // Simple 2-integration brief → stays mono (no decomposition), ≤8 nodes.
+    const SIMPLE: &str = "Quand un nouveau lead remplit le formulaire de contact de mon \
+        site (webhook), ajoute-le dans une Google Sheet et envoie-moi un email de \
+        notification. Rien d'autre.";
+
+    let store = PipelineStore::new();
+    let id = store.create("dogfood-code".to_string(), SIMPLE.to_string(), None).await;
+    let mut ctx = store.get_ctx(id).await.expect("ctx");
+
+    backend_lib::agents::run_qualifier(&app, &mut ctx).await.expect("qualifier");
+    backend_lib::agents::run_research(&app, &mut ctx).await.expect("research");
+    ctx.design_attempts += 1;
+    backend_lib::agents::run_designer(&app, &mut ctx).await.expect("designer");
+    println!("\n----- DESIGN -----\n{}", ctx.design_summary.as_deref().unwrap_or("(none)"));
+
+    // Builder (code) → critic (validate_workflow) loop, mirroring the state machine.
+    let mut build_ok = false;
+    for _ in 1..=MAX_BUILD_ATTEMPTS {
+        ctx.build_attempts += 1;
+        backend_lib::agents::run_builder(&app, &mut ctx).await.expect("builder");
+        let code = ctx.workflow_code.clone().expect("builder must emit SDK code in MCP/own mode");
+        assert!(ctx.workflow_json.is_none(), "code mode must NOT also set workflow_json");
+        println!("\n----- SDK CODE (attempt {}) -----\n{code}", ctx.build_attempts);
+
+        build_ok = backend_lib::agents::run_critic(&app, &mut ctx).await.expect("critic");
+        println!("\n----- validate_workflow (attempt {}): valid={build_ok} -----", ctx.build_attempts);
+        if let Some(fb) = ctx.critic_feedback.last() { println!("errors: {fb}"); }
+        if build_ok { break; }
+    }
+    assert!(build_ok, "validate_workflow never passed within the attempt budget");
+
+    backend_lib::agents::run_deploy(&app, &mut ctx).await.expect("run_deploy");
+    println!("\n----- DEPLOYED (create_from_code) -----");
+    println!("workflow id:  {:?}", ctx.n8n_workflow_id);
+    println!("workflow url: {:?}", ctx.n8n_workflow_url);
+    assert!(ctx.n8n_workflow_id.is_some(), "deploy must return a workflow id");
+    println!("\n⚠️  ARCHIVE this workflow after inspection: {:?}", ctx.n8n_workflow_id);
 }

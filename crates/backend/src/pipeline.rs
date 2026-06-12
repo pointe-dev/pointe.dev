@@ -102,6 +102,17 @@ pub struct PipelineContext {
     /// single workflow; in a decomposed build it holds the sub-flow currently being
     /// validated (moved into `built_workflows` once the critic approves it).
     pub workflow_json: Option<serde_json::Value>,
+    /// n8n Workflow SDK *code* produced by run_builder when the MCP is available
+    /// (the preferred, higher-fidelity path). Mirrors `workflow_json`: in mono
+    /// builds it holds the single workflow's code; in a decomposed build it holds
+    /// the sub-flow currently being validated (moved into `built_workflow_codes`
+    /// once the critic/validate_workflow approves it). `None` in the JSON fallback.
+    #[serde(default)]
+    pub workflow_code: Option<String>,
+    /// Approved sub-flow SDK code strings, in order. Mirror of `built_workflows`
+    /// for the code path; empty in the mono and JSON cases.
+    #[serde(default)]
+    pub built_workflow_codes: Vec<String>,
     /// Decomposition plan from run_decomposer: ordered sub-flows, each ≤8 nodes.
     /// Empty means no decomposition — a single mono-workflow (the default, and the
     /// N=1 case).
@@ -632,6 +643,9 @@ async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(),
                     // cursor, and either build the next sub-flow or deploy them all.
                     if let Some(wf) = ctx.workflow_json.take() {
                         ctx.built_workflows.push(wf);
+                    }
+                    if let Some(code) = ctx.workflow_code.take() {
+                        ctx.built_workflow_codes.push(code);
                     }
                     ctx.build_cursor += 1;
                     ctx.build_attempts = 0;

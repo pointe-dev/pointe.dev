@@ -19,6 +19,10 @@ const CACHE_BETA: &str = "extended-cache-ttl-2025-04-11";
 const BUILDER_GROUNDING_TOOLS:  &[&str] = &["get_suggested_nodes", "search_nodes", "get_node_types"];
 const CRITIC_GROUNDING_TOOLS:   &[&str] = &["search_nodes", "get_node_types"];
 const DESIGNER_GROUNDING_TOOLS: &[&str] = &["get_suggested_nodes", "search_nodes"];
+// Code-mode builder also needs the SDK reference (exact DSL syntax) on top of the
+// node catalogue — it emits n8n Workflow SDK *code*, not raw JSON.
+const BUILDER_CODE_GROUNDING_TOOLS: &[&str] =
+    &["get_sdk_reference", "get_suggested_nodes", "search_nodes", "get_node_types"];
 
 const BUILDER_MCP_ADDENDUM: &str = "\
 You have LIVE access to the real n8n node catalogue through tools: get_suggested_nodes \
@@ -55,6 +59,70 @@ deploy — and pass the output fields below to it.\n\
 - Honour the input/output contracts exactly: the fields crossing between sub-flows \
 must match by name, because the n8n execution context does NOT carry across the hop \
 ($('EarlierNode') from another sub-flow is unreachable).";
+
+// System prompt for the CODE-mode builder (MCP present, deploy to our own instance).
+// It produces n8n Workflow SDK code instead of raw JSON: validate_workflow then gates
+// it (structural correctness by construction) and create_workflow_from_code deploys it
+// into a folder — the JSON/REST path cannot do either.
+const BUILDER_CODE_SYSTEM: &str = "\
+You are the workflow engineer at pointe.dev. You produce a production-grade n8n \
+workflow using the n8n Workflow SDK (the exact API below) that solves the client's \
+need end-to-end. Reference templates may be provided — adapt their proven structure.\n\
+\n\
+GROUND every node before emitting: call get_suggested_nodes / search_nodes / \
+get_node_types to confirm each node's real type id, its typeVersion, and the exact \
+parameter names it accepts. Never invent a type or a parameter. (get_sdk_reference is \
+available for deeper SDK lookups, but the API you need is specified right here.)\n\
+\n\
+=== n8n Workflow SDK — use EXACTLY this API (no other functions exist) ===\n\
+Import everything you use from '@n8n/workflow-sdk':\n\
+  import { workflow, node, trigger, expr, newCredential, placeholder, ifElse, \
+switchCase, merge, splitInBatches, nextBatch } from '@n8n/workflow-sdk';\n\
+\n\
+Define each node/trigger first, then compose the graph:\n\
+- trigger({ type, version, config: { name, parameters } })  // the entry node\n\
+- node({ type, version, config: { name, parameters, credentials } })  // every other node\n\
+- Compose with the fluent builder, exporting it as default:\n\
+    export default workflow('wf-id', 'Workflow Name')\n\
+      .add(theTrigger)\n\
+      .to(firstNode)\n\
+      .to(secondNode);\n\
+  `.add(x)` starts a chain at x; `.to(y)` connects the previous node to y.\n\
+- Expressions: wrap n8n expressions in expr('{{ $json.field }}'). Plain values stay raw.\n\
+- Credentials: credentials: { someApi: newCredential('Human Label') } — NEVER embed \
+secrets or 'YOUR_API_KEY'. Use placeholder('hint') for a value the client must fill in.\n\
+- Branching: const gate = ifElse({ version: 2.2, config: { name, parameters: { \
+conditions: { options:{caseSensitive:true,typeValidation:'loose'}, conditions:[{ \
+leftValue: expr('{{ $json.x }}'), operator:{type:'string',operation:'exists'} }], \
+combinator:'and' } } } }); then `.to(gate.onTrue(a.to(b)).onFalse(c))`. Each branch is \
+a COMPLETE path — chain its steps with .to() inside onTrue/onFalse.\n\
+- Multi-way: switchCase({...}).onCase(0, a).onCase(1, b). Loops: \
+splitInBatches({version:3, config:{parameters:{batchSize:10}}}).onEachBatch(\
+work.to(nextBatch(theSibNode))).onDone(after).\n\
+\n\
+Worked example (shape and rigour):\n\
+  import { workflow, node, trigger, expr, newCredential } from '@n8n/workflow-sdk';\n\
+  const onOrder = trigger({ type: 'n8n-nodes-base.shopifyTrigger', version: 1, \
+config: { name: 'On New Order', parameters: { topic: 'orders/create' }, credentials: { \
+shopifyApi: newCredential('Shopify') } } });\n\
+  const createInvoice = node({ type: 'n8n-nodes-base.httpRequest', version: 4.2, \
+config: { name: 'Create Invoice', parameters: { method: 'POST', url: \
+'https://api.accounting.example/v1/invoices' }, credentials: {} } });\n\
+  export default workflow('shopify-invoice', 'Shopify → Accounting Invoice')\n\
+    .add(onOrder)\n\
+    .to(createInvoice);\n\
+=== end SDK ===\n\
+\n\
+Rules:\n\
+- Max 8 nodes; prefer the simplest graph that fully solves the need.\n\
+- Exactly one entry trigger; no orphan nodes; node names unique and human-readable.\n\
+- Include basic resilience (an ifElse guard for an empty/error case) where the need \
+implies reliability.\n\
+- Trace the graph mentally from trigger to final action before emitting. Do NOT set \
+node positions — the SDK lays them out.\n\
+\n\
+When the code is complete and every node is grounded, call build_workflow_code with \
+the final code string (a single self-contained module) and nothing else.";
 
 const DESIGNER_MCP_ADDENDUM: &str = "\
 You may consult the LIVE n8n node catalogue through tools: get_suggested_nodes \
@@ -1106,6 +1174,42 @@ unknown node type makes the entire workflow fail to import and blocks deployment
         SYSTEM.to_string()
     };
 
+    // Code mode (option a): MCP present AND deploying to our own instance — the
+    // builder emits n8n Workflow SDK *code* (grounded on the SDK reference + the live
+    // node catalogue) instead of raw JSON. validate_workflow then gates it structurally
+    // by construction and create_workflow_from_code deploys it into a folder — neither
+    // of which the JSON/REST path can do. Client deploys target a different n8n instance
+    // the MCP cannot reach, so they stay on the JSON path below.
+    let deploy_own = ctx.deploy_target.as_deref().unwrap_or("own") == "own";
+    if let (Some(mcp), true) = (&app.n8n_mcp, deploy_own) {
+        let system = if subflow.is_some() {
+            format!("{BUILDER_CODE_SYSTEM}\n\n{SUBFLOW_BUILD_ADDENDUM}")
+        } else {
+            BUILDER_CODE_SYSTEM.to_string()
+        };
+        let code_schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "Complete n8n Workflow SDK code (TypeScript), importing from '@n8n/workflow-sdk'."
+                }
+            },
+            "required": ["code"]
+        });
+        let out = anthropic_grounded_tool_call(
+            &app.http, &app.anthropic_key, mcp, SONNET, 8192,
+            &system, user_content,
+            "build_workflow_code", "Submit the complete, grounded n8n Workflow SDK code.",
+            code_schema, BUILDER_CODE_GROUNDING_TOOLS,
+        ).await.map_err(|e| AgentError(format!("builder(code): {e}")))?;
+        let code = out["code"].as_str()
+            .ok_or_else(|| AgentError(format!("builder(code): no code field in {out}")))?
+            .to_string();
+        ctx.workflow_code = Some(code);
+        return Ok(());
+    }
+
     // When the n8n MCP connector is configured, the builder grounds itself on the
     // real node catalogue (verifies type ids/versions/params) before emitting —
     // killing the invented-node-type failure class. Otherwise it falls back to the
@@ -1137,6 +1241,27 @@ unknown node type makes the entire workflow fail to import and blocks deployment
 /// Returns true if approved, false if revisions needed (feedback appended to ctx).
 pub async fn run_critic(app: &AppState, ctx: &mut PipelineContext) -> Result<bool, AgentError> {
     tracing::info!("[critic] session={} attempt={}", ctx.session_id, ctx.build_attempts);
+
+    // Code mode (option a): the builder emitted SDK code. The gate here is the n8n
+    // validator — structural validity by construction, deterministic, no LLM judgement.
+    // Errors feed back as critic_feedback so the builder fixes them on the next attempt
+    // (same attempt budget as the JSON critic). Semantic fitness is already gated at
+    // design time (run_design_critic), so this build-time gate is purely correctness.
+    if let Some(code) = ctx.workflow_code.clone() {
+        let mcp = app.n8n_mcp.as_ref()
+            .ok_or_else(|| AgentError("code-mode critic but n8n_mcp is unset".to_string()))?;
+        return match mcp.validate_code(&app.http, &code).await {
+            Ok(()) => {
+                tracing::info!("[critic] validate_workflow passed attempt {}", ctx.build_attempts);
+                Ok(true)
+            }
+            Err(errs) => {
+                tracing::warn!("[critic] validate_workflow rejected attempt {}: {errs}", ctx.build_attempts);
+                ctx.critic_feedback.push(format!("validate_workflow reported errors: {errs}"));
+                Ok(false)
+            }
+        };
+    }
 
     let workflow = ctx.workflow_json.as_ref()
         .ok_or_else(|| AgentError("critic called with no workflow_json".to_string()))?;
@@ -1911,6 +2036,92 @@ async fn n8n_activate(http: &reqwest::Client, url: &str, key: &str, id: &str) {
     }
 }
 
+/// Deploys SDK code via the MCP `create_workflow_from_code` (option a). Mirrors the
+/// REST deploy's chaining: sub-flows are created entry-LAST so each invoking sub-flow
+/// knows the real id of the one it calls, then the next sub-flow's NAME placeholder is
+/// substituted with that id in the code string before creation. We pass the resolved
+/// projectId/folderId so workflows land in N8N_TEST_FOLDER on servers that honor it
+/// (the current MCP build ignores folderId and creates in the project root — the
+/// plumbing stays forward-compatible). The entry sub-flow is activated via REST.
+async fn deploy_from_code(
+    app: &AppState,
+    mcp: &N8nMcpConfig,
+    ctx: &mut PipelineContext,
+) -> Result<(), AgentError> {
+    let codes: Vec<String> = if !ctx.built_workflow_codes.is_empty() {
+        ctx.built_workflow_codes.clone()
+    } else {
+        vec![ctx.workflow_code.clone()
+            .ok_or_else(|| AgentError("code deploy called with no workflow_code".to_string()))?]
+    };
+    let decomposed = !ctx.built_workflow_codes.is_empty();
+
+    // Resolve the test folder (name → project/folder id); deploy to the project root
+    // if it is unset or cannot be resolved (best-effort placement, never a hard fail).
+    let folder = match std::env::var("N8N_TEST_FOLDER").ok().filter(|s| !s.is_empty()) {
+        Some(name) => match mcp.resolve_folder(&app.http, &name).await {
+            Ok((p, f)) => { tracing::info!("[deploy] target folder '{name}' → project={p} folder={f}"); Some((p, f)) }
+            Err(e) => { tracing::warn!("[deploy] folder '{name}' unresolved ({e}); deploying to project root"); None }
+        },
+        None => None,
+    };
+    let (project_id, folder_id) = match &folder {
+        Some((p, f)) => (Some(p.as_str()), Some(f.as_str())),
+        None => (None, None),
+    };
+
+    let default_name = format!("pointe.dev — {}", ctx.client_need.chars().take(60).collect::<String>());
+
+    let mut ids: Vec<Option<String>> = vec![None; codes.len()];
+    for i in (0..codes.len()).rev() {
+        let mut code = codes[i].clone();
+
+        // Substitute the next sub-flow's NAME placeholder (already deployed, id known)
+        // with its real id in this sub-flow's executeWorkflow call.
+        if decomposed {
+            if let (Some(next), Some(Some(next_id))) =
+                (ctx.sub_workflows.get(i + 1), ids.get(i + 1))
+            {
+                let before = code.len();
+                code = code.replace(&next.name, next_id);
+                if code.len() == before && i + 1 < codes.len() {
+                    tracing::warn!(
+                        "[deploy] sub-flow {}/{}: next-flow name '{}' not found in code — \
+                         chain to next may be broken, needs manual wiring",
+                        i + 1, codes.len(), next.name);
+                }
+            }
+        }
+
+        let name = ctx.sub_workflows.get(i)
+            .map(|sf| format!("pointe.dev — {}", sf.name))
+            .unwrap_or_else(|| default_name.clone());
+        let description = ctx.sub_workflows.get(i)
+            .map(|sf| sf.description.clone())
+            .unwrap_or_else(|| ctx.client_need.chars().take(200).collect());
+
+        let id = mcp.create_from_code(&app.http, &code, &name, &description, project_id, folder_id)
+            .await
+            .map_err(|e| AgentError(format!("create_from_code ({}/{}): {e}", i + 1, codes.len())))?;
+        tracing::info!("[deploy] workflow created id={id} ({}/{}) via SDK code", i + 1, codes.len());
+        ids[i] = Some(id);
+    }
+
+    // Activate the entry workflow via REST (best-effort) — our own instance.
+    let ordered: Vec<String> = ids.into_iter().flatten().collect();
+    let entry = ordered.first().cloned()
+        .ok_or_else(|| AgentError("code deploy produced no workflow ids".to_string()))?;
+    if let Ok(url) = std::env::var("N8N_URL") {
+        if let Ok(key) = std::env::var("N8N_API_KEY") {
+            n8n_activate(&app.http, &url, &key, &entry).await;
+        }
+        ctx.n8n_workflow_url = Some(format!("{url}/workflow/{entry}"));
+    }
+    ctx.n8n_workflow_id  = Some(entry);
+    ctx.n8n_workflow_ids = ordered;
+    Ok(())
+}
+
 /// Deploys to n8n (our instance or the client's) and activates the entry workflow.
 /// Mono build → one workflow. Decomposed build → every sub-flow, created entry-LAST
 /// so each knows the real id of the sub-flow it invokes, then chained by rewriting
@@ -1919,6 +2130,17 @@ async fn n8n_activate(http: &reqwest::Client, url: &str, key: &str, id: &str) {
 pub async fn run_deploy(app: &AppState, ctx: &mut PipelineContext) -> Result<(), AgentError> {
     tracing::info!("[deploy] session={} target={}", ctx.session_id,
         ctx.deploy_target.as_deref().unwrap_or("own"));
+
+    // Code path (option a): the builder emitted SDK code → deploy via MCP
+    // create_workflow_from_code, which gets node positions right by construction and
+    // (when the server honors folderId) drops the workflow into N8N_TEST_FOLDER. Only
+    // ever reached for deploy_target=own (the builder only emits code for our own
+    // instance, which the MCP is attached to).
+    if ctx.workflow_code.is_some() || !ctx.built_workflow_codes.is_empty() {
+        if let Some(mcp) = &app.n8n_mcp {
+            return deploy_from_code(app, mcp, ctx).await;
+        }
+    }
 
     let (n8n_url, n8n_key) = match ctx.deploy_target.as_deref().unwrap_or("own") {
         "client" => {

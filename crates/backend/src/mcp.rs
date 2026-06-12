@@ -81,6 +81,85 @@ impl N8nMcpConfig {
     pub fn grounding_tools(&self, allowed: &[&str]) -> Vec<Value> {
         allowed.iter().filter_map(|t| tool_def(t)).collect()
     }
+
+    /// Validates n8n Workflow SDK `code` via the MCP `validate_workflow` tool.
+    /// Ok(()) when the code parses to a valid workflow; Err(feedback) otherwise,
+    /// with the parser diagnostics so the builder can fix and retry. Used as the
+    /// structural gate in the code-authoring build path.
+    pub async fn validate_code(&self, http: &reqwest::Client, code: &str) -> Result<(), String> {
+        match self.call_tool(http, "validate_workflow", json!({ "code": code })).await {
+            Ok(text) => parse_validate_result(&text),
+            // An invalid parse comes back as an MCP tool error; its text is the diagnostic.
+            Err(diag) => Err(diag),
+        }
+    }
+
+    /// Creates a workflow from validated SDK `code` via `create_workflow_from_code`,
+    /// optionally inside a project/folder, and returns the new workflow id.
+    pub async fn create_from_code(
+        &self,
+        http: &reqwest::Client,
+        code: &str,
+        name: &str,
+        description: &str,
+        project_id: Option<&str>,
+        folder_id: Option<&str>,
+    ) -> Result<String, String> {
+        let mut args = json!({ "code": code, "name": name, "description": description });
+        if let Some(p) = project_id { args["projectId"] = json!(p); }
+        if let Some(f) = folder_id { args["folderId"] = json!(f); }
+        let text = self.call_tool(http, "create_workflow_from_code", args).await?;
+        parse_create_result(&text)
+    }
+
+    /// Resolves a folder NAME (e.g. `N8N_TEST_FOLDER`) to the `(projectId, folderId)`
+    /// `create_from_code` needs, via the MCP catalogue. Uses the first (personal)
+    /// project and the exact-name folder match. Err on any lookup failure.
+    pub async fn resolve_folder(
+        &self,
+        http: &reqwest::Client,
+        folder_name: &str,
+    ) -> Result<(String, String), String> {
+        let projects = self.call_tool(http, "search_projects", json!({})).await?;
+        let pv: Value = serde_json::from_str(&projects).unwrap_or(Value::Null);
+        let project_id = pv["data"][0]["id"].as_str()
+            .ok_or_else(|| format!("resolve_folder: no project in {projects}"))?
+            .to_string();
+
+        let folders = self.call_tool(http, "search_folders",
+            json!({ "projectId": project_id, "query": folder_name })).await?;
+        let fv: Value = serde_json::from_str(&folders).unwrap_or(Value::Null);
+        let folder_id = fv["data"].as_array()
+            .and_then(|a| a.iter()
+                .find(|f| f["name"].as_str() == Some(folder_name))
+                .or_else(|| a.first()))
+            .and_then(|f| f["id"].as_str())
+            .ok_or_else(|| format!("resolve_folder: folder '{folder_name}' not found in {folders}"))?
+            .to_string();
+
+        Ok((project_id, folder_id))
+    }
+}
+
+/// Pulls the verdict out of `validate_workflow`'s JSON result text.
+fn parse_validate_result(text: &str) -> Result<(), String> {
+    let v: Value = serde_json::from_str(text).unwrap_or(Value::Null);
+    if v["valid"].as_bool() == Some(true) {
+        return Ok(());
+    }
+    let errs = v["errors"].as_array()
+        .map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("; "))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| text.to_string());
+    Err(errs)
+}
+
+/// Pulls the new workflow id out of `create_workflow_from_code`'s JSON result text.
+fn parse_create_result(text: &str) -> Result<String, String> {
+    let v: Value = serde_json::from_str(text)
+        .map_err(|e| format!("create_from_code: unparseable result ({e}): {text}"))?;
+    v["workflowId"].as_str().map(str::to_string)
+        .ok_or_else(|| format!("create_from_code: no workflowId in result: {text}"))
 }
 
 /// Pulls the JSON-RPC result text out of the server's reply. The server answers
@@ -208,6 +287,27 @@ mod tests {
     fn parse_jsonrpc_result_flattens_sse_text() {
         let raw = "event: message\ndata: {\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"hello\"},{\"type\":\"text\",\"text\":\"world\"}]},\"jsonrpc\":\"2.0\",\"id\":1}\n";
         assert_eq!(parse_jsonrpc_result(raw).unwrap(), "hello\nworld");
+    }
+
+    #[test]
+    fn parse_validate_result_ok_when_valid() {
+        assert!(parse_validate_result(r#"{"valid":true,"nodeCount":3}"#).is_ok());
+    }
+
+    #[test]
+    fn parse_validate_result_returns_joined_errors_when_invalid() {
+        let err = parse_validate_result(r#"{"valid":false,"errors":["unbalanced brackets","unknown id 'x'"]}"#)
+            .unwrap_err();
+        assert!(err.contains("unbalanced brackets") && err.contains("unknown id 'x'"));
+    }
+
+    #[test]
+    fn parse_create_result_extracts_workflow_id() {
+        assert_eq!(
+            parse_create_result(r#"{"workflowId":"abc123","name":"x","nodeCount":2}"#).unwrap(),
+            "abc123"
+        );
+        assert!(parse_create_result(r#"{"name":"x"}"#).is_err());
     }
 
     #[test]
