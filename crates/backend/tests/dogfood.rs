@@ -170,3 +170,78 @@ async fn dogfood_decomposition() {
 
     assert!(ctx.sub_workflows.len() >= 2, "a 7-integration tunnel should split into multiple sub-flows");
 }
+
+/// Full tranche-2 build path WITHOUT n8n: decompose, then build every sub-flow in
+/// sub-flow mode, and verify the chaining convention the deploy wiring relies on —
+/// non-first sub-flows trigger on Execute Workflow Trigger, non-last sub-flows end
+/// with an Execute Workflow node referencing the NEXT sub-flow by name. (The n8n
+/// POST/wiring is unit-tested separately; this checks the model emits the contract.)
+///
+/// Run:
+///   cargo test -p backend --test dogfood -- --ignored --nocapture dogfood_decomposed_build
+#[tokio::test]
+#[ignore]
+async fn dogfood_decomposed_build() {
+    use backend_lib::agents::{needs_decomposition, run_builder, run_decomposer};
+
+    let app = dogfood_state();
+    println!("\n========== DOGFOOD: build décomposé « chaîne IA » ==========");
+    println!("grounding MCP actif: {}", app.n8n_mcp.is_some());
+
+    let store = PipelineStore::new();
+    let id = store.create("dogfood-decomp-build".to_string(), BRIEF.to_string(), None).await;
+    let mut ctx = store.get_ctx(id).await.expect("ctx");
+
+    backend_lib::agents::run_qualifier(&app, &mut ctx).await.expect("qualifier");
+    backend_lib::agents::run_research(&app, &mut ctx).await.expect("research");
+    ctx.design_attempts += 1;
+    backend_lib::agents::run_designer(&app, &mut ctx).await.expect("designer");
+    assert!(needs_decomposition(&ctx), "brief must trip the gate");
+    run_decomposer(&app, &mut ctx).await.expect("decomposer");
+    let n = ctx.sub_workflows.len();
+    println!("\n----- {n} sous-flux à construire -----");
+
+    // Mimic the state machine's per-sub-flow build loop (single build each, no
+    // critic retry — we only inspect structure here).
+    for cursor in 0..n {
+        ctx.build_cursor = cursor;
+        run_builder(&app, &mut ctx).await.expect("builder");
+        let wf = ctx.workflow_json.take().expect("workflow_json");
+        ctx.built_workflows.push(wf);
+    }
+
+    let mut chain_ok = true;
+    for (i, wf) in ctx.built_workflows.iter().enumerate() {
+        let nodes = wf["nodes"].as_array().cloned().unwrap_or_default();
+        let types: Vec<String> = nodes.iter()
+            .filter_map(|nd| nd["type"].as_str().map(str::to_string)).collect();
+        println!("\n[{}] {} — {} nœuds\n  types: {}",
+            i + 1, ctx.sub_workflows[i].name, nodes.len(), types.join(", "));
+
+        // non-first → must enter on an Execute Workflow Trigger
+        if i > 0 {
+            let has_trigger = types.iter().any(|t| t.contains("executeWorkflowTrigger"));
+            println!("  entrée executeWorkflowTrigger: {has_trigger}");
+            chain_ok &= has_trigger;
+        }
+        // non-last → must hand off via an Execute Workflow node naming the next sub-flow
+        if i + 1 < n {
+            let next_name = &ctx.sub_workflows[i + 1].name;
+            let refs_next = nodes.iter().any(|nd| {
+                nd["type"].as_str().map(|t| t.contains("executeWorkflow") && !t.contains("Trigger")).unwrap_or(false)
+                    && nd["parameters"]["workflowId"].as_str() == Some(next_name.as_str())
+                    || nd["parameters"]["workflowId"]["value"].as_str() == Some(next_name.as_str())
+            });
+            println!("  hand-off → '{next_name}': {refs_next}");
+            chain_ok &= refs_next;
+        }
+        assert!(nodes.len() <= 10, "sub-flow {} has {} nodes (>10, budget overrun)", i + 1, nodes.len());
+    }
+
+    println!("\n========== chaînage complet émis par le builder: {chain_ok} ==========\n");
+    // Soft signal: the model should follow the convention, but a miss is recoverable
+    // (deploy logs a warning and the owner wires manually), so we don't hard-fail.
+    if !chain_ok {
+        println!("⚠️  au moins un maillon de chaînage manque — à durcir côté prompt si récurrent");
+    }
+}

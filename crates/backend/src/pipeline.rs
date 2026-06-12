@@ -24,8 +24,13 @@ pub enum PipelineStage {
     Designing,
     /// Design critic validating viability/completeness before quoting.
     DesignValidating,
+    /// Deciding whether the approved design must be split into chained sub-flows.
+    /// Reached only POST-payment, right before building. No split → straight to
+    /// Building (mono); split → run_decomposer fills ctx.sub_workflows.
+    Decomposing,
     /// Workflow builder running (attempt tracked in ctx.build_attempts).
     /// Reached only POST-payment — the real JSON is built after the client pays.
+    /// In a decomposed build, builds the sub-flow at ctx.build_cursor.
     Building,
     /// Critic agent validating the latest JSON draft (post-payment).
     Validating,
@@ -93,14 +98,22 @@ pub struct PipelineContext {
     /// Number of design attempts so far.
     #[serde(default)]
     pub design_attempts: u8,
-    /// n8n workflow JSON produced by run_builder (post-payment).
+    /// n8n workflow JSON produced by run_builder. In mono builds this holds the
+    /// single workflow; in a decomposed build it holds the sub-flow currently being
+    /// validated (moved into `built_workflows` once the critic approves it).
     pub workflow_json: Option<serde_json::Value>,
     /// Decomposition plan from run_decomposer: ordered sub-flows, each ≤8 nodes.
     /// Empty means no decomposition — a single mono-workflow (the default, and the
-    /// N=1 case). The per-sub-flow build/deploy loop that consumes this plan is a
-    /// follow-up; for now it records how a large tunnel would be split.
+    /// N=1 case).
     #[serde(default)]
     pub sub_workflows: Vec<SubWorkflowPlan>,
+    /// Index of the sub-flow currently being built/validated (decomposed builds).
+    #[serde(default)]
+    pub build_cursor: usize,
+    /// Approved sub-flow JSONs, in order, accumulated as each passes the critic.
+    /// Empty in the mono case (the single workflow stays in `workflow_json`).
+    #[serde(default)]
+    pub built_workflows: Vec<serde_json::Value>,
     /// Critic feedback accumulated across build attempts.
     pub critic_feedback: Vec<String>,
     /// Number of build attempts so far.
@@ -121,10 +134,14 @@ pub struct PipelineContext {
     pub pricing_feasibility_override: Option<f32>,
     /// Slides JSON produced by run_pricing, carried to run_pricing_critic for publishing.
     pub pricing_slides_json: Option<serde_json::Value>,
-    /// n8n workflow ID after deployment.
+    /// n8n workflow ID after deployment. In a decomposed build this is the entry
+    /// sub-flow (the one carrying the real trigger), for display/back-compat.
     pub n8n_workflow_id: Option<String>,
-    /// Direct URL to the workflow in the n8n editor.
+    /// Direct URL to the (entry) workflow in the n8n editor.
     pub n8n_workflow_url: Option<String>,
+    /// IDs of every deployed sub-flow, entry first (mono build has one entry).
+    #[serde(default)]
+    pub n8n_workflow_ids: Vec<String>,
     /// "own" (our instance) or "client" (client's own n8n). Defaults to "own".
     pub deploy_target: Option<String>,
     /// Client's n8n URL (only set when deploy_target = "client").
@@ -270,8 +287,9 @@ impl PipelineStore {
             match guard.get_mut(&id) {
                 Some(r) if r.stage == PipelineStage::AwaitingPayment => {
                     // Post-payment, the real JSON gets built first, then deployed:
-                    // AwaitingPayment → Building → Validating → Deploying → Live.
-                    r.stage = PipelineStage::Building;
+                    // AwaitingPayment → Decomposing → Building → Validating →
+                    // (loop sub-flows) → Deploying → Live.
+                    r.stage = PipelineStage::Decomposing;
                     r.updated_at = Utc::now();
                     Some((r.stage.clone(), r.ctx.clone()))
                 }
@@ -387,7 +405,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resume_after_payment_transitions_awaiting_to_building() {
+    async fn resume_after_payment_transitions_awaiting_to_decomposing() {
         let store = PipelineStore::new();
         let id = store.create("sess-pay".to_string(), "need".to_string(), None).await;
         // Manually advance to AwaitingPayment
@@ -397,9 +415,9 @@ mod tests {
         let resumed = store.resume_after_payment(id).await;
         assert!(resumed, "should return true when in AwaitingPayment");
 
-        // Post-payment now builds the JSON first (then validates, then deploys).
+        // Post-payment now decomposes first (then builds, validates, deploys).
         let (stage, _) = store.status(id).await.unwrap();
-        assert_eq!(stage, PipelineStage::Building);
+        assert_eq!(stage, PipelineStage::Decomposing);
     }
 
     #[tokio::test]
@@ -589,6 +607,18 @@ async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(),
                 }
             }
 
+            PipelineStage::Decomposing => {
+                // Only large tunnels are split; simple leads stay mono (zero change).
+                // A decomposer that returns ≤1 sub-flow collapses back to mono too.
+                if agents::needs_decomposition(&ctx) {
+                    agents::run_decomposer(app, &mut ctx).await.map_err(|e| e.to_string())?;
+                }
+                if ctx.sub_workflows.len() <= 1 {
+                    ctx.sub_workflows.clear();
+                }
+                store.advance(id, PipelineStage::Building, ctx).await;
+            }
+
             PipelineStage::Building => {
                 ctx.build_attempts += 1;
                 agents::run_builder(app, &mut ctx).await.map_err(|e| e.to_string())?;
@@ -597,14 +627,32 @@ async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(),
 
             PipelineStage::Validating => {
                 let approved = agents::run_critic(app, &mut ctx).await.map_err(|e| e.to_string())?;
-                if approved {
+                if approved && !ctx.sub_workflows.is_empty() {
+                    // Decomposed build: stash the approved sub-flow, advance the
+                    // cursor, and either build the next sub-flow or deploy them all.
+                    if let Some(wf) = ctx.workflow_json.take() {
+                        ctx.built_workflows.push(wf);
+                    }
+                    ctx.build_cursor += 1;
+                    ctx.build_attempts = 0;
+                    ctx.critic_feedback.clear();
+                    if ctx.build_cursor >= ctx.sub_workflows.len() {
+                        store.advance(id, PipelineStage::Deploying, ctx).await;
+                    } else {
+                        store.advance(id, PipelineStage::Building, ctx).await;
+                    }
+                } else if approved {
                     store.advance(id, PipelineStage::Deploying, ctx).await;
                 } else if ctx.build_attempts >= MAX_BUILD_ATTEMPTS {
                     // Post-payment: the client has already paid, so we do NOT re-pitch.
                     // Alert the owner and hand off to manual delivery — we honor the
                     // quote by building it by hand.
+                    let which = ctx.sub_workflows.get(ctx.build_cursor)
+                        .map(|sf| format!(" (sub-flow {}/{}: {})",
+                            ctx.build_cursor + 1, ctx.sub_workflows.len(), sf.name))
+                        .unwrap_or_default();
                     let reason = format!(
-                        "post-payment build rejected after {} attempts — manual delivery required: {}",
+                        "post-payment build rejected after {} attempts{which} — manual delivery required: {}",
                         ctx.build_attempts,
                         ctx.critic_feedback.last().cloned().unwrap_or_default()
                     );
