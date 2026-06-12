@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use backend_lib::{
-    pipeline::{PipelineStore, MAX_DESIGN_ATTEMPTS, MAX_BUILD_ATTEMPTS},
+    pipeline::{PipelineStore, PipelineContext, SubWorkflowPlan, MAX_DESIGN_ATTEMPTS, MAX_BUILD_ATTEMPTS},
     pitch::PitchStore,
     sessions::SessionStore,
     state::AppState,
@@ -244,4 +244,105 @@ async fn dogfood_decomposed_build() {
     if !chain_ok {
         println!("⚠️  au moins un maillon de chaînage manque — à durcir côté prompt si récurrent");
     }
+}
+
+/// Live deploy of the chained-sub-flow path against the REAL n8n at N8N_URL — the
+/// only boundary the other dogfoods can't cover. Uses two tiny synthetic sub-flows
+/// built from 100% real node types (no LLM, no cost), so it isolates run_deploy:
+/// REST create in reverse order, name→id wiring of the executeWorkflow placeholder,
+/// and entry activation. Prints the created ids so they can be inspected/archived.
+///
+/// Creates REAL workflows named "[TEST] test_pointe — …". Archive them afterwards.
+///
+/// Run:
+///   set -a; . <(grep -E '^(N8N_URL|N8N_API_KEY)=' .env.prod | sed 's/\r$//'); set +a
+///   cargo test -p backend --test dogfood -- --ignored --nocapture dogfood_deploy_live
+#[tokio::test]
+#[ignore]
+async fn dogfood_deploy_live() {
+    std::env::var("N8N_API_KEY").expect("set N8N_URL + N8N_API_KEY to run the live deploy test");
+
+    // AppState only needs http + anthropic_key (unused here). Reuse the dogfood state
+    // but Anthropic key may be absent; fall back to a dummy since run_deploy never calls it.
+    let http = reqwest::Client::new();
+    let app = Arc::new(AppState {
+        anthropic_key: std::env::var("ANTHROPIC_API_KEY").unwrap_or_else(|_| "unused".into()),
+        http,
+        system_prompt: String::new(),
+        langfuse: None,
+        sessions: SessionStore::new(),
+        pipelines: PipelineStore::new(),
+        pending: backend_lib::pending::PendingStore::new(),
+        pitches: PitchStore::new(None),
+        qdrant: None,
+        embeddings: None,
+        cloudflare: None,
+        n8n_mcp: None,
+        stripe: None,
+        session_secret: b"dogfood".to_vec(),
+        resend_api_key: None,
+        base_url: "http://localhost".to_string(),
+        owner_email: None,
+        db: None,
+        admin_ingest_token: None,
+    });
+
+    let mut ctx = PipelineContext {
+        session_id: "deploy-live".to_string(),
+        client_need: "[TEST] test_pointe deploy".to_string(),
+        ..Default::default()
+    };
+    ctx.sub_workflows = vec![
+        SubWorkflowPlan {
+            name: "[TEST] test_pointe — WF-1 Entry".to_string(),
+            description: "schedule → set → call WF-2".to_string(),
+            trigger: "scheduleTrigger".to_string(),
+            input_contract: String::new(),
+            output_contract: "ping".to_string(),
+        },
+        SubWorkflowPlan {
+            name: "[TEST] test_pointe — WF-2 Sink".to_string(),
+            description: "execute-workflow-trigger → set".to_string(),
+            trigger: "executeWorkflowTrigger".to_string(),
+            input_contract: "ping".to_string(),
+            output_contract: String::new(),
+        },
+    ];
+    // WF-1: schedule → set → executeWorkflow(workflowId = next sub-flow NAME placeholder)
+    ctx.built_workflows = vec![
+        serde_json::json!({
+            "name": "[TEST] test_pointe — WF-1 Entry",
+            "nodes": [
+                {"name": "Every day", "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.1, "parameters": {}, "credentials": {}},
+                {"name": "Make ping", "type": "n8n-nodes-base.set", "typeVersion": 3, "parameters": {}},
+                {"name": "Call WF-2", "type": "n8n-nodes-base.executeWorkflow", "typeVersion": 1,
+                 "parameters": {"workflowId": "[TEST] test_pointe — WF-2 Sink"}}
+            ],
+            "connections": {
+                "Every day": {"main": [[{"node": "Make ping", "type": "main", "index": 0}]]},
+                "Make ping": {"main": [[{"node": "Call WF-2", "type": "main", "index": 0}]]}
+            }
+        }),
+        serde_json::json!({
+            "name": "[TEST] test_pointe — WF-2 Sink",
+            "nodes": [
+                {"name": "When called", "type": "n8n-nodes-base.executeWorkflowTrigger", "typeVersion": 1, "parameters": {}},
+                {"name": "Store", "type": "n8n-nodes-base.set", "typeVersion": 3, "parameters": {}}
+            ],
+            "connections": {
+                "When called": {"main": [[{"node": "Store", "type": "main", "index": 0}]]}
+            }
+        }),
+    ];
+
+    println!("\n========== DOGFOOD: deploy live test_pointe → {} ==========",
+        std::env::var("N8N_URL").unwrap_or_default());
+
+    backend_lib::agents::run_deploy(&app, &mut ctx).await.expect("run_deploy");
+
+    println!("\nworkflow ids (entry first): {:?}", ctx.n8n_workflow_ids);
+    println!("entry id:  {:?}", ctx.n8n_workflow_id);
+    println!("entry url: {:?}", ctx.n8n_workflow_url);
+    assert_eq!(ctx.n8n_workflow_ids.len(), 2, "both sub-flows should be created");
+    println!("\n⚠️  ARCHIVE these workflows after inspection: {:?}", ctx.n8n_workflow_ids);
 }

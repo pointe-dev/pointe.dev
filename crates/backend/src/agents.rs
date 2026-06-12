@@ -1865,8 +1865,9 @@ fn prepare_workflow_body(
     if let Some(nodes) = obj.get_mut("nodes").and_then(|n| n.as_array_mut()) {
         for (i, node) in nodes.iter_mut().enumerate() {
             if let Some(obj) = node.as_object_mut() {
+                // n8n's REST API requires position as a [x, y] array, not an object.
                 obj.entry("position").or_insert_with(|| {
-                    serde_json::json!({ "x": 250, "y": i as i64 * 200 })
+                    serde_json::json!([250, i as i64 * 200])
                 });
             }
         }
@@ -2158,6 +2159,28 @@ mod tests {
         assert_eq!(n, 1);
         assert_eq!(wf["nodes"][0]["parameters"]["workflowId"]["value"], "xyz789");
         assert_eq!(wf["nodes"][0]["parameters"]["workflowId"]["mode"], "id");
+    }
+
+    #[test]
+    fn prepare_workflow_body_sets_position_as_array() {
+        // n8n's REST API rejects an object position ("must be array") — regression
+        // guard for the bug the live deploy test caught.
+        let wf = serde_json::json!({
+            "name": "x",
+            "nodes": [{"name": "t", "type": "n8n-nodes-base.scheduleTrigger", "parameters": {}}],
+            "connections": {}
+        });
+        let body = prepare_workflow_body(&wf, "fallback").unwrap();
+        assert!(body["nodes"][0]["position"].is_array(), "position must be a [x, y] array");
+        assert_eq!(body["nodes"][0]["position"][0], 250);
+    }
+
+    #[test]
+    fn prepare_workflow_body_uses_fallback_name_only_when_missing() {
+        let named = serde_json::json!({"name": "Real", "nodes": [], "connections": {}});
+        assert_eq!(prepare_workflow_body(&named, "fb").unwrap()["name"], "Real");
+        let unnamed = serde_json::json!({"nodes": [], "connections": {}});
+        assert_eq!(prepare_workflow_body(&unnamed, "fb").unwrap()["name"], "fb");
     }
 
     #[test]
