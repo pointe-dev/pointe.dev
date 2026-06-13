@@ -361,7 +361,7 @@ async fn dogfood_deploy_live() {
 /// Creates ONE real workflow. Archive it afterwards (id printed).
 ///
 /// Run:
-///   set -a; . <(grep -E '^(ANTHROPIC_API_KEY|CF_|N8N_URL|N8N_API_KEY|N8N_MCP_|N8N_TEST_FOLDER)=' .env.prod | sed 's/\r$//'); set +a
+///   set -a; . <(grep -E '^(ANTHROPIC_API_KEY|CF_|N8N_)' .env.prod | sed 's/\r$//'); set +a
 ///   cargo test -p backend --test dogfood -- --ignored --nocapture dogfood_code_pipeline_live
 #[tokio::test]
 #[ignore]
@@ -409,4 +409,89 @@ async fn dogfood_code_pipeline_live() {
     println!("workflow url: {:?}", ctx.n8n_workflow_url);
     assert!(ctx.n8n_workflow_id.is_some(), "deploy must return a workflow id");
     println!("\n⚠️  ARCHIVE this workflow after inspection: {:?}", ctx.n8n_workflow_id);
+}
+
+/// OPTION (a) end-to-end, LIVE, DECOMPOSED: the SDK code path on a brief big enough
+/// to trip the decomposition gate. Mirrors the state machine's per-sub-flow loop
+/// (`Decomposing → {Building → Validating}×n → Deploying`) on the code path:
+/// run_decomposer → for each sub-flow, run_builder (emits code) + run_critic
+/// (validate_workflow) until approved, stashing each into `built_workflow_codes` →
+/// run_deploy → deploy_from_code creates every sub-flow entry-LAST via
+/// create_workflow_from_code and substitutes each next sub-flow's NAME placeholder
+/// with its real id. This is the only boundary the JSON decomposed dogfood and the
+/// mono code dogfood don't jointly cover: chained SDK-code deploy with name→id wiring.
+///
+/// Creates SEVERAL real workflows (one per sub-flow). Archive them afterwards (ids printed).
+///
+/// Run:
+///   set -a; . <(grep -E '^(ANTHROPIC_API_KEY|CF_|N8N_)' .env.prod | sed 's/\r$//'); set +a
+///   cargo test -p backend --test dogfood -- --ignored --nocapture dogfood_decomposed_code_live
+#[tokio::test]
+#[ignore]
+async fn dogfood_decomposed_code_live() {
+    use backend_lib::agents::{needs_decomposition, run_builder, run_critic, run_decomposer};
+
+    let app = dogfood_state();
+    assert!(app.n8n_mcp.is_some(),
+        "set N8N_MCP_URL + N8N_MCP_TOKEN — option (a) requires the MCP code path");
+    println!("\n========== DOGFOOD: option (a) code path (DECOMPOSED, live) ==========");
+    println!("MCP: {}  folder: {:?}", app.n8n_mcp.is_some(), std::env::var("N8N_TEST_FOLDER").ok());
+
+    let store = PipelineStore::new();
+    let id = store.create("dogfood-decomp-code".to_string(), BRIEF.to_string(), None).await;
+    let mut ctx = store.get_ctx(id).await.expect("ctx");
+
+    backend_lib::agents::run_qualifier(&app, &mut ctx).await.expect("qualifier");
+    backend_lib::agents::run_research(&app, &mut ctx).await.expect("research");
+    ctx.design_attempts += 1;
+    backend_lib::agents::run_designer(&app, &mut ctx).await.expect("designer");
+    assert!(needs_decomposition(&ctx), "brief must trip the decomposition gate");
+    run_decomposer(&app, &mut ctx).await.expect("decomposer");
+    let n = ctx.sub_workflows.len();
+    assert!(n >= 2, "expected a decomposition into multiple sub-flows, got {n}");
+    println!("\n----- {n} sous-flux à construire -----");
+    for (i, sf) in ctx.sub_workflows.iter().enumerate() {
+        println!("  [{}] {}", i + 1, sf.name);
+    }
+
+    // Mirror the state machine: build + validate each sub-flow in order, stashing the
+    // approved SDK code into built_workflow_codes, resetting the attempt budget between
+    // sub-flows. Hard-fail if any sub-flow can't pass validate_workflow in budget — a
+    // live decomposed deploy needs every link valid.
+    for cursor in 0..n {
+        ctx.build_cursor = cursor;
+        ctx.build_attempts = 0;
+        ctx.critic_feedback.clear();
+        let mut approved = false;
+        for _ in 1..=MAX_BUILD_ATTEMPTS {
+            ctx.build_attempts += 1;
+            run_builder(&app, &mut ctx).await.expect("builder");
+            let code = ctx.workflow_code.clone()
+                .expect("builder must emit SDK code in MCP/own mode");
+            assert!(ctx.workflow_json.is_none(), "code mode must NOT also set workflow_json");
+            println!("\n----- sub-flow {}/{} '{}' SDK CODE (attempt {}) — {} chars -----\n{}",
+                cursor + 1, n, ctx.sub_workflows[cursor].name, ctx.build_attempts,
+                code.len(), code.chars().take(600).collect::<String>());
+
+            approved = run_critic(&app, &mut ctx).await.expect("critic");
+            println!("----- validate_workflow (attempt {}): valid={approved} -----", ctx.build_attempts);
+            if let Some(fb) = ctx.critic_feedback.last() { println!("errors: {fb}"); }
+            if approved { break; }
+        }
+        assert!(approved,
+            "sub-flow {}/{} '{}' never passed validate_workflow within the attempt budget",
+            cursor + 1, n, ctx.sub_workflows[cursor].name);
+        let code = ctx.workflow_code.take().expect("approved code");
+        ctx.built_workflow_codes.push(code);
+    }
+    assert_eq!(ctx.built_workflow_codes.len(), n, "every sub-flow must be built+validated");
+
+    backend_lib::agents::run_deploy(&app, &mut ctx).await.expect("run_deploy");
+    println!("\n----- DEPLOYED (create_from_code, chained) -----");
+    println!("workflow ids (entry first): {:?}", ctx.n8n_workflow_ids);
+    println!("entry id:  {:?}", ctx.n8n_workflow_id);
+    println!("entry url: {:?}", ctx.n8n_workflow_url);
+    assert_eq!(ctx.n8n_workflow_ids.len(), n, "every sub-flow should be created");
+    assert!(ctx.n8n_workflow_id.is_some(), "deploy must set the entry workflow id");
+    println!("\n⚠️  ARCHIVE these workflows after inspection: {:?}", ctx.n8n_workflow_ids);
 }

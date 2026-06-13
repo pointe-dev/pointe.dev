@@ -99,6 +99,12 @@ a COMPLETE path — chain its steps with .to() inside onTrue/onFalse.\n\
 - Multi-way: switchCase({...}).onCase(0, a).onCase(1, b). Loops: \
 splitInBatches({version:3, config:{parameters:{batchSize:10}}}).onEachBatch(\
 work.to(nextBatch(theSibNode))).onDone(after).\n\
+- Merge / combine several sources into one node: address the merge node's inputs with \
+.input(n) — 0-based, .input(0) is the first input — and start EACH incoming branch \
+from the trigger with its own .add(): const m = merge({version:3.2, config:{name:'…', \
+parameters:{mode:'combine', combineBy:'combineByPosition'}}}); then \
+`.add(trig).to(sourceA.to(m.input(0))).add(trig).to(sourceB.to(m.input(1))).add(m)\
+.to(after)`. There is NO .onInput() method — use .input(n).\n\
 \n\
 Worked example (shape and rigour):\n\
   import { workflow, node, trigger, expr, newCredential } from '@n8n/workflow-sdk';\n\
@@ -2096,9 +2102,12 @@ async fn deploy_from_code(
         let name = ctx.sub_workflows.get(i)
             .map(|sf| format!("pointe.dev — {}", sf.name))
             .unwrap_or_else(|| default_name.clone());
-        let description = ctx.sub_workflows.get(i)
+        // create_workflow_from_code rejects descriptions over 255 chars; sub-flow
+        // descriptions from the decomposer can run longer, so cap them (char-safe).
+        let description: String = ctx.sub_workflows.get(i)
             .map(|sf| sf.description.clone())
-            .unwrap_or_else(|| ctx.client_need.chars().take(200).collect());
+            .unwrap_or_else(|| ctx.client_need.clone())
+            .chars().take(250).collect();
 
         let id = mcp.create_from_code(&app.http, &code, &name, &description, project_id, folder_id)
             .await
