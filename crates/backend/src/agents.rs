@@ -1,3 +1,4 @@
+use crate::mcp::N8nMcpConfig;
 use crate::pipeline::PipelineContext;
 use crate::pitch::{PitchResult, PitchSlide};
 use crate::state::AppState;
@@ -10,6 +11,132 @@ const HAIKU:  &str = "claude-haiku-4-5-20251001";
 /// NOTE: prompt caching is GA on Claude 4.x, so the old `prompt-caching-2024-07-31`
 /// beta must NOT be sent — combining it here makes Anthropic ignore cache_control.
 const CACHE_BETA: &str = "extended-cache-ttl-2025-04-11";
+
+// n8n MCP read-only tool allowlists, per agent. These are the catalogue/grounding
+// tools — never the write/deploy tools (create_workflow_from_code, update_workflow…),
+// which stay out of reach. Exposed to the model as client-side tools and executed
+// by the backend against the n8n MCP server (the hosted connector can't reach it).
+const BUILDER_GROUNDING_TOOLS:  &[&str] = &["get_suggested_nodes", "search_nodes", "get_node_types"];
+const CRITIC_GROUNDING_TOOLS:   &[&str] = &["search_nodes", "get_node_types"];
+const DESIGNER_GROUNDING_TOOLS: &[&str] = &["get_suggested_nodes", "search_nodes"];
+// Code-mode builder also needs the SDK reference (exact DSL syntax) on top of the
+// node catalogue — it emits n8n Workflow SDK *code*, not raw JSON.
+const BUILDER_CODE_GROUNDING_TOOLS: &[&str] =
+    &["get_sdk_reference", "get_suggested_nodes", "search_nodes", "get_node_types"];
+
+const BUILDER_MCP_ADDENDUM: &str = "\
+You have LIVE access to the real n8n node catalogue through tools: get_suggested_nodes \
+(workflow technique → recommended nodes), search_nodes (find a node by service or \
+function), get_node_types (exact type id, typeVersion, and parameter names). GROUND \
+every node you emit: before using a node, confirm its real type string and typeVersion \
+via the catalogue, use the exact parameter names it returns, and prefer a real \
+dedicated node over httpRequest when one exists. Never invent a type string. When the \
+workflow is complete and every node is verified, call build_workflow with the final JSON.";
+
+const CRITIC_MCP_ADDENDUM: &str = "\
+You have LIVE access to the real n8n node catalogue through tools: search_nodes (find a \
+node by service or function) and get_node_types (exact type id, typeVersion, and \
+parameter names). Use them to VERIFY, not guess: check that each node 'type' in the \
+workflow is a real n8n node and that its parameters exist. A type the catalogue does \
+not have is grounds to reject (it fails to import). When done verifying, call \
+submit_review with your verdict.";
+
+// Appended to the builder system prompt when building ONE sub-flow of a decomposed
+// tunnel. Explains the chaining convention so each sub-flow triggers the next and
+// the data crosses the execution-context boundary explicitly (deploy substitutes the
+// next sub-flow's NAME placeholder with its real n8n id).
+const SUBFLOW_BUILD_ADDENDUM: &str = "\
+You are building ONE sub-flow of a larger automation that was split into chained n8n \
+workflows. Build ONLY this sub-flow's logic — not the whole tunnel — staying ≤8 nodes \
+INCLUDING its trigger and any hand-off node.\n\
+- If this is NOT the first sub-flow, its trigger MUST be \
+'n8n-nodes-base.executeWorkflowTrigger' (it is invoked by the previous sub-flow and \
+receives the input fields below). Do NOT add a schedule/webhook/app trigger.\n\
+- If this is NOT the last sub-flow, it MUST end by invoking the next one: add an \
+'n8n-nodes-base.executeWorkflow' node whose workflowId parameter is the EXACT string \
+of the next sub-flow's name given below — a placeholder replaced with the real id at \
+deploy — and pass the output fields below to it.\n\
+- Honour the input/output contracts exactly: the fields crossing between sub-flows \
+must match by name, because the n8n execution context does NOT carry across the hop \
+($('EarlierNode') from another sub-flow is unreachable).";
+
+// System prompt for the CODE-mode builder (MCP present, deploy to our own instance).
+// It produces n8n Workflow SDK code instead of raw JSON: validate_workflow then gates
+// it (structural correctness by construction) and create_workflow_from_code deploys it
+// into a folder — the JSON/REST path cannot do either.
+const BUILDER_CODE_SYSTEM: &str = "\
+You are the workflow engineer at pointe.dev. You produce a production-grade n8n \
+workflow using the n8n Workflow SDK (the exact API below) that solves the client's \
+need end-to-end. Reference templates may be provided — adapt their proven structure.\n\
+\n\
+GROUND every node before emitting: call get_suggested_nodes / search_nodes / \
+get_node_types to confirm each node's real type id, its typeVersion, and the exact \
+parameter names it accepts. Never invent a type or a parameter. (get_sdk_reference is \
+available for deeper SDK lookups, but the API you need is specified right here.)\n\
+\n\
+=== n8n Workflow SDK — use EXACTLY this API (no other functions exist) ===\n\
+Import everything you use from '@n8n/workflow-sdk':\n\
+  import { workflow, node, trigger, expr, newCredential, placeholder, ifElse, \
+switchCase, merge, splitInBatches, nextBatch } from '@n8n/workflow-sdk';\n\
+\n\
+Define each node/trigger first, then compose the graph:\n\
+- trigger({ type, version, config: { name, parameters } })  // the entry node\n\
+- node({ type, version, config: { name, parameters, credentials } })  // every other node\n\
+- Compose with the fluent builder, exporting it as default:\n\
+    export default workflow('wf-id', 'Workflow Name')\n\
+      .add(theTrigger)\n\
+      .to(firstNode)\n\
+      .to(secondNode);\n\
+  `.add(x)` starts a chain at x; `.to(y)` connects the previous node to y.\n\
+- Expressions: wrap n8n expressions in expr('{{ $json.field }}'). Plain values stay raw.\n\
+- Credentials: credentials: { someApi: newCredential('Human Label') } — NEVER embed \
+secrets or 'YOUR_API_KEY'. Use placeholder('hint') for a value the client must fill in.\n\
+- Branching: const gate = ifElse({ version: 2.2, config: { name, parameters: { \
+conditions: { options:{caseSensitive:true,typeValidation:'loose'}, conditions:[{ \
+leftValue: expr('{{ $json.x }}'), operator:{type:'string',operation:'exists'} }], \
+combinator:'and' } } } }); then `.to(gate.onTrue(a.to(b)).onFalse(c))`. Each branch is \
+a COMPLETE path — chain its steps with .to() inside onTrue/onFalse.\n\
+- Multi-way: switchCase({...}).onCase(0, a).onCase(1, b). Loops: \
+splitInBatches({version:3, config:{parameters:{batchSize:10}}}).onEachBatch(\
+work.to(nextBatch(theSibNode))).onDone(after).\n\
+- Merge / combine several sources into one node: address the merge node's inputs with \
+.input(n) — 0-based, .input(0) is the first input — and start EACH incoming branch \
+from the trigger with its own .add(): const m = merge({version:3.2, config:{name:'…', \
+parameters:{mode:'combine', combineBy:'combineByPosition'}}}); then \
+`.add(trig).to(sourceA.to(m.input(0))).add(trig).to(sourceB.to(m.input(1))).add(m)\
+.to(after)`. There is NO .onInput() method — use .input(n).\n\
+\n\
+Worked example (shape and rigour):\n\
+  import { workflow, node, trigger, expr, newCredential } from '@n8n/workflow-sdk';\n\
+  const onOrder = trigger({ type: 'n8n-nodes-base.shopifyTrigger', version: 1, \
+config: { name: 'On New Order', parameters: { topic: 'orders/create' }, credentials: { \
+shopifyApi: newCredential('Shopify') } } });\n\
+  const createInvoice = node({ type: 'n8n-nodes-base.httpRequest', version: 4.2, \
+config: { name: 'Create Invoice', parameters: { method: 'POST', url: \
+'https://api.accounting.example/v1/invoices' }, credentials: {} } });\n\
+  export default workflow('shopify-invoice', 'Shopify → Accounting Invoice')\n\
+    .add(onOrder)\n\
+    .to(createInvoice);\n\
+=== end SDK ===\n\
+\n\
+Rules:\n\
+- Max 8 nodes; prefer the simplest graph that fully solves the need.\n\
+- Exactly one entry trigger; no orphan nodes; node names unique and human-readable.\n\
+- Include basic resilience (an ifElse guard for an empty/error case) where the need \
+implies reliability.\n\
+- Trace the graph mentally from trigger to final action before emitting. Do NOT set \
+node positions — the SDK lays them out.\n\
+\n\
+When the code is complete and every node is grounded, call build_workflow_code with \
+the final code string (a single self-contained module) and nothing else.";
+
+const DESIGNER_MCP_ADDENDUM: &str = "\
+You may consult the LIVE n8n node catalogue through tools: get_suggested_nodes \
+(technique → recommended nodes) and search_nodes (find a node by service or function). \
+Use them to ground the blueprint in integrations/nodes that actually exist, and to \
+flag honestly when a needed service has no dedicated node (note it as 'via HTTP API'). \
+Still output ONLY the blueprint outline exactly as specified — no JSON, no tool \
+commentary in your final answer.";
 
 /// cache_control marker for a 1-hour ephemeral cache breakpoint.
 fn cache_1h() -> serde_json::Value {
@@ -190,6 +317,144 @@ async fn anthropic_raw(
 ) -> Result<String, AgentError> {
     let v = anthropic_send(http, key, body).await?;
     Ok(text_block(&v))
+}
+
+// ── MCP-grounded calls ────────────────────────────────────────────────────────
+
+/// Hard ceiling on tool-loop iterations for a grounded call. Each round-trip
+/// where the model calls catalogue tools costs one; a well-behaved grounding
+/// session needs 1–3. The cap stops a runaway loop.
+const GROUNDING_MAX_TURNS: u32 = 6;
+
+/// Drives a client-side tool loop: the model is given the n8n catalogue tools
+/// (`tools`, allowlisted), and whenever it calls one of `grounding_names` we
+/// execute it against the n8n MCP server and feed the result back, until the
+/// model produces a terminal message (calls `finish_tool`, or — when that is
+/// None — answers with text). Returns the final response body for the caller to
+/// extract from. `tool_choice` is implicit (`auto`).
+async fn anthropic_grounded_loop(
+    http: &reqwest::Client,
+    key: &str,
+    mcp: &N8nMcpConfig,
+    model: &'static str,
+    max_tokens: u32,
+    system: &str,
+    user_content: serde_json::Value,
+    tools: Vec<serde_json::Value>,
+    finish_tool: Option<&str>,
+    grounding_names: &[&str],
+) -> Result<serde_json::Value, AgentError> {
+    let mut messages = vec![serde_json::json!({ "role": "user", "content": user_content })];
+    for _ in 0..GROUNDING_MAX_TURNS {
+        let body = serde_json::json!({
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": [{"type": "text", "text": system, "cache_control": cache_1h()}],
+            "messages": messages,
+            "tools": tools,
+        });
+        let resp = anthropic_send(http, key, body).await?;
+        let content = resp["content"].as_array().cloned().unwrap_or_default();
+
+        // Terminal: the model called the structured finish tool — hand it back.
+        if let Some(ft) = finish_tool {
+            if content.iter().any(|b| b["type"] == "tool_use" && b["name"] == ft) {
+                return Ok(resp);
+            }
+        }
+
+        // Collect the catalogue tool calls this turn (skip the finish tool).
+        let calls: Vec<&serde_json::Value> = content.iter()
+            .filter(|b| b["type"] == "tool_use"
+                && grounding_names.contains(&b["name"].as_str().unwrap_or("")))
+            .collect();
+
+        // No catalogue call and finish not matched → terminal (text answer, or
+        // the model stopped). Hand the body back; the caller decides if it's usable.
+        if calls.is_empty() {
+            return Ok(resp);
+        }
+
+        // Execute each catalogue call and feed the results back as tool_results.
+        // A tool failure becomes an `is_error` result, not a pipeline abort, so
+        // the model can recover (retry a different query) rather than dying.
+        let mut tool_results = Vec::with_capacity(calls.len());
+        for c in &calls {
+            let name = c["name"].as_str().unwrap_or_default();
+            let (text, is_error) = match mcp.call_tool(http, name, c["input"].clone()).await {
+                Ok(t) => {
+                    tracing::info!("[grounding] {name}({}) → {} chars", c["input"], t.len());
+                    (t, false)
+                }
+                Err(e) => {
+                    tracing::warn!("[grounding] {name} failed: {e}");
+                    (format!("Tool error: {e}"), true)
+                }
+            };
+            tool_results.push(serde_json::json!({
+                "type": "tool_result",
+                "tool_use_id": c["id"].clone(),
+                "content": text,
+                "is_error": is_error,
+            }));
+        }
+        messages.push(serde_json::json!({ "role": "assistant", "content": content }));
+        messages.push(serde_json::json!({ "role": "user", "content": tool_results }));
+    }
+    Err(AgentError(format!("grounding loop exceeded {GROUNDING_MAX_TURNS} turns without a terminal response")))
+}
+
+/// Grounded counterpart of `anthropic_tool_call`: the model grounds itself on the
+/// n8n catalogue (via client-side tools we proxy), then returns structured output
+/// by calling `tool_name`. Returns that tool's `input`.
+async fn anthropic_grounded_tool_call(
+    http: &reqwest::Client,
+    key: &str,
+    mcp: &N8nMcpConfig,
+    model: &'static str,
+    max_tokens: u32,
+    system: &str,
+    user_content: serde_json::Value,
+    tool_name: &str,
+    tool_description: &str,
+    input_schema: serde_json::Value,
+    allowed: &[&str],
+) -> Result<serde_json::Value, AgentError> {
+    let mut tools = mcp.grounding_tools(allowed);
+    tools.push(serde_json::json!({
+        "name": tool_name,
+        "description": tool_description,
+        "input_schema": input_schema,
+    }));
+    let resp = anthropic_grounded_loop(
+        http, key, mcp, model, max_tokens, system, user_content, tools, Some(tool_name), allowed,
+    ).await?;
+    resp["content"].as_array()
+        .and_then(|blocks| blocks.iter().find(|b| b["type"] == "tool_use" && b["name"] == tool_name))
+        .map(|b| b["input"].clone())
+        .ok_or_else(|| AgentError(format!(
+            "grounded: model did not call {tool_name} (stop_reason={})", resp["stop_reason"]
+        )))
+}
+
+/// Grounded counterpart of `anthropic_call`: the model grounds itself on the n8n
+/// catalogue, then returns its answer as text (used by the prose designer).
+async fn anthropic_grounded_call(
+    http: &reqwest::Client,
+    key: &str,
+    mcp: &N8nMcpConfig,
+    model: &'static str,
+    max_tokens: u32,
+    system: &str,
+    user: &str,
+    allowed: &[&str],
+) -> Result<String, AgentError> {
+    let tools = mcp.grounding_tools(allowed);
+    let resp = anthropic_grounded_loop(
+        http, key, mcp, model, max_tokens, system,
+        serde_json::Value::String(user.to_string()), tools, None, allowed,
+    ).await?;
+    Ok(text_block(&resp))
 }
 
 // ── Agents ────────────────────────────────────────────────────────────────────
@@ -410,6 +675,289 @@ Risks: {risks}",
     Ok(())
 }
 
+/// Drafts the high-level solution outline — an ordered list of blocks that solves
+/// the need, each naming the action and the integration from research. NO JSON:
+/// this blueprint is what the design critic reviews, pricing quotes, and the client
+/// reads. The real workflow JSON is built later (post-payment) from this outline.
+pub async fn run_designer(app: &AppState, ctx: &mut PipelineContext) -> Result<(), AgentError> {
+    tracing::info!("[designer] session={} attempt={}", ctx.session_id, ctx.design_attempts);
+
+    const SYSTEM: &str = "\
+You are the solution designer at pointe.dev. Given a prospect's need and the \
+technical research, you produce the HIGH-LEVEL design of the automation as an \
+ordered outline of blocks — NOT JSON. This outline is reviewed, priced, and shown \
+to the client; the real n8n workflow is built later, only AFTER the client pays, \
+from THIS blueprint. So it must be complete and honest.\n\
+\n\
+Output a numbered list of steps. For EACH step, one line:\n\
+  <n>. <what happens> — <integration / n8n node> — <why it matters>\n\
+Start with the trigger, end with the final client-visible outcome. Cover the WHOLE \
+need end-to-end: if the need implies several outputs (e.g. publish to two \
+platforms), each gets its own step. Use the integrations named in the research; if \
+a step needs an external service with no dedicated node, say 'via HTTP API'. After \
+the steps, add two short lines:\n\
+  Blocs clés: <distinct integrations/services involved, comma-separated>\n\
+  Points de vigilance: <max 2 real risks or client-provided prerequisites (API \
+approval, credentials, paid account), or 'aucun'>\n\
+\n\
+Rules:\n\
+- Same language as the client's need (FR/EN/DE).\n\
+- Concrete and tied to THIS need — no generic boilerplate.\n\
+- Do NOT emit JSON, node parameters, or code. This is a blueprint, not an \
+implementation.\n\
+- Do NOT pad: every block must be justified by the need — honesty drives a correct \
+quote. Keep it tight: readable in 30 seconds.";
+
+    let feedback = ctx.design_critic_feedback.last()
+        .map(|fb| format!("\n\nThe previous design was rejected. Address this feedback:\n{fb}"))
+        .unwrap_or_default();
+
+    let user = format!(
+        "Client need: {}\nQualification: {}\nTechnical research: {}{}",
+        ctx.client_need,
+        ctx.qualification_summary.as_deref().unwrap_or(""),
+        ctx.research_output.as_deref().unwrap_or(""),
+        feedback,
+    );
+
+    // Grounded path: the blueprint is anchored in nodes that actually exist (and
+    // honestly flags services with no dedicated node) so the post-payment build
+    // matches the quote. NOTE: the designer is PRE-payment, so MCP calls add
+    // latency on unpaid leads — gated on env so it can be split off if conversion
+    // latency matters. Higher token cap leaves room for the catalogue tool blocks.
+    let outline = match &app.n8n_mcp {
+        Some(mcp) => {
+            let system = format!("{SYSTEM}\n\n{DESIGNER_MCP_ADDENDUM}");
+            anthropic_grounded_call(
+                &app.http, &app.anthropic_key, mcp, SONNET, 2500,
+                &system, &user, DESIGNER_GROUNDING_TOOLS,
+            ).await
+        }
+        None => anthropic_call(
+            &app.http, &app.anthropic_key, SONNET, 1200,
+            SYSTEM, &user,
+        ).await,
+    }.map_err(|e| AgentError(format!("designer: {e}")))?;
+
+    if outline.trim().is_empty() {
+        return Err(AgentError("designer returned an empty outline".into()));
+    }
+    ctx.design_summary = Some(outline);
+    Ok(())
+}
+
+/// Gates the SOLUTION DESIGN before it is priced and quoted. Because the real
+/// workflow is built only after payment, a gap here means we quote for the wrong
+/// thing — so this critic checks completeness/viability of the blueprint, not JSON.
+/// Returns true if approved; rejection feedback is appended to ctx.design_critic_feedback.
+pub async fn run_design_critic(app: &AppState, ctx: &mut PipelineContext) -> Result<bool, AgentError> {
+    tracing::info!("[design_critic] session={} attempt={}", ctx.session_id, ctx.design_attempts);
+
+    let design = ctx.design_summary.as_deref()
+        .ok_or_else(|| AgentError("design critic called with no design_summary".to_string()))?;
+
+    const SYSTEM: &str = "\
+You are the design reviewer at pointe.dev. You gate the SOLUTION DESIGN before it is \
+priced and quoted to the client. Critically: the real workflow is built only AFTER \
+the client pays, from this design — so a gap here means we quote for the wrong thing \
+and then fail post-payment. Be demanding on substance, not style.\n\
+\n\
+Submit your verdict via submit_review: approved=true if the design is viable and \
+complete, or approved=false with feedback (max 3 concrete, actionable points).\n\
+\n\
+Reject (approved:false) if ANY fail:\n\
+1. Completeness — the design does NOT solve the stated need end-to-end. Every \
+outcome the client asked for must have a step (e.g. publish to YouTube AND \
+Instagram → both must appear). Missing output, missing trigger, or a gap in the \
+chain → reject.\n\
+2. Viability — a named integration is wrong for its job, or a step depends on \
+something infeasible/unavailable without that being flagged as a risk (e.g. an API \
+that requires approval).\n\
+3. Scope sanity — drastically over- or under-engineered for the need.\n\
+4. Honesty — a real prerequisite the client must provide (credentials, paid \
+account, API approval) is silently assumed instead of flagged.\n\
+\n\
+Do NOT review JSON, exact node-type strings, or parameters — there is NO workflow \
+yet; that is the builder's job post-payment. Judge the BLUEPRINT: does it fully and \
+feasibly solve the need, and is it the right size to price fairly? When the design \
+is sound and complete, approve it without inventing objections. Feedback must be \
+specific enough for the designer to fix in one pass. Output only the verdict.";
+
+    let user = format!(
+        "Client need: {}\nResearch: {}\nProposed design:\n{}",
+        ctx.client_need,
+        ctx.research_output.as_deref().unwrap_or(""),
+        design,
+    );
+
+    #[derive(serde::Deserialize)]
+    struct Verdict { approved: bool, feedback: Option<String> }
+
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "approved": {
+                "type": "boolean",
+                "description": "true if the design solves the need end-to-end, is viable, honest about prerequisites, and appropriately scoped"
+            },
+            "feedback": {
+                "type": "string",
+                "description": "Required when approved is false: max 3 concrete, actionable issues. Omit when approved is true."
+            }
+        },
+        "required": ["approved"]
+    });
+
+    // A transport error shouldn't kill the pipeline — soft-reject so the designer
+    // retries; after MAX_DESIGN_ATTEMPTS the human takes over the proposal.
+    let input = match anthropic_tool_call(
+        &app.http, &app.anthropic_key, SONNET, 1024,
+        SYSTEM, serde_json::Value::String(user),
+        "submit_review", "Submit your review verdict for the solution design.",
+        schema,
+    ).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("[design_critic] tool call failed: {e} — treating as rejection");
+            ctx.design_critic_feedback.push("Le critique de design n'a pas pu rendre de verdict; nouvelle tentative.".to_string());
+            return Ok(false);
+        }
+    };
+
+    let verdict: Verdict = match serde_json::from_value(input.clone()) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("[design_critic] unexpected verdict shape: {e} (input={input}) — treating as rejection");
+            ctx.design_critic_feedback.push("Verdict mal formé; nouvelle tentative.".to_string());
+            return Ok(false);
+        }
+    };
+
+    if verdict.approved {
+        tracing::info!("[design_critic] approved on attempt {}", ctx.design_attempts);
+        Ok(true)
+    } else {
+        let fb = verdict.feedback.unwrap_or_else(|| "unspecified issues".to_string());
+        tracing::warn!("[design_critic] rejected attempt {}: {fb}", ctx.design_attempts);
+        ctx.design_critic_feedback.push(fb);
+        Ok(false)
+    }
+}
+
+/// Cheap pre-check: is this automation large enough to warrant splitting into
+/// sub-workflows? A tunnel with many integrations or a long blueprint will not fit
+/// one ≤8-node workflow reliably (the builder tops out around there). Mirrors the
+/// research complexity buckets (5+ integrations = complex) and keeps the decomposer
+/// LLM call off the simple majority of leads.
+pub fn needs_decomposition(ctx: &PipelineContext) -> bool {
+    let integrations = ctx.research_json.as_ref()
+        .and_then(|j| j["integrations_required"].as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+
+    let design_steps = ctx.design_summary.as_deref()
+        .map(count_design_steps)
+        .unwrap_or(0);
+
+    integrations >= 5 || design_steps > 8
+}
+
+/// Counts the numbered steps ("1. …", "2) …") in a designer blueprint.
+fn count_design_steps(design: &str) -> usize {
+    design.lines().filter(|l| is_numbered_step(l)).count()
+}
+
+/// True if a line begins (after indentation) with a number followed by '.' or ')'.
+fn is_numbered_step(line: &str) -> bool {
+    let t = line.trim_start();
+    let digits = t.chars().take_while(|c| c.is_ascii_digit()).count();
+    digits > 0 && matches!(t[digits..].chars().next(), Some('.') | Some(')'))
+}
+
+/// Splits a large approved design into an ordered list of self-contained sub-flows
+/// (each ≤8 nodes), so the post-payment builder constructs simple workflows that
+/// stay under the node budget where it succeeds. Chains them through explicit
+/// input/output contracts (executeWorkflow / webhook) so the n8n execution context
+/// — which breaks after a trigger node — survives the hop between sub-flows.
+/// Only worth calling when `needs_decomposition` trips; populates ctx.sub_workflows.
+/// May legitimately return a single entry if the design fits one workflow (N=1).
+pub async fn run_decomposer(app: &AppState, ctx: &mut PipelineContext) -> Result<(), AgentError> {
+    tracing::info!("[decomposer] session={}", ctx.session_id);
+
+    const SYSTEM: &str = "\
+You are the workflow architect at pointe.dev. You are given an APPROVED automation \
+design (an ordered blueprint) that is too large to build as one n8n workflow. Split \
+it into an ORDERED list of self-contained sub-flows, each a separate n8n workflow.\n\
+\n\
+Hard rules:\n\
+- Each sub-flow is ≤8 nodes. If a stage needs more, split it further.\n\
+- Cut along natural boundaries of the blueprint (e.g. Ingest → Produce → Publish → \
+Analytics), never mid-action. Every block of the design must land in exactly one \
+sub-flow; together they must cover the WHOLE design end-to-end, in order.\n\
+- The FIRST sub-flow owns the real trigger (schedule/webhook/app trigger). Each \
+later sub-flow is started by the previous one — via an n8n 'Execute Workflow' call \
+or an inbound webhook.\n\
+- CRITICAL: the n8n execution context does NOT cross a trigger boundary \
+($('Node').item.json from an earlier sub-flow is unreachable downstream). So each \
+hop must pass its data EXPLICITLY. State, per sub-flow, the input_contract (the \
+exact fields it receives from the previous sub-flow, empty for the first) and the \
+output_contract (the exact fields it hands to the next, empty for the last). Make the \
+contracts concrete field lists, not vague prose.\n\
+\n\
+Submit the plan via submit_decomposition. Prefer the FEWEST sub-flows that respect \
+the ≤8-node rule — do not over-split. If the whole design genuinely fits one ≤8-node \
+workflow, return a single sub-flow. Same language as the design (FR/EN/DE) for names \
+and descriptions.";
+
+    let user = format!(
+        "Client need: {}\nResearch: {}\nApproved design (split THIS, end-to-end):\n{}",
+        ctx.client_need,
+        ctx.research_output.as_deref().unwrap_or(""),
+        ctx.design_summary.as_deref().unwrap_or(""),
+    );
+
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "sub_workflows": {
+                "type": "array",
+                "description": "Ordered sub-flows, each ≤8 nodes, together covering the whole design.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Short ordered name, e.g. 'WF-A — Ingest & Select'"},
+                        "description": {"type": "string", "description": "The subset of the design this sub-flow implements"},
+                        "trigger": {"type": "string", "description": "Real trigger for the first sub-flow; how the previous one hands off (Execute Workflow / webhook) for the rest"},
+                        "input_contract": {"type": "string", "description": "Exact fields received from the previous sub-flow; empty for the first"},
+                        "output_contract": {"type": "string", "description": "Exact fields handed to the next sub-flow; empty for the last"}
+                    },
+                    "required": ["name", "description", "trigger", "input_contract", "output_contract"]
+                }
+            }
+        },
+        "required": ["sub_workflows"]
+    });
+
+    let input = anthropic_tool_call(
+        &app.http, &app.anthropic_key, SONNET, 2048,
+        SYSTEM, serde_json::Value::String(user),
+        "submit_decomposition", "Submit the ordered list of sub-workflows.",
+        schema,
+    ).await.map_err(|e| AgentError(format!("decomposer: {e}")))?;
+
+    let plan: Vec<crate::pipeline::SubWorkflowPlan> =
+        serde_json::from_value(input["sub_workflows"].clone())
+            .map_err(|e| AgentError(format!("decomposer: malformed plan: {e}")))?;
+
+    if plan.is_empty() {
+        return Err(AgentError("decomposer returned an empty plan".into()));
+    }
+
+    tracing::info!("[decomposer] session={} split into {} sub-flows", ctx.session_id, plan.len());
+    ctx.sub_workflows = plan;
+    Ok(())
+}
+
 /// Builds an n8n workflow JSON using Qdrant RAG over n8n templates.
 /// Runs up to MAX_BUILD_ATTEMPTS times; the large context is cached between retries.
 pub async fn run_builder(app: &AppState, ctx: &mut PipelineContext) -> Result<(), AgentError> {
@@ -541,13 +1089,46 @@ in the node name. When in doubt about a type, prefer httpRequest over guessing �
 real httpRequest call always beats an invented node that n8n cannot load, because an \
 unknown node type makes the entire workflow fail to import and blocks deployment.";
 
+    // Decomposed build? Build only the sub-flow at the cursor; otherwise the whole
+    // approved design as one workflow (mono, unchanged).
+    let subflow = ctx.sub_workflows.get(ctx.build_cursor).cloned();
+
     // Stable across retries → cached after the first attempt
-    let context = format!(
-        "Client: {}\nResearch: {}{}",
-        ctx.client_need,
-        ctx.research_output.as_deref().unwrap_or(""),
-        rag_block,
-    );
+    let context = match &subflow {
+        Some(sf) => {
+            let total = ctx.sub_workflows.len();
+            let pos = ctx.build_cursor + 1;
+            let handoff = match ctx.sub_workflows.get(ctx.build_cursor + 1) {
+                Some(next) => format!(
+                    "Next sub-flow to invoke (use its name verbatim as the executeWorkflow workflowId placeholder): {}",
+                    next.name,
+                ),
+                None => "This is the LAST sub-flow — it produces the final client-visible outcome, no hand-off.".to_string(),
+            };
+            format!(
+                "Client need (overall tunnel): {}\n\
+                 You are building sub-flow {pos} of {total}: {}\n\
+                 What this sub-flow must do: {}\n\
+                 Trigger: {}\n\
+                 Input it receives from the previous sub-flow: {}\n\
+                 Output it must hand to the next sub-flow: {}\n\
+                 {handoff}\n\
+                 Research context: {}{}",
+                ctx.client_need, sf.name, sf.description, sf.trigger,
+                if sf.input_contract.is_empty() { "(none — this is the entry sub-flow)" } else { &sf.input_contract },
+                if sf.output_contract.is_empty() { "(none — this is the final sub-flow)" } else { &sf.output_contract },
+                ctx.research_output.as_deref().unwrap_or(""),
+                rag_block,
+            )
+        }
+        None => format!(
+            "Client: {}\nResearch: {}\nApproved design (build exactly this blueprint, end-to-end):\n{}{}",
+            ctx.client_need,
+            ctx.research_output.as_deref().unwrap_or(""),
+            ctx.design_summary.as_deref().unwrap_or(""),
+            rag_block,
+        ),
+    };
 
     // Changes each retry → never cached
     let suffix = if ctx.critic_feedback.is_empty() {
@@ -591,12 +1172,72 @@ unknown node type makes the entire workflow fail to import and blocks deployment
         "required": ["name", "nodes", "connections"]
     });
 
-    let workflow = anthropic_tool_call(
-        &app.http, &app.anthropic_key, SONNET, 8192,
-        SYSTEM, user_content,
-        "build_workflow", "Submit the complete n8n workflow JSON.",
-        schema,
-    ).await.map_err(|e| AgentError(format!("builder: {e}")))?;
+    // In a decomposed build, the system prompt also carries the sub-flow chaining
+    // convention (executeWorkflowTrigger / executeWorkflow-by-name).
+    let base_system = if subflow.is_some() {
+        format!("{SYSTEM}\n\n{SUBFLOW_BUILD_ADDENDUM}")
+    } else {
+        SYSTEM.to_string()
+    };
+
+    // Code mode (option a): MCP present AND deploying to our own instance — the
+    // builder emits n8n Workflow SDK *code* (grounded on the SDK reference + the live
+    // node catalogue) instead of raw JSON. validate_workflow then gates it structurally
+    // by construction and create_workflow_from_code deploys it into a folder — neither
+    // of which the JSON/REST path can do. Client deploys target a different n8n instance
+    // the MCP cannot reach, so they stay on the JSON path below.
+    let deploy_own = ctx.deploy_target.as_deref().unwrap_or("own") == "own";
+    if let (Some(mcp), true) = (&app.n8n_mcp, deploy_own) {
+        let system = if subflow.is_some() {
+            format!("{BUILDER_CODE_SYSTEM}\n\n{SUBFLOW_BUILD_ADDENDUM}")
+        } else {
+            BUILDER_CODE_SYSTEM.to_string()
+        };
+        let code_schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "Complete n8n Workflow SDK code (TypeScript), importing from '@n8n/workflow-sdk'."
+                }
+            },
+            "required": ["code"]
+        });
+        let out = anthropic_grounded_tool_call(
+            &app.http, &app.anthropic_key, mcp, SONNET, 8192,
+            &system, user_content,
+            "build_workflow_code", "Submit the complete, grounded n8n Workflow SDK code.",
+            code_schema, BUILDER_CODE_GROUNDING_TOOLS,
+        ).await.map_err(|e| AgentError(format!("builder(code): {e}")))?;
+        let code = out["code"].as_str()
+            .ok_or_else(|| AgentError(format!("builder(code): no code field in {out}")))?
+            .to_string();
+        ctx.workflow_code = Some(code);
+        return Ok(());
+    }
+
+    // When the n8n MCP connector is configured, the builder grounds itself on the
+    // real node catalogue (verifies type ids/versions/params) before emitting —
+    // killing the invented-node-type failure class. Otherwise it falls back to the
+    // hardcoded-node-list prompt above. Post-payment, so the extra loop latency is
+    // acceptable; gated on env so it can be toggled and measured.
+    let workflow = match &app.n8n_mcp {
+        Some(mcp) => {
+            let system = format!("{base_system}\n\n{BUILDER_MCP_ADDENDUM}");
+            anthropic_grounded_tool_call(
+                &app.http, &app.anthropic_key, mcp, SONNET, 8192,
+                &system, user_content,
+                "build_workflow", "Submit the complete n8n workflow JSON.",
+                schema, BUILDER_GROUNDING_TOOLS,
+            ).await
+        }
+        None => anthropic_tool_call(
+            &app.http, &app.anthropic_key, SONNET, 8192,
+            &base_system, user_content,
+            "build_workflow", "Submit the complete n8n workflow JSON.",
+            schema,
+        ).await,
+    }.map_err(|e| AgentError(format!("builder: {e}")))?;
 
     ctx.workflow_json = Some(workflow);
     Ok(())
@@ -606,6 +1247,27 @@ unknown node type makes the entire workflow fail to import and blocks deployment
 /// Returns true if approved, false if revisions needed (feedback appended to ctx).
 pub async fn run_critic(app: &AppState, ctx: &mut PipelineContext) -> Result<bool, AgentError> {
     tracing::info!("[critic] session={} attempt={}", ctx.session_id, ctx.build_attempts);
+
+    // Code mode (option a): the builder emitted SDK code. The gate here is the n8n
+    // validator — structural validity by construction, deterministic, no LLM judgement.
+    // Errors feed back as critic_feedback so the builder fixes them on the next attempt
+    // (same attempt budget as the JSON critic). Semantic fitness is already gated at
+    // design time (run_design_critic), so this build-time gate is purely correctness.
+    if let Some(code) = ctx.workflow_code.clone() {
+        let mcp = app.n8n_mcp.as_ref()
+            .ok_or_else(|| AgentError("code-mode critic but n8n_mcp is unset".to_string()))?;
+        return match mcp.validate_code(&app.http, &code).await {
+            Ok(()) => {
+                tracing::info!("[critic] validate_workflow passed attempt {}", ctx.build_attempts);
+                Ok(true)
+            }
+            Err(errs) => {
+                tracing::warn!("[critic] validate_workflow rejected attempt {}: {errs}", ctx.build_attempts);
+                ctx.critic_feedback.push(format!("validate_workflow reported errors: {errs}"));
+                Ok(false)
+            }
+        };
+    }
 
     let workflow = ctx.workflow_json.as_ref()
         .ok_or_else(|| AgentError("critic called with no workflow_json".to_string()))?;
@@ -683,8 +1345,31 @@ the client's proposal — so reject only when a real defect would otherwise reac
 production, and make feedback precise enough to fix in one pass. Output only the JSON \
 verdict.";
 
+    // In a decomposed build, the workflow under review is ONE sub-flow, not the
+    // whole tunnel — so an Execute Workflow Trigger is a valid entry point and an
+    // Execute Workflow node may reference the next sub-flow by NAME (a deploy-time
+    // placeholder). Tell the critic, so it judges the sub-flow on its own merits.
+    let subflow_note = match ctx.sub_workflows.get(ctx.build_cursor) {
+        Some(sf) => format!(
+            "\n\nNote: this is sub-flow {}/{} ('{}') of a decomposed automation, NOT the \
+             whole tunnel. Judge ONLY this sub-flow. An 'n8n-nodes-base.executeWorkflowTrigger' \
+             is a valid trigger here (it is invoked by the previous sub-flow). An \
+             'n8n-nodes-base.executeWorkflow' whose workflowId is the next sub-flow's NAME is \
+             intentional — that placeholder is replaced with the real id at deploy; do NOT \
+             reject it. The sub-flow only needs to fulfil its own contract, not the whole need.\n\
+             Its remit: {}\n\
+             Receives: {}\n\
+             Must output: {}",
+            ctx.build_cursor + 1, ctx.sub_workflows.len(), sf.name,
+            sf.description,
+            if sf.input_contract.is_empty() { "(nothing — entry sub-flow)" } else { &sf.input_contract },
+            if sf.output_contract.is_empty() { "(nothing — final sub-flow)" } else { &sf.output_contract },
+        ),
+        None => String::new(),
+    };
+
     let user = format!(
-        "Client: {}\nResearch: {}\nWorkflow:\n{}",
+        "Client: {}\nResearch: {}\nWorkflow:\n{}{subflow_note}",
         ctx.client_need,
         ctx.research_output.as_deref().unwrap_or(""),
         serde_json::to_string_pretty(workflow).unwrap_or_default(),
@@ -714,12 +1399,26 @@ verdict.";
     // A transport error still shouldn't kill the pipeline — fall back to a soft
     // rejection so the builder retries and, after MAX_BUILD_ATTEMPTS,
     // publish_manual_pitch still produces a proposal.
-    let input = match anthropic_tool_call(
-        &app.http, &app.anthropic_key, SONNET, 1024,
-        SYSTEM, serde_json::Value::String(user),
-        "submit_review", "Submit your review verdict for the workflow.",
-        schema,
-    ).await {
+    // Grounded path: verify every node 'type' against the live catalogue rather
+    // than judging "real node?" from memory. Falls back to the single-shot critic.
+    let critic_call = match &app.n8n_mcp {
+        Some(mcp) => {
+            let system = format!("{SYSTEM}\n\n{CRITIC_MCP_ADDENDUM}");
+            anthropic_grounded_tool_call(
+                &app.http, &app.anthropic_key, mcp, SONNET, 2048,
+                &system, serde_json::Value::String(user),
+                "submit_review", "Submit your review verdict for the workflow.",
+                schema, CRITIC_GROUNDING_TOOLS,
+            ).await
+        }
+        None => anthropic_tool_call(
+            &app.http, &app.anthropic_key, SONNET, 1024,
+            SYSTEM, serde_json::Value::String(user),
+            "submit_review", "Submit your review verdict for the workflow.",
+            schema,
+        ).await,
+    };
+    let input = match critic_call {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!("[critic] tool call failed: {e} — treating as rejection");
@@ -779,9 +1478,10 @@ pub async fn run_pricing(app: &AppState, ctx: &mut PipelineContext) -> Result<()
     let base: u32 = match complexity { "simple" => 900, "complex" => 6000, _ => 2500 };
     let integration_premium  = (integration_count.saturating_sub(2) as u32) * 200;
     let feasibility_buffer: u32 = if feasibility < 6.0 { 600 } else { 0 };
-    let node_count = ctx.workflow_json.as_ref()
-        .and_then(|w| w["nodes"].as_array()).map(|n| n.len()).unwrap_or(0);
-    let node_premium = (node_count.saturating_sub(5) as u32) * 60;
+    // Pre-payment the JSON isn't built yet, so estimate node count from the scope:
+    // ~2 nodes per integration + a couple of control/trigger nodes.
+    let est_node_count = integration_count * 2 + 2;
+    let node_premium = (est_node_count.saturating_sub(5) as u32) * 60;
     let subtotal    = base + integration_premium + risk_premium + feasibility_buffer + node_premium;
     let setup_price = ((subtotal + 49) / 50) * 50;
 
@@ -1243,13 +1943,213 @@ pub async fn publish_manual_pitch(app: &AppState, ctx: &PipelineContext) {
     }).await;
 }
 
-/// Deploys the workflow to n8n (our instance or client's) and activates it.
+/// Rewrites Execute Workflow references that still hold a sub-flow NAME placeholder
+/// to the real n8n id of that sub-flow. The builder emits `workflowId = "<next
+/// sub-flow name>"` because it cannot know the id before deploy; once every sub-flow
+/// is created we resolve those names. Handles both the bare-string form and the
+/// resource-locator object form ({value, mode, …}). Returns how many it rewired.
+fn wire_subflow_ids(
+    workflow: &mut serde_json::Value,
+    name_to_id: &std::collections::HashMap<String, String>,
+) -> usize {
+    let mut wired = 0;
+    let Some(nodes) = workflow.get_mut("nodes").and_then(|n| n.as_array_mut()) else { return 0 };
+    for node in nodes {
+        let is_exec = node.get("type").and_then(|t| t.as_str())
+            .map(|t| t.contains("executeWorkflow")).unwrap_or(false);
+        if !is_exec { continue; }
+        let Some(wid) = node.get_mut("parameters").and_then(|p| p.get_mut("workflowId")) else { continue };
+        match wid {
+            // Bare string: "WF-2 — …" → "<id>"
+            serde_json::Value::String(s) => {
+                if let Some(id) = name_to_id.get(s) { *s = id.clone(); wired += 1; }
+            }
+            // Resource-locator object: { "value": "WF-2 — …", "mode": "id", … }
+            serde_json::Value::Object(o) => {
+                if let Some(serde_json::Value::String(s)) = o.get("value") {
+                    if let Some(id) = name_to_id.get(s).cloned() {
+                        o.insert("value".into(), serde_json::Value::String(id));
+                        o.insert("mode".into(), serde_json::Value::String("id".into()));
+                        wired += 1;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    wired
+}
+
+/// Normalises a workflow JSON into a body n8n's REST API accepts: default settings,
+/// staticData, node positions, and a name fallback.
+fn prepare_workflow_body(
+    workflow: &serde_json::Value,
+    fallback_name: &str,
+) -> Result<serde_json::Value, AgentError> {
+    let mut body = workflow.clone();
+    let obj = body.as_object_mut()
+        .ok_or_else(|| AgentError("workflow_json is not a JSON object".to_string()))?;
+
+    obj.entry("settings").or_insert_with(|| serde_json::json!({ "executionOrder": "v1" }));
+    obj.entry("staticData").or_insert(serde_json::Value::Null);
+
+    if let Some(nodes) = obj.get_mut("nodes").and_then(|n| n.as_array_mut()) {
+        for (i, node) in nodes.iter_mut().enumerate() {
+            if let Some(obj) = node.as_object_mut() {
+                // n8n's REST API requires position as a [x, y] array, not an object.
+                obj.entry("position").or_insert_with(|| {
+                    serde_json::json!([250, i as i64 * 200])
+                });
+            }
+        }
+    }
+
+    obj.entry("name").or_insert_with(|| serde_json::Value::String(fallback_name.to_string()));
+    Ok(body)
+}
+
+/// POSTs one workflow to n8n and returns its new id.
+async fn n8n_create(
+    http: &reqwest::Client, url: &str, key: &str, body: &serde_json::Value,
+) -> Result<String, AgentError> {
+    #[derive(serde::Deserialize)]
+    struct CreateResp { id: String }
+
+    let resp = http.post(format!("{url}/api/v1/workflows"))
+        .header("X-N8N-API-KEY", key)
+        .header("Content-Type", "application/json")
+        .json(body).send().await
+        .map_err(|e| AgentError(format!("n8n create request: {e}")))?;
+    if !resp.status().is_success() {
+        let s = resp.status();
+        let b = resp.text().await.unwrap_or_default();
+        return Err(AgentError(format!("n8n create {s}: {b}")));
+    }
+    let created: CreateResp = resp.json().await
+        .map_err(|e| AgentError(format!("n8n create parse: {e}")))?;
+    Ok(created.id)
+}
+
+/// Activates a workflow (best-effort — a sub-flow with only an Execute Workflow
+/// Trigger cannot be activated, which is fine: it runs when its caller invokes it).
+async fn n8n_activate(http: &reqwest::Client, url: &str, key: &str, id: &str) {
+    match http.post(format!("{url}/api/v1/workflows/{id}/activate"))
+        .header("X-N8N-API-KEY", key).send().await
+    {
+        Ok(r) if r.status().is_success() => tracing::info!("[deploy] workflow {id} activated"),
+        Ok(r) => tracing::warn!("[deploy] workflow {id} created but activation failed: {}", r.status()),
+        Err(e) => tracing::warn!("[deploy] workflow {id} activate request failed: {e}"),
+    }
+}
+
+/// Deploys SDK code via the MCP `create_workflow_from_code` (option a). Mirrors the
+/// REST deploy's chaining: sub-flows are created entry-LAST so each invoking sub-flow
+/// knows the real id of the one it calls, then the next sub-flow's NAME placeholder is
+/// substituted with that id in the code string before creation. We pass the resolved
+/// projectId/folderId so workflows land in N8N_TEST_FOLDER on servers that honor it
+/// (the current MCP build ignores folderId and creates in the project root — the
+/// plumbing stays forward-compatible). The entry sub-flow is activated via REST.
+async fn deploy_from_code(
+    app: &AppState,
+    mcp: &N8nMcpConfig,
+    ctx: &mut PipelineContext,
+) -> Result<(), AgentError> {
+    let codes: Vec<String> = if !ctx.built_workflow_codes.is_empty() {
+        ctx.built_workflow_codes.clone()
+    } else {
+        vec![ctx.workflow_code.clone()
+            .ok_or_else(|| AgentError("code deploy called with no workflow_code".to_string()))?]
+    };
+    let decomposed = !ctx.built_workflow_codes.is_empty();
+
+    // Resolve the test folder (name → project/folder id); deploy to the project root
+    // if it is unset or cannot be resolved (best-effort placement, never a hard fail).
+    let folder = match std::env::var("N8N_TEST_FOLDER").ok().filter(|s| !s.is_empty()) {
+        Some(name) => match mcp.resolve_folder(&app.http, &name).await {
+            Ok((p, f)) => { tracing::info!("[deploy] target folder '{name}' → project={p} folder={f}"); Some((p, f)) }
+            Err(e) => { tracing::warn!("[deploy] folder '{name}' unresolved ({e}); deploying to project root"); None }
+        },
+        None => None,
+    };
+    let (project_id, folder_id) = match &folder {
+        Some((p, f)) => (Some(p.as_str()), Some(f.as_str())),
+        None => (None, None),
+    };
+
+    let default_name = format!("pointe.dev — {}", ctx.client_need.chars().take(60).collect::<String>());
+
+    let mut ids: Vec<Option<String>> = vec![None; codes.len()];
+    for i in (0..codes.len()).rev() {
+        let mut code = codes[i].clone();
+
+        // Substitute the next sub-flow's NAME placeholder (already deployed, id known)
+        // with its real id in this sub-flow's executeWorkflow call.
+        if decomposed {
+            if let (Some(next), Some(Some(next_id))) =
+                (ctx.sub_workflows.get(i + 1), ids.get(i + 1))
+            {
+                let before = code.len();
+                code = code.replace(&next.name, next_id);
+                if code.len() == before && i + 1 < codes.len() {
+                    tracing::warn!(
+                        "[deploy] sub-flow {}/{}: next-flow name '{}' not found in code — \
+                         chain to next may be broken, needs manual wiring",
+                        i + 1, codes.len(), next.name);
+                }
+            }
+        }
+
+        let name = ctx.sub_workflows.get(i)
+            .map(|sf| format!("pointe.dev — {}", sf.name))
+            .unwrap_or_else(|| default_name.clone());
+        // create_workflow_from_code rejects descriptions over 255 chars; sub-flow
+        // descriptions from the decomposer can run longer, so cap them (char-safe).
+        let description: String = ctx.sub_workflows.get(i)
+            .map(|sf| sf.description.clone())
+            .unwrap_or_else(|| ctx.client_need.clone())
+            .chars().take(250).collect();
+
+        let id = mcp.create_from_code(&app.http, &code, &name, &description, project_id, folder_id)
+            .await
+            .map_err(|e| AgentError(format!("create_from_code ({}/{}): {e}", i + 1, codes.len())))?;
+        tracing::info!("[deploy] workflow created id={id} ({}/{}) via SDK code", i + 1, codes.len());
+        ids[i] = Some(id);
+    }
+
+    // Activate the entry workflow via REST (best-effort) — our own instance.
+    let ordered: Vec<String> = ids.into_iter().flatten().collect();
+    let entry = ordered.first().cloned()
+        .ok_or_else(|| AgentError("code deploy produced no workflow ids".to_string()))?;
+    if let Ok(url) = std::env::var("N8N_URL") {
+        if let Ok(key) = std::env::var("N8N_API_KEY") {
+            n8n_activate(&app.http, &url, &key, &entry).await;
+        }
+        ctx.n8n_workflow_url = Some(format!("{url}/workflow/{entry}"));
+    }
+    ctx.n8n_workflow_id  = Some(entry);
+    ctx.n8n_workflow_ids = ordered;
+    Ok(())
+}
+
+/// Deploys to n8n (our instance or the client's) and activates the entry workflow.
+/// Mono build → one workflow. Decomposed build → every sub-flow, created entry-LAST
+/// so each knows the real id of the sub-flow it invokes, then chained by rewriting
+/// the name placeholders. Only the entry (real-trigger) sub-flow is activated; the
+/// rest run on demand via their Execute Workflow Trigger.
 pub async fn run_deploy(app: &AppState, ctx: &mut PipelineContext) -> Result<(), AgentError> {
     tracing::info!("[deploy] session={} target={}", ctx.session_id,
         ctx.deploy_target.as_deref().unwrap_or("own"));
 
-    let workflow = ctx.workflow_json.as_ref()
-        .ok_or_else(|| AgentError("deploy called with no workflow_json".to_string()))?;
+    // Code path (option a): the builder emitted SDK code → deploy via MCP
+    // create_workflow_from_code, which gets node positions right by construction and
+    // (when the server honors folderId) drops the workflow into N8N_TEST_FOLDER. Only
+    // ever reached for deploy_target=own (the builder only emits code for our own
+    // instance, which the MCP is attached to).
+    if ctx.workflow_code.is_some() || !ctx.built_workflow_codes.is_empty() {
+        if let Some(mcp) = &app.n8n_mcp {
+            return deploy_from_code(app, mcp, ctx).await;
+        }
+    }
 
     let (n8n_url, n8n_key) = match ctx.deploy_target.as_deref().unwrap_or("own") {
         "client" => {
@@ -1268,68 +2168,56 @@ pub async fn run_deploy(app: &AppState, ctx: &mut PipelineContext) -> Result<(),
         }
     };
 
-    let mut body = workflow.clone();
-    let obj = body.as_object_mut()
-        .ok_or_else(|| AgentError("workflow_json is not a JSON object".to_string()))?;
+    // Decomposed build deploys the sub-flows; mono deploys the single workflow.
+    let decomposed = !ctx.built_workflows.is_empty();
+    let workflows: Vec<serde_json::Value> = if decomposed {
+        ctx.built_workflows.clone()
+    } else {
+        vec![ctx.workflow_json.clone()
+            .ok_or_else(|| AgentError("deploy called with no workflow_json".to_string()))?]
+    };
 
-    obj.entry("settings").or_insert_with(|| serde_json::json!({ "executionOrder": "v1" }));
-    obj.entry("staticData").or_insert(serde_json::Value::Null);
+    let default_name = format!("pointe.dev — {}", ctx.client_need.chars().take(60).collect::<String>());
 
-    if let Some(nodes) = obj.get_mut("nodes").and_then(|n| n.as_array_mut()) {
-        for (i, node) in nodes.iter_mut().enumerate() {
-            if let Some(obj) = node.as_object_mut() {
-                obj.entry("position").or_insert_with(|| {
-                    serde_json::json!({ "x": 250, "y": i as i64 * 200 })
-                });
+    // Create entry-last (reverse) so a sub-flow's id is known before the one that
+    // calls it is created → wire the placeholder before posting, no update round-trip.
+    let mut name_to_id: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut ids: Vec<Option<String>> = vec![None; workflows.len()];
+    for i in (0..workflows.len()).rev() {
+        let fallback = ctx.sub_workflows.get(i)
+            .map(|sf| format!("pointe.dev — {}", sf.name))
+            .unwrap_or_else(|| default_name.clone());
+        let mut body = prepare_workflow_body(&workflows[i], &fallback)?;
+
+        if decomposed {
+            let wired = wire_subflow_ids(&mut body, &name_to_id);
+            if i + 1 < workflows.len() && wired == 0 {
+                tracing::warn!(
+                    "[deploy] sub-flow {}/{} wired 0 next-references — chain to the next \
+                     sub-flow may be broken, needs manual wiring", i + 1, workflows.len());
             }
         }
+
+        let id = n8n_create(&app.http, &n8n_url, &n8n_key, &body).await?;
+        tracing::info!("[deploy] workflow created id={id} ({}/{})", i + 1, workflows.len());
+        if decomposed {
+            if let Some(sf) = ctx.sub_workflows.get(i) {
+                name_to_id.insert(sf.name.clone(), id.clone());
+            }
+        }
+        // Only the entry sub-flow carries a real trigger to activate.
+        if !decomposed || i == 0 {
+            n8n_activate(&app.http, &n8n_url, &n8n_key, &id).await;
+        }
+        ids[i] = Some(id);
     }
 
-    obj.entry("name").or_insert_with(|| serde_json::Value::String(format!(
-        "pointe.dev — {}",
-        ctx.client_need.chars().take(60).collect::<String>()
-    )));
-
-    #[derive(serde::Deserialize)]
-    struct CreateResp { id: String }
-
-    let create_resp = app.http
-        .post(format!("{n8n_url}/api/v1/workflows"))
-        .header("X-N8N-API-KEY", &n8n_key)
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| AgentError(format!("n8n create request: {e}")))?;
-
-    if !create_resp.status().is_success() {
-        let s = create_resp.status();
-        let b = create_resp.text().await.unwrap_or_default();
-        return Err(AgentError(format!("n8n create {s}: {b}")));
-    }
-
-    let created: CreateResp = create_resp.json().await
-        .map_err(|e| AgentError(format!("n8n create parse: {e}")))?;
-    tracing::info!("[deploy] workflow created id={}", created.id);
-
-    let activate_resp = app.http
-        .post(format!("{n8n_url}/api/v1/workflows/{}/activate", created.id))
-        .header("X-N8N-API-KEY", &n8n_key)
-        .send()
-        .await
-        .map_err(|e| AgentError(format!("n8n activate request: {e}")))?;
-
-    if !activate_resp.status().is_success() {
-        tracing::warn!(
-            "[deploy] workflow {} created but activation failed: {}",
-            created.id, activate_resp.status()
-        );
-    } else {
-        tracing::info!("[deploy] workflow {} activated", created.id);
-    }
-
-    ctx.n8n_workflow_id  = Some(created.id.clone());
-    ctx.n8n_workflow_url = Some(format!("{n8n_url}/workflow/{}", created.id));
+    let ordered: Vec<String> = ids.into_iter().flatten().collect();
+    let entry = ordered.first().cloned()
+        .ok_or_else(|| AgentError("deploy produced no workflow ids".to_string()))?;
+    ctx.n8n_workflow_id  = Some(entry.clone());
+    ctx.n8n_workflow_url = Some(format!("{n8n_url}/workflow/{entry}"));
+    ctx.n8n_workflow_ids = ordered;
     Ok(())
 }
 
@@ -1405,6 +2293,142 @@ mod tests {
         assert_eq!(format!("{e}"), "something went wrong");
     }
 
+    // ── decomposition gate ─────────────────────────────────────────────────
+
+    #[test]
+    fn is_numbered_step_matches_dot_and_paren() {
+        assert!(is_numbered_step("1. Surveiller les flux RSS"));
+        assert!(is_numbered_step("  2) générer la voix off"));
+        assert!(is_numbered_step("10. publier sur YouTube"));
+        assert!(!is_numbered_step("Blocs clés: RSS, ElevenLabs"));
+        assert!(!is_numbered_step("- bullet point"));
+        assert!(!is_numbered_step(""));
+    }
+
+    #[test]
+    fn count_design_steps_counts_only_numbered_lines() {
+        let design = "1. Trigger schedule — scheduleTrigger — lance chaque jour\n\
+                      2. Récupère les actus — httpRequest — flux RSS\n\
+                      3. Choisit le sujet — code — ranking\n\
+                      Blocs clés: RSS, OpenAI\n\
+                      Points de vigilance: aucun";
+        assert_eq!(count_design_steps(design), 3);
+    }
+
+    #[test]
+    fn needs_decomposition_false_for_simple_lead() {
+        let ctx = PipelineContext {
+            research_json: Some(serde_json::json!({
+                "integrations_required": [{"name": "Shopify"}, {"name": "Pennylane"}]
+            })),
+            design_summary: Some("1. a\n2. b\n3. c".to_string()),
+            ..Default::default()
+        };
+        assert!(!needs_decomposition(&ctx));
+    }
+
+    #[test]
+    fn needs_decomposition_true_when_five_integrations() {
+        let ctx = PipelineContext {
+            research_json: Some(serde_json::json!({
+                "integrations_required": [
+                    {"name": "RSS"}, {"name": "X"}, {"name": "ElevenLabs"},
+                    {"name": "Creatomate"}, {"name": "YouTube"}
+                ]
+            })),
+            design_summary: Some("1. a\n2. b".to_string()),
+            ..Default::default()
+        };
+        assert!(needs_decomposition(&ctx));
+    }
+
+    #[test]
+    fn needs_decomposition_true_when_blueprint_exceeds_eight_steps() {
+        let design = (1..=9).map(|n| format!("{n}. step")).collect::<Vec<_>>().join("\n");
+        let ctx = PipelineContext {
+            research_json: Some(serde_json::json!({ "integrations_required": [{"name": "A"}] })),
+            design_summary: Some(design),
+            ..Default::default()
+        };
+        assert!(needs_decomposition(&ctx));
+    }
+
+    #[test]
+    fn needs_decomposition_false_for_empty_context() {
+        assert!(!needs_decomposition(&PipelineContext::default()));
+    }
+
+    // ── deploy: sub-flow id wiring ─────────────────────────────────────────
+
+    fn name_map(pairs: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn wire_subflow_ids_resolves_bare_string_placeholder() {
+        let mut wf = serde_json::json!({
+            "nodes": [
+                {"name": "Trigger", "type": "n8n-nodes-base.scheduleTrigger", "parameters": {}},
+                {"name": "Call next", "type": "n8n-nodes-base.executeWorkflow",
+                 "parameters": {"workflowId": "WF-2 — Produce"}}
+            ]
+        });
+        let n = wire_subflow_ids(&mut wf, &name_map(&[("WF-2 — Produce", "abc123")]));
+        assert_eq!(n, 1);
+        assert_eq!(wf["nodes"][1]["parameters"]["workflowId"], "abc123");
+    }
+
+    #[test]
+    fn wire_subflow_ids_resolves_resource_locator_object() {
+        let mut wf = serde_json::json!({
+            "nodes": [{
+                "name": "Call next", "type": "n8n-nodes-base.executeWorkflow",
+                "parameters": {"workflowId": {"__rl": true, "value": "WF-3 — Publish", "mode": "list"}}
+            }]
+        });
+        let n = wire_subflow_ids(&mut wf, &name_map(&[("WF-3 — Publish", "xyz789")]));
+        assert_eq!(n, 1);
+        assert_eq!(wf["nodes"][0]["parameters"]["workflowId"]["value"], "xyz789");
+        assert_eq!(wf["nodes"][0]["parameters"]["workflowId"]["mode"], "id");
+    }
+
+    #[test]
+    fn prepare_workflow_body_sets_position_as_array() {
+        // n8n's REST API rejects an object position ("must be array") — regression
+        // guard for the bug the live deploy test caught.
+        let wf = serde_json::json!({
+            "name": "x",
+            "nodes": [{"name": "t", "type": "n8n-nodes-base.scheduleTrigger", "parameters": {}}],
+            "connections": {}
+        });
+        let body = prepare_workflow_body(&wf, "fallback").unwrap();
+        assert!(body["nodes"][0]["position"].is_array(), "position must be a [x, y] array");
+        assert_eq!(body["nodes"][0]["position"][0], 250);
+    }
+
+    #[test]
+    fn prepare_workflow_body_uses_fallback_name_only_when_missing() {
+        let named = serde_json::json!({"name": "Real", "nodes": [], "connections": {}});
+        assert_eq!(prepare_workflow_body(&named, "fb").unwrap()["name"], "Real");
+        let unnamed = serde_json::json!({"nodes": [], "connections": {}});
+        assert_eq!(prepare_workflow_body(&unnamed, "fb").unwrap()["name"], "fb");
+    }
+
+    #[test]
+    fn wire_subflow_ids_leaves_unknown_and_non_exec_nodes_untouched() {
+        let mut wf = serde_json::json!({
+            "nodes": [
+                {"name": "Set", "type": "n8n-nodes-base.set", "parameters": {"workflowId": "WF-2"}},
+                {"name": "Call", "type": "n8n-nodes-base.executeWorkflow",
+                 "parameters": {"workflowId": "Unknown WF"}}
+            ]
+        });
+        let n = wire_subflow_ids(&mut wf, &name_map(&[("WF-2 — Produce", "abc")]));
+        assert_eq!(n, 0, "non-exec node and unknown name must be left alone");
+        assert_eq!(wf["nodes"][0]["parameters"]["workflowId"], "WF-2");
+        assert_eq!(wf["nodes"][1]["parameters"]["workflowId"], "Unknown WF");
+    }
+
     #[test]
     fn agent_error_from_reqwest_works_via_trait() {
         // Can't easily construct a reqwest::Error in tests, but we can verify
@@ -1441,6 +2465,7 @@ mod tests {
             qdrant: None,
             embeddings: None,
             cloudflare: None,
+            n8n_mcp: None,
             stripe: None,
             session_secret: b"test".to_vec(),
             admin_ingest_token: None,

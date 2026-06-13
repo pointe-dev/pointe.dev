@@ -59,8 +59,11 @@ fn stage_badge(stage: &str) -> (&'static str, &'static str) {
     match stage {
         "qualifying"         => ("Qualification",          "bg-slate-500/15 text-slate-300"),
         "researching"        => ("Recherche",              "bg-sky-500/15 text-sky-300"),
-        "building"           => ("Conception",             "bg-sky-500/15 text-sky-300"),
-        "validating"         => ("Validation",             "bg-sky-500/15 text-sky-300"),
+        "designing"          => ("Conception",             "bg-sky-500/15 text-sky-300"),
+        "design_validating"  => ("Validation design",      "bg-sky-500/15 text-sky-300"),
+        "decomposing"        => ("Découpage",              "bg-amber-500/15 text-amber-300"),
+        "building"           => ("Construction",           "bg-amber-500/15 text-amber-300"),
+        "validating"         => ("Validation build",       "bg-amber-500/15 text-amber-300"),
         "pricing"            => ("Chiffrage",              "bg-indigo-500/15 text-indigo-300"),
         "pricing_validating" => ("Validation prix",        "bg-indigo-500/15 text-indigo-300"),
         "awaiting_payment"   => ("En attente de paiement", "bg-amber-500/15 text-amber-300"),

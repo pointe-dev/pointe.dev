@@ -9,6 +9,7 @@ use crate::state::AppState;
 
 pub const MAX_BUILD_ATTEMPTS: u8 = 3;
 pub const MAX_PRICING_ATTEMPTS: u8 = 2;
+pub const MAX_DESIGN_ATTEMPTS: u8 = 3;
 
 /// The stage an automation pipeline is currently in.
 /// Serialized as `{ "stage": "building", ... }` for the status API.
@@ -19,9 +20,19 @@ pub enum PipelineStage {
     Qualifying,
     /// Research agent running.
     Researching,
+    /// Designer agent drafting the high-level solution outline (no JSON).
+    Designing,
+    /// Design critic validating viability/completeness before quoting.
+    DesignValidating,
+    /// Deciding whether the approved design must be split into chained sub-flows.
+    /// Reached only POST-payment, right before building. No split → straight to
+    /// Building (mono); split → run_decomposer fills ctx.sub_workflows.
+    Decomposing,
     /// Workflow builder running (attempt tracked in ctx.build_attempts).
+    /// Reached only POST-payment — the real JSON is built after the client pays.
+    /// In a decomposed build, builds the sub-flow at ctx.build_cursor.
     Building,
-    /// Critic agent validating the latest draft.
+    /// Critic agent validating the latest JSON draft (post-payment).
     Validating,
     /// Pricing agent computing the quote.
     Pricing,
@@ -37,6 +48,27 @@ pub enum PipelineStage {
     SavedForHuman { reason: String },
     /// Unrecoverable error.
     Failed { reason: String },
+}
+
+/// One sub-flow in a decomposed automation: a self-contained n8n workflow of ≤8
+/// nodes that the builder can construct reliably. Produced by run_decomposer when
+/// a tunnel is too large to fit a single workflow; chained to its neighbours
+/// through an explicit input/output contract so the n8n execution context (which
+/// breaks after a trigger node) survives the hop between sub-flows.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SubWorkflowPlan {
+    /// Short ordered name, e.g. "WF-A — Ingest & Select".
+    pub name: String,
+    /// The subset of the approved design this sub-flow implements.
+    pub description: String,
+    /// How this sub-flow starts: the real trigger (schedule/webhook) for the first
+    /// one, or how the previous sub-flow hands off (executeWorkflow / webhook) for
+    /// the rest.
+    pub trigger: String,
+    /// What this sub-flow receives from the previous one (empty for the first).
+    pub input_contract: String,
+    /// What this sub-flow hands to the next one (empty for the last).
+    pub output_contract: String,
 }
 
 /// Accumulated context flowing through all pipeline stages.
@@ -55,8 +87,44 @@ pub struct PipelineContext {
     pub research_output: Option<String>,
     /// Structured research data (integrations, complexity, risks) — used by pricing.
     pub research_json: Option<serde_json::Value>,
-    /// n8n workflow JSON produced by run_builder.
+    /// Ordered, high-level solution outline from run_designer (NO JSON). Reviewed
+    /// by run_design_critic, priced, shown to the client, and later handed to
+    /// run_builder (post-payment) as the approved blueprint.
+    #[serde(default)]
+    pub design_summary: Option<String>,
+    /// Design critic feedback accumulated across design attempts.
+    #[serde(default)]
+    pub design_critic_feedback: Vec<String>,
+    /// Number of design attempts so far.
+    #[serde(default)]
+    pub design_attempts: u8,
+    /// n8n workflow JSON produced by run_builder. In mono builds this holds the
+    /// single workflow; in a decomposed build it holds the sub-flow currently being
+    /// validated (moved into `built_workflows` once the critic approves it).
     pub workflow_json: Option<serde_json::Value>,
+    /// n8n Workflow SDK *code* produced by run_builder when the MCP is available
+    /// (the preferred, higher-fidelity path). Mirrors `workflow_json`: in mono
+    /// builds it holds the single workflow's code; in a decomposed build it holds
+    /// the sub-flow currently being validated (moved into `built_workflow_codes`
+    /// once the critic/validate_workflow approves it). `None` in the JSON fallback.
+    #[serde(default)]
+    pub workflow_code: Option<String>,
+    /// Approved sub-flow SDK code strings, in order. Mirror of `built_workflows`
+    /// for the code path; empty in the mono and JSON cases.
+    #[serde(default)]
+    pub built_workflow_codes: Vec<String>,
+    /// Decomposition plan from run_decomposer: ordered sub-flows, each ≤8 nodes.
+    /// Empty means no decomposition — a single mono-workflow (the default, and the
+    /// N=1 case).
+    #[serde(default)]
+    pub sub_workflows: Vec<SubWorkflowPlan>,
+    /// Index of the sub-flow currently being built/validated (decomposed builds).
+    #[serde(default)]
+    pub build_cursor: usize,
+    /// Approved sub-flow JSONs, in order, accumulated as each passes the critic.
+    /// Empty in the mono case (the single workflow stays in `workflow_json`).
+    #[serde(default)]
+    pub built_workflows: Vec<serde_json::Value>,
     /// Critic feedback accumulated across build attempts.
     pub critic_feedback: Vec<String>,
     /// Number of build attempts so far.
@@ -77,10 +145,14 @@ pub struct PipelineContext {
     pub pricing_feasibility_override: Option<f32>,
     /// Slides JSON produced by run_pricing, carried to run_pricing_critic for publishing.
     pub pricing_slides_json: Option<serde_json::Value>,
-    /// n8n workflow ID after deployment.
+    /// n8n workflow ID after deployment. In a decomposed build this is the entry
+    /// sub-flow (the one carrying the real trigger), for display/back-compat.
     pub n8n_workflow_id: Option<String>,
-    /// Direct URL to the workflow in the n8n editor.
+    /// Direct URL to the (entry) workflow in the n8n editor.
     pub n8n_workflow_url: Option<String>,
+    /// IDs of every deployed sub-flow, entry first (mono build has one entry).
+    #[serde(default)]
+    pub n8n_workflow_ids: Vec<String>,
     /// "own" (our instance) or "client" (client's own n8n). Defaults to "own".
     pub deploy_target: Option<String>,
     /// Client's n8n URL (only set when deploy_target = "client").
@@ -225,7 +297,10 @@ impl PipelineStore {
             let mut guard = self.0.write().await;
             match guard.get_mut(&id) {
                 Some(r) if r.stage == PipelineStage::AwaitingPayment => {
-                    r.stage = PipelineStage::Deploying;
+                    // Post-payment, the real JSON gets built first, then deployed:
+                    // AwaitingPayment → Decomposing → Building → Validating →
+                    // (loop sub-flows) → Deploying → Live.
+                    r.stage = PipelineStage::Decomposing;
                     r.updated_at = Utc::now();
                     Some((r.stage.clone(), r.ctx.clone()))
                 }
@@ -341,7 +416,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resume_after_payment_transitions_awaiting_to_deploying() {
+    async fn resume_after_payment_transitions_awaiting_to_decomposing() {
         let store = PipelineStore::new();
         let id = store.create("sess-pay".to_string(), "need".to_string(), None).await;
         // Manually advance to AwaitingPayment
@@ -351,8 +426,9 @@ mod tests {
         let resumed = store.resume_after_payment(id).await;
         assert!(resumed, "should return true when in AwaitingPayment");
 
+        // Post-payment now decomposes first (then builds, validates, deploys).
         let (stage, _) = store.status(id).await.unwrap();
-        assert_eq!(stage, PipelineStage::Deploying);
+        assert_eq!(stage, PipelineStage::Decomposing);
     }
 
     #[tokio::test]
@@ -389,6 +465,31 @@ mod tests {
         let json2 = serde_json::to_value(&failed).unwrap();
         assert_eq!(json2["stage"], "failed");
         assert_eq!(json2["reason"], "test error");
+    }
+
+    #[test]
+    fn ctx_without_sub_workflows_field_defaults_empty() {
+        // Rows persisted before sub_workflows existed must hydrate cleanly: take a
+        // real serialised ctx, drop the new key, and confirm it deserialises to empty.
+        let mut json = serde_json::to_value(PipelineContext::default()).unwrap();
+        json.as_object_mut().unwrap().remove("sub_workflows");
+        assert!(json.get("sub_workflows").is_none(), "precondition: key removed");
+        let old: PipelineContext = serde_json::from_value(json).unwrap();
+        assert!(old.sub_workflows.is_empty());
+    }
+
+    #[test]
+    fn sub_workflow_plan_roundtrips() {
+        let plan = SubWorkflowPlan {
+            name: "WF-A — Ingest".to_string(),
+            description: "fetch & rank".to_string(),
+            trigger: "scheduleTrigger".to_string(),
+            input_contract: String::new(),
+            output_contract: "topic, script".to_string(),
+        };
+        let back: SubWorkflowPlan =
+            serde_json::from_value(serde_json::to_value(&plan).unwrap()).unwrap();
+        assert_eq!(plan, back);
     }
 
     #[test]
@@ -488,6 +589,44 @@ async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(),
 
             PipelineStage::Researching => {
                 agents::run_research(app, &mut ctx).await.map_err(|e| e.to_string())?;
+                store.advance(id, PipelineStage::Designing, ctx).await;
+            }
+
+            PipelineStage::Designing => {
+                ctx.design_attempts += 1;
+                agents::run_designer(app, &mut ctx).await.map_err(|e| e.to_string())?;
+                store.advance(id, PipelineStage::DesignValidating, ctx).await;
+            }
+
+            PipelineStage::DesignValidating => {
+                let approved = agents::run_design_critic(app, &mut ctx).await.map_err(|e| e.to_string())?;
+                if approved {
+                    store.advance(id, PipelineStage::Pricing, ctx).await;
+                } else if ctx.design_attempts >= MAX_DESIGN_ATTEMPTS {
+                    // Pre-payment: a design we can't make sound → a human writes the proposal.
+                    agents::publish_manual_pitch(app, &ctx).await;
+                    let reason = format!(
+                        "design critic rejected after {} attempts: {}",
+                        ctx.design_attempts,
+                        ctx.design_critic_feedback.last().cloned().unwrap_or_default()
+                    );
+                    notify_owner_failure(app, id, &ctx.session_id, &reason).await;
+                    store.advance(id, PipelineStage::SavedForHuman { reason }, ctx).await;
+                    break;
+                } else {
+                    store.advance(id, PipelineStage::Designing, ctx).await;
+                }
+            }
+
+            PipelineStage::Decomposing => {
+                // Only large tunnels are split; simple leads stay mono (zero change).
+                // A decomposer that returns ≤1 sub-flow collapses back to mono too.
+                if agents::needs_decomposition(&ctx) {
+                    agents::run_decomposer(app, &mut ctx).await.map_err(|e| e.to_string())?;
+                }
+                if ctx.sub_workflows.len() <= 1 {
+                    ctx.sub_workflows.clear();
+                }
                 store.advance(id, PipelineStage::Building, ctx).await;
             }
 
@@ -499,12 +638,35 @@ async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(),
 
             PipelineStage::Validating => {
                 let approved = agents::run_critic(app, &mut ctx).await.map_err(|e| e.to_string())?;
-                if approved {
-                    store.advance(id, PipelineStage::Pricing, ctx).await;
+                if approved && !ctx.sub_workflows.is_empty() {
+                    // Decomposed build: stash the approved sub-flow, advance the
+                    // cursor, and either build the next sub-flow or deploy them all.
+                    if let Some(wf) = ctx.workflow_json.take() {
+                        ctx.built_workflows.push(wf);
+                    }
+                    if let Some(code) = ctx.workflow_code.take() {
+                        ctx.built_workflow_codes.push(code);
+                    }
+                    ctx.build_cursor += 1;
+                    ctx.build_attempts = 0;
+                    ctx.critic_feedback.clear();
+                    if ctx.build_cursor >= ctx.sub_workflows.len() {
+                        store.advance(id, PipelineStage::Deploying, ctx).await;
+                    } else {
+                        store.advance(id, PipelineStage::Building, ctx).await;
+                    }
+                } else if approved {
+                    store.advance(id, PipelineStage::Deploying, ctx).await;
                 } else if ctx.build_attempts >= MAX_BUILD_ATTEMPTS {
-                    agents::publish_manual_pitch(app, &ctx).await;
+                    // Post-payment: the client has already paid, so we do NOT re-pitch.
+                    // Alert the owner and hand off to manual delivery — we honor the
+                    // quote by building it by hand.
+                    let which = ctx.sub_workflows.get(ctx.build_cursor)
+                        .map(|sf| format!(" (sub-flow {}/{}: {})",
+                            ctx.build_cursor + 1, ctx.sub_workflows.len(), sf.name))
+                        .unwrap_or_default();
                     let reason = format!(
-                        "critic rejected after {} attempts: {}",
+                        "post-payment build rejected after {} attempts{which} — manual delivery required: {}",
                         ctx.build_attempts,
                         ctx.critic_feedback.last().cloned().unwrap_or_default()
                     );
@@ -550,7 +712,7 @@ async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(),
             }
 
             // Terminal or externally-driven stages — stop the loop.
-            // AwaitingPayment resumes via resume_after_payment() → Deploying.
+            // AwaitingPayment resumes via resume_after_payment() → Building.
             PipelineStage::AwaitingPayment
             | PipelineStage::Live
             | PipelineStage::SavedForHuman { .. }

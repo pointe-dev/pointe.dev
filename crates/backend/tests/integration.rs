@@ -43,6 +43,7 @@ fn test_state() -> Arc<AppState> {
         qdrant: None,
         embeddings: None,
         cloudflare: None,
+        n8n_mcp: None,
         stripe: Some(StripeClient::new(
             reqwest::Client::new(),
             "sk_test_fake".to_string(),

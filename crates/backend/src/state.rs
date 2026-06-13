@@ -1,6 +1,7 @@
 use crate::cloudflare::CloudflareRag;
 use crate::embeddings::EmbeddingEngine;
 use crate::langfuse::LangfuseClient;
+use crate::mcp::N8nMcpConfig;
 use crate::pending::PendingStore;
 use crate::pipeline::PipelineStore;
 use crate::pitch::PitchStore;
@@ -24,6 +25,10 @@ pub struct AppState {
     /// Managed RAG on Cloudflare (Workers AI + Vectorize). When set, the builder
     /// and ingest use it instead of the local qdrant+embeddings pair.
     pub cloudflare: Option<CloudflareRag>,
+    /// n8n MCP connector for the build pipeline. When set, the builder/critic/
+    /// designer ground themselves on the real n8n node catalogue via the
+    /// Anthropic Messages API MCP connector instead of a hardcoded node list.
+    pub n8n_mcp: Option<N8nMcpConfig>,
     pub stripe: Option<StripeClient>,
     /// HMAC secret for signing persistent session tokens and confirm links.
     pub session_secret: Vec<u8>,
