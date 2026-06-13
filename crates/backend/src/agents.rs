@@ -2116,14 +2116,23 @@ async fn deploy_from_code(
         ids[i] = Some(id);
     }
 
-    // Activate the entry workflow via REST (best-effort) — our own instance.
+    // Activate via the MCP — the same internal route that created the workflows. The
+    // public REST `/activate` gets Cloudflare-challenged from the server, which is why
+    // activation used to be manual; publish_workflow works internally. Publish leaf-FIRST
+    // (a referenced sub-flow before its caller): n8n refuses to publish a workflow whose
+    // Execute Workflow targets are not themselves published. `ordered` is caller→callee
+    // (entry first), so publish it reversed — the entry lands last. Best-effort: the
+    // deploy already succeeded, so a failed publish is logged, not fatal.
     let ordered: Vec<String> = ids.into_iter().flatten().collect();
     let entry = ordered.first().cloned()
         .ok_or_else(|| AgentError("code deploy produced no workflow ids".to_string()))?;
-    if let Ok(url) = std::env::var("N8N_URL") {
-        if let Ok(key) = std::env::var("N8N_API_KEY") {
-            n8n_activate(&app.http, &url, &key, &entry).await;
+    for wid in ordered.iter().rev() {
+        match mcp.publish_workflow(&app.http, wid).await {
+            Ok(()) => tracing::info!("[deploy] workflow {wid} published (active) via MCP"),
+            Err(e) => tracing::warn!("[deploy] MCP publish of {wid} failed ({e}); activate manually"),
         }
+    }
+    if let Ok(url) = std::env::var("N8N_URL") {
         ctx.n8n_workflow_url = Some(format!("{url}/workflow/{entry}"));
     }
     ctx.n8n_workflow_id  = Some(entry);
