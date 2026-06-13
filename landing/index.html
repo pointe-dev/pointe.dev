@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pointe.dev — Bientôt</title>
+  <meta name="description"
+    content="pointe.dev conçoit des collaborateurs IA sur mesure qui prennent en charge vos tâches répétitives. Vous gardez le pilotage, ils font le reste. Laissez votre email pour être prévenu du lancement.">
+  <meta name="theme-color" content="#0f0c10">
+
+  <!-- Social sharing -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="pointe.dev">
+  <meta property="og:locale" content="fr_FR">
+  <meta property="og:url" content="https://pointe.dev">
+  <meta property="og:title" content="pointe.dev — Bientôt">
+  <meta property="og:description"
+    content="Déléguez vos tâches répétitives à des collaborateurs IA conçus sur mesure. On peaufine les derniers détails.">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="pointe.dev — Bientôt">
+  <meta name="twitter:description"
+    content="Déléguez vos tâches répétitives à des collaborateurs IA conçus sur mesure. On peaufine les derniers détails.">
+
+  <!-- Sharp crimson mark as favicon (self-contained) -->
+  <link rel="icon" type="image/svg+xml"
+    href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpolygon points='16,2 29,30 16,23 3,30' fill='%23e8163c'/%3E%3C/svg%3E">
+
+  <!-- Same fonts as the app — non-blocking, falls back to system fonts -->
+  <link rel="preconnect" href="https://api.fontshare.com">
+  <link rel="preconnect" href="https://cdn.fontshare.com" crossorigin>
+  <link rel="preload"
+    href="https://api.fontshare.com/v2/css?f[]=clash-display@600,700&f[]=satoshi@400,500,700&display=swap" as="style"
+    onload="this.onload=null;this.rel='stylesheet'">
+  <noscript>
+    <link rel="stylesheet"
+      href="https://api.fontshare.com/v2/css?f[]=clash-display@600,700&f[]=satoshi@400,500,700&display=swap">
+  </noscript>
+
+  <style>
+    :root {
+      --bg-deep: #0f0c10;
+      --bg-surface: #140f15;
+      --bg-elevated: #1a1320;
+      --red-bright: #e8163c;
+      --red-mid: #c4122f;
+      --red-dark: #8b0a1e;
+      --red-glow: rgba(220, 20, 60, .45);
+      --cyan: #00e5cc;
+      --text-primary: #f1f5f9;
+      --text-secondary: #94a3b8;
+      --text-muted: #475569;
+      --border-subtle: rgba(148, 163, 184, .12);
+      --font-head: 'Clash Display', system-ui, sans-serif;
+      --font-body: 'Satoshi', system-ui, -apple-system, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0
+    }
+
+    html,
+    body {
+      height: 100%
+    }
+
+    body {
+      font-family: var(--font-body);
+      color: var(--text-primary);
+      background: var(--bg-deep);
+      -webkit-font-smoothing: antialiased;
+      line-height: 1.5;
+      min-height: 100svh;
+      display: grid;
+      place-items: center;
+      position: relative;
+      overflow: hidden;
+      padding: clamp(1.5rem, 5vw, 3rem);
+    }
+
+    /* Soft crimson glow + warm vignette */
+    body::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(60% 45% at 50% -5%, rgba(232, 22, 60, .18), transparent 60%),
+        radial-gradient(90% 60% at 50% 120%, rgba(26, 19, 32, .9), transparent 70%);
+    }
+
+    /* faint grid texture */
+    body::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      opacity: .4;
+      background-image:
+        linear-gradient(rgba(148, 163, 184, .035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(148, 163, 184, .035) 1px, transparent 1px);
+      background-size: 56px 56px;
+      -webkit-mask-image: radial-gradient(circle at 50% 40%, #000, transparent 75%);
+      mask-image: radial-gradient(circle at 50% 40%, #000, transparent 75%);
+    }
+
+    main {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 680px;
+      text-align: center;
+      animation: rise .7s cubic-bezier(.2, .7, .2, 1) both;
+    }
+
+    .wordmark {
+      display: inline-flex;
+      align-items: center;
+      gap: .6rem;
+      font-family: var(--font-head);
+      font-weight: 700;
+      font-size: 1.15rem;
+      letter-spacing: -.01em;
+      color: var(--text-primary);
+    }
+
+    .wordmark svg {
+      width: 22px;
+      height: 22px;
+      display: block
+    }
+
+    .wordmark .dot {
+      color: var(--red-bright)
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: .5rem;
+      margin: 2.4rem 0 1.6rem;
+      padding: .4rem .85rem;
+      border: 1px solid var(--border-subtle);
+      border-radius: 999px;
+      background: rgba(20, 15, 21, .6);
+      font-size: .72rem;
+      font-weight: 500;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+    }
+
+    .badge .pulse {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--red-bright);
+      box-shadow: 0 0 0 0 var(--red-glow);
+      animation: pulse 2s infinite;
+    }
+
+    h1 {
+      font-family: var(--font-head);
+      font-weight: 600;
+      font-size: clamp(2.1rem, 6vw, 3.4rem);
+      line-height: 1.08;
+      letter-spacing: -.02em;
+      margin: 0 auto;
+      max-width: 16ch;
+    }
+
+    h1 .accent {
+      background: linear-gradient(120deg, var(--red-bright), var(--red-mid));
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      color: var(--red-mid);
+    }
+
+    .lead {
+      margin: 1.4rem auto 0;
+      max-width: 52ch;
+      font-size: clamp(1rem, 1.4vw, 1.12rem);
+      color: var(--text-secondary);
+      line-height: 1.65;
+    }
+
+    form {
+      display: flex;
+      gap: .6rem;
+      margin: 2.6rem auto 0;
+      max-width: 440px;
+      width: 100%;
+    }
+
+    input[type=email] {
+      flex: 1 1 auto;
+      min-width: 0;
+      padding: .85rem 1.05rem;
+      font: inherit;
+      font-size: .98rem;
+      color: var(--text-primary);
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      transition: border-color .2s, box-shadow .2s;
+    }
+
+    input[type=email]::placeholder {
+      color: var(--text-muted)
+    }
+
+    input[type=email]:focus {
+      outline: none;
+      border-color: var(--red-mid);
+      box-shadow: 0 0 0 3px rgba(196, 18, 47, .18);
+    }
+
+    button {
+      flex: 0 0 auto;
+      padding: .85rem 1.4rem;
+      font: inherit;
+      font-weight: 700;
+      font-size: .95rem;
+      color: #fff;
+      cursor: pointer;
+      background: linear-gradient(120deg, var(--red-mid), var(--red-bright));
+      border: none;
+      border-radius: 12px;
+      box-shadow: 0 6px 20px -6px var(--red-glow);
+      transition: transform .15s, box-shadow .2s, opacity .2s;
+      white-space: nowrap;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 10px 28px -8px var(--red-glow)
+    }
+
+    button:active {
+      transform: translateY(0)
+    }
+
+    button:disabled {
+      opacity: .6;
+      cursor: not-allowed;
+      transform: none
+    }
+
+    button:focus-visible,
+    input:focus-visible {
+      outline: 2px solid var(--red-bright);
+      outline-offset: 2px
+    }
+
+    .msg {
+      min-height: 1.2em;
+      margin: 1rem auto 0;
+      font-size: .9rem;
+      color: var(--text-secondary);
+    }
+
+    .msg.ok {
+      color: var(--cyan)
+    }
+
+    .msg.err {
+      color: var(--red-bright)
+    }
+
+    .note {
+      margin: .9rem auto 0;
+      font-size: .8rem;
+      color: var(--text-muted)
+    }
+
+    footer {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 1;
+      padding: 1.4rem;
+      text-align: center;
+      font-size: .78rem;
+      color: var(--text-muted);
+    }
+
+    footer a {
+      color: var(--text-secondary);
+      text-decoration: none;
+      border-bottom: 1px solid var(--border-subtle)
+    }
+
+    footer a:hover {
+      color: var(--text-primary)
+    }
+
+    @keyframes pulse {
+      0% {
+        box-shadow: 0 0 0 0 var(--red-glow)
+      }
+
+      70% {
+        box-shadow: 0 0 0 10px rgba(220, 20, 60, 0)
+      }
+
+      100% {
+        box-shadow: 0 0 0 0 rgba(220, 20, 60, 0)
+      }
+    }
+
+    @keyframes rise {
+      from {
+        opacity: 0;
+        transform: translateY(14px)
+      }
+
+      to {
+        opacity: 1;
+        transform: none
+      }
+    }
+
+    @media (max-width:480px) {
+      form {
+        flex-direction: column
+      }
+
+      button {
+        width: 100%
+      }
+    }
+
+    @media (prefers-reduced-motion:reduce) {
+      * {
+        animation: none !important;
+        transition: none !important
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <main>
+    <span class="wordmark">
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <polygon points="16,2 29,30 16,23 3,30" fill="#e8163c" />
+      </svg>
+      pointe<span class="dot">.</span>dev
+    </span>
+
+    <div>
+      <span class="badge"><span class="pulse"></span>En construction</span>
+    </div>
+
+    <h1>Vos tâches répétitives, <span class="accent">déléguées</span> à une IA sur mesure.</h1>
+
+    <p class="lead">
+      pointe.dev conçoit des collaborateurs IA taillés pour votre activité : ils prennent en
+      charge vos workflows répétitifs pendant que vous gardez le pilotage. On peaufine les
+      derniers détails — laissez votre email, on vous prévient au lancement.
+    </p>
+
+    <form id="notify" novalidate>
+      <input type="email" id="email" name="email" required autocomplete="email" placeholder="vous@entreprise.com"
+        aria-label="Votre adresse email">
+      <button type="submit" id="submit">M'avertir</button>
+    </form>
+    <p class="msg" id="msg" role="status" aria-live="polite"></p>
+    <p class="note">Pas de spam — un seul message, le jour du lancement.</p>
+  </main>
+
+  <footer>© <span id="year"></span> pointe.dev — Automatisation pointue.</footer>
+
+  <script>
+    // ── Wire the waitlist here ────────────────────────────────────────────────
+    // Point this at any endpoint accepting { "email": "..." } as JSON POST —
+    // e.g. an n8n webhook: https://n8n.pointe.dev/webhook/waitlist
+    // Leave empty to run in demo mode (shows success without sending).
+    const NOTIFY_ENDPOINT = "https://n8n.pointe.dev/webhook/waitlist";
+    // ──────────────────────────────────────────────────────────────────────────
+
+    document.getElementById("year").textContent = new Date().getFullYear();
+
+    const form = document.getElementById("notify");
+    const email = document.getElementById("email");
+    const submit = document.getElementById("submit");
+    const msg = document.getElementById("msg");
+    const STORAGE_KEY = "pointe_waitlist_done";
+
+    const valid = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
+
+    function succeed() {
+      form.style.display = "none";
+      msg.className = "msg ok";
+      msg.textContent = "C'est noté — on vous écrit dès qu'on est prêts. Merci !";
+      try { localStorage.setItem(STORAGE_KEY, "1"); } catch (_) { }
+    }
+
+    if (localStorage.getItem(STORAGE_KEY)) succeed();
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      msg.className = "msg";
+      if (!valid(email.value)) {
+        msg.className = "msg err";
+        msg.textContent = "Merci d'entrer une adresse email valide.";
+        email.focus();
+        return;
+      }
+      submit.disabled = true;
+      const prev = submit.textContent;
+      submit.textContent = "Envoi…";
+      try {
+        if (NOTIFY_ENDPOINT) {
+          const r = await fetch(NOTIFY_ENDPOINT, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email: email.value.trim(), source: "coming-soon" }),
+          });
+          if (!r.ok) throw new Error("bad status " + r.status);
+        }
+        succeed();
+      } catch (_) {
+        submit.disabled = false;
+        submit.textContent = prev;
+        msg.className = "msg err";
+        msg.textContent = "Oups, un souci côté serveur. Réessayez dans un instant.";
+      }
+    });
+  </script>
+</body>
+
+</html>
