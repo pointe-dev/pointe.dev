@@ -112,6 +112,17 @@ impl N8nMcpConfig {
         parse_create_result(&text)
     }
 
+    /// Activates a workflow via the MCP `publish_workflow` tool (creates an active
+    /// version from the current draft). Goes through the MCP because the server can
+    /// only reach n8n on its internal alias — the public REST `/activate` gets
+    /// Cloudflare-challenged. Best-effort: returns `Err(String)` so a failed publish
+    /// is logged, not fatal (the workflow is already deployed).
+    pub async fn publish_workflow(&self, http: &reqwest::Client, workflow_id: &str) -> Result<(), String> {
+        self.call_tool(http, "publish_workflow", json!({ "workflowId": workflow_id }))
+            .await
+            .map(|_| ())
+    }
+
     /// Resolves a folder NAME (e.g. `N8N_TEST_FOLDER`) to the `(projectId, folderId)`
     /// `create_from_code` needs, via the MCP catalogue. Uses the first (personal)
     /// project and the exact-name folder match. Err on any lookup failure.
