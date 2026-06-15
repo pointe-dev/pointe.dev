@@ -95,7 +95,8 @@ impl N8nMcpConfig {
     }
 
     /// Creates a workflow from validated SDK `code` via `create_workflow_from_code`,
-    /// optionally inside a project/folder, and returns the new workflow id.
+    /// optionally inside a project/folder. Returns the new workflow id plus the MCP's
+    /// credential auto-assignment report (see [`CreateOutcome`]).
     pub async fn create_from_code(
         &self,
         http: &reqwest::Client,
@@ -104,7 +105,7 @@ impl N8nMcpConfig {
         description: &str,
         project_id: Option<&str>,
         folder_id: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> Result<CreateOutcome, String> {
         let mut args = json!({ "code": code, "name": name, "description": description });
         if let Some(p) = project_id { args["projectId"] = json!(p); }
         if let Some(f) = folder_id { args["folderId"] = json!(f); }
@@ -165,12 +166,62 @@ fn parse_validate_result(text: &str) -> Result<(), String> {
     Err(errs)
 }
 
-/// Pulls the new workflow id out of `create_workflow_from_code`'s JSON result text.
-fn parse_create_result(text: &str) -> Result<String, String> {
+/// Result of `create_workflow_from_code`: the new workflow id plus the MCP's
+/// credential auto-assignment report. The MCP auto-wires keychain credentials by
+/// type onto *service* nodes and **skips httpRequest** nodes (those stay manual).
+/// We surface both so the deploy step can tell the owner exactly what self-wired
+/// and what's left to configure by hand before the workflow can be published.
+#[derive(Debug, Default, Clone)]
+pub struct CreateOutcome {
+    pub id: String,
+    /// Human-readable summaries of credentials the MCP auto-assigned (`node → cred`).
+    pub auto_assigned: Vec<String>,
+    /// The MCP's manual-config note (e.g. "httpRequest must be configured manually"), if any.
+    pub note: Option<String>,
+}
+
+/// Pulls the new workflow id and credential report out of `create_workflow_from_code`'s
+/// JSON result text. The `autoAssignedCredentials` shape isn't pinned across MCP
+/// versions, so it's summarised defensively (array, object, or other → readable lines).
+fn parse_create_result(text: &str) -> Result<CreateOutcome, String> {
     let v: Value = serde_json::from_str(text)
         .map_err(|e| format!("create_from_code: unparseable result ({e}): {text}"))?;
-    v["workflowId"].as_str().map(str::to_string)
-        .ok_or_else(|| format!("create_from_code: no workflowId in result: {text}"))
+    let id = v["workflowId"].as_str().map(str::to_string)
+        .ok_or_else(|| format!("create_from_code: no workflowId in result: {text}"))?;
+    let auto_assigned = summarize_auto_assigned(&v["autoAssignedCredentials"]);
+    let note = v["note"].as_str().filter(|s| !s.is_empty()).map(str::to_string);
+    Ok(CreateOutcome { id, auto_assigned, note })
+}
+
+/// Turns the MCP's `autoAssignedCredentials` value into readable `node → credential`
+/// lines, tolerant of array / object / scalar shapes (falls back to raw JSON).
+fn summarize_auto_assigned(v: &Value) -> Vec<String> {
+    match v {
+        Value::Array(items) => items.iter().map(summarize_cred_entry).collect(),
+        Value::Object(map) => map.iter()
+            .map(|(node, c)| format!("{node} → {}", cred_label(c)))
+            .collect(),
+        Value::Null => Vec::new(),
+        other => vec![other.to_string()],
+    }
+}
+
+fn summarize_cred_entry(v: &Value) -> String {
+    let cred = cred_label(v);
+    match v["nodeName"].as_str().or_else(|| v["node"].as_str()) {
+        Some(node) => format!("{node} → {cred}"),
+        None => cred,
+    }
+}
+
+fn cred_label(v: &Value) -> String {
+    v["credentialName"].as_str()
+        .or_else(|| v["credentialType"].as_str())
+        .or_else(|| v["name"].as_str())
+        .or_else(|| v["type"].as_str())
+        .or_else(|| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| v.to_string())
 }
 
 /// Pulls the JSON-RPC result text out of the server's reply. The server answers
@@ -314,11 +365,34 @@ mod tests {
 
     #[test]
     fn parse_create_result_extracts_workflow_id() {
-        assert_eq!(
-            parse_create_result(r#"{"workflowId":"abc123","name":"x","nodeCount":2}"#).unwrap(),
-            "abc123"
-        );
+        let ok = parse_create_result(r#"{"workflowId":"abc123","name":"x","nodeCount":2}"#).unwrap();
+        assert_eq!(ok.id, "abc123");
+        assert!(ok.auto_assigned.is_empty());
+        assert!(ok.note.is_none());
         assert!(parse_create_result(r#"{"name":"x"}"#).is_err());
+    }
+
+    #[test]
+    fn parse_create_result_captures_credential_report() {
+        let text = r#"{"workflowId":"wf1",
+            "autoAssignedCredentials":[{"nodeName":"Send Slack","credentialName":"Slack account"}],
+            "note":"httpRequest nodes must be configured manually"}"#;
+        let out = parse_create_result(text).unwrap();
+        assert_eq!(out.id, "wf1");
+        assert_eq!(out.auto_assigned, vec!["Send Slack → Slack account"]);
+        assert_eq!(out.note.as_deref(), Some("httpRequest nodes must be configured manually"));
+    }
+
+    #[test]
+    fn summarize_auto_assigned_tolerates_object_and_scalar_shapes() {
+        // object keyed by node name
+        let obj = serde_json::json!({"Postgres": {"credentialType": "postgres"}});
+        assert_eq!(summarize_auto_assigned(&obj), vec!["Postgres → postgres"]);
+        // bare strings
+        let arr = serde_json::json!(["gmailOAuth2"]);
+        assert_eq!(summarize_auto_assigned(&arr), vec!["gmailOAuth2"]);
+        // absent
+        assert!(summarize_auto_assigned(&Value::Null).is_empty());
     }
 
     #[test]

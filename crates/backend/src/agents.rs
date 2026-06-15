@@ -74,6 +74,19 @@ get_node_types to confirm each node's real type id, its typeVersion, and the exa
 parameter names it accepts. Never invent a type or a parameter. (get_sdk_reference is \
 available for deeper SDK lookups, but the API you need is specified right here.)\n\
 \n\
+Node selection priority — do this for EVERY external service or app the flow touches:\n\
+1. FIRST search for a dedicated node: call search_nodes / get_suggested_nodes with the \
+service name (e.g. 'twitter'/'x', 'slack', 'rss', 'postgres', 'google sheets', 'notion'). \
+If a first-party node exists for that service, USE IT — not httpRequest.\n\
+2. Fall back to 'n8n-nodes-base.httpRequest' ONLY when no dedicated node exists for the \
+service (a generic/internal REST API, a niche SaaS with no n8n node).\n\
+Why this is mandatory, not stylistic: a dedicated node carries a TYPED credential the \
+platform auto-wires from the keychain, which lets the deployed workflow activate \
+automatically. A generic httpRequest uses 'genericCredentialType' auth that CANNOT be \
+auto-wired — it must be configured by hand and BLOCKS auto-activation. So defaulting to \
+httpRequest when a real node exists silently breaks the deploy. Reach for httpRequest \
+only as a genuine last resort, and never to call a service that has its own node.\n\
+\n\
 === n8n Workflow SDK — use EXACTLY this API (no other functions exist) ===\n\
 Import everything you use from '@n8n/workflow-sdk':\n\
   import { workflow, node, trigger, expr, newCredential, placeholder, ifElse, \
@@ -117,6 +130,9 @@ config: { name: 'Create Invoice', parameters: { method: 'POST', url: \
   export default workflow('shopify-invoice', 'Shopify → Accounting Invoice')\n\
     .add(onOrder)\n\
     .to(createInvoice);\n\
+(Note: 'On New Order' uses the dedicated shopifyTrigger node; 'Create Invoice' uses \
+httpRequest ONLY because that accounting SaaS has no dedicated n8n node. Apply the node \
+selection priority above — dedicated node when one exists, httpRequest only when it doesn't.)\n\
 === end SDK ===\n\
 \n\
 Rules:\n\
@@ -2109,10 +2125,24 @@ async fn deploy_from_code(
             .unwrap_or_else(|| ctx.client_need.clone())
             .chars().take(250).collect();
 
-        let id = mcp.create_from_code(&app.http, &code, &name, &description, project_id, folder_id)
+        let outcome = mcp.create_from_code(&app.http, &code, &name, &description, project_id, folder_id)
             .await
             .map_err(|e| AgentError(format!("create_from_code ({}/{}): {e}", i + 1, codes.len())))?;
+        let id = outcome.id;
         tracing::info!("[deploy] workflow created id={id} ({}/{}) via SDK code", i + 1, codes.len());
+        // P2: surface what the MCP auto-wired vs. what stays manual. n8n refuses to
+        // publish a node with a missing required credential, so anything not listed
+        // here (esp. httpRequest nodes — always skipped) blocks auto-activation until
+        // the owner configures it by hand.
+        if outcome.auto_assigned.is_empty() {
+            tracing::info!("[deploy] {name}: no credentials auto-assigned by MCP");
+        } else {
+            tracing::info!("[deploy] {name}: auto-wired {} credential(s): {}",
+                outcome.auto_assigned.len(), outcome.auto_assigned.join(", "));
+        }
+        if let Some(note) = &outcome.note {
+            tracing::warn!("[deploy] {name}: manual credential config still required — {note}");
+        }
         ids[i] = Some(id);
     }
 
