@@ -2109,10 +2109,24 @@ async fn deploy_from_code(
             .unwrap_or_else(|| ctx.client_need.clone())
             .chars().take(250).collect();
 
-        let id = mcp.create_from_code(&app.http, &code, &name, &description, project_id, folder_id)
+        let outcome = mcp.create_from_code(&app.http, &code, &name, &description, project_id, folder_id)
             .await
             .map_err(|e| AgentError(format!("create_from_code ({}/{}): {e}", i + 1, codes.len())))?;
+        let id = outcome.id;
         tracing::info!("[deploy] workflow created id={id} ({}/{}) via SDK code", i + 1, codes.len());
+        // P2: surface what the MCP auto-wired vs. what stays manual. n8n refuses to
+        // publish a node with a missing required credential, so anything not listed
+        // here (esp. httpRequest nodes — always skipped) blocks auto-activation until
+        // the owner configures it by hand.
+        if outcome.auto_assigned.is_empty() {
+            tracing::info!("[deploy] {name}: no credentials auto-assigned by MCP");
+        } else {
+            tracing::info!("[deploy] {name}: auto-wired {} credential(s): {}",
+                outcome.auto_assigned.len(), outcome.auto_assigned.join(", "));
+        }
+        if let Some(note) = &outcome.note {
+            tracing::warn!("[deploy] {name}: manual credential config still required — {note}");
+        }
         ids[i] = Some(id);
     }
 
