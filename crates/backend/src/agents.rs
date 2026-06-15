@@ -74,6 +74,19 @@ get_node_types to confirm each node's real type id, its typeVersion, and the exa
 parameter names it accepts. Never invent a type or a parameter. (get_sdk_reference is \
 available for deeper SDK lookups, but the API you need is specified right here.)\n\
 \n\
+Node selection priority — do this for EVERY external service or app the flow touches:\n\
+1. FIRST search for a dedicated node: call search_nodes / get_suggested_nodes with the \
+service name (e.g. 'twitter'/'x', 'slack', 'rss', 'postgres', 'google sheets', 'notion'). \
+If a first-party node exists for that service, USE IT — not httpRequest.\n\
+2. Fall back to 'n8n-nodes-base.httpRequest' ONLY when no dedicated node exists for the \
+service (a generic/internal REST API, a niche SaaS with no n8n node).\n\
+Why this is mandatory, not stylistic: a dedicated node carries a TYPED credential the \
+platform auto-wires from the keychain, which lets the deployed workflow activate \
+automatically. A generic httpRequest uses 'genericCredentialType' auth that CANNOT be \
+auto-wired — it must be configured by hand and BLOCKS auto-activation. So defaulting to \
+httpRequest when a real node exists silently breaks the deploy. Reach for httpRequest \
+only as a genuine last resort, and never to call a service that has its own node.\n\
+\n\
 === n8n Workflow SDK — use EXACTLY this API (no other functions exist) ===\n\
 Import everything you use from '@n8n/workflow-sdk':\n\
   import { workflow, node, trigger, expr, newCredential, placeholder, ifElse, \
@@ -117,6 +130,9 @@ config: { name: 'Create Invoice', parameters: { method: 'POST', url: \
   export default workflow('shopify-invoice', 'Shopify → Accounting Invoice')\n\
     .add(onOrder)\n\
     .to(createInvoice);\n\
+(Note: 'On New Order' uses the dedicated shopifyTrigger node; 'Create Invoice' uses \
+httpRequest ONLY because that accounting SaaS has no dedicated n8n node. Apply the node \
+selection priority above — dedicated node when one exists, httpRequest only when it doesn't.)\n\
 === end SDK ===\n\
 \n\
 Rules:\n\
