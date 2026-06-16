@@ -1,15 +1,25 @@
 use leptos::*;
 use gloo_net::http::Request;
 use serde::Deserialize;
+use crate::components::delivery::DeliveryItem;
 
 /// Admin dossier overview. Token-gated against `/api/admin/dossiers` (the same
-/// admin secret as the ingest route). Read-only for v1: lists every prospect
-/// pipeline with its stage, the visitor's email, and the published pitch price.
+/// admin secret as the ingest route). Lists every prospect pipeline with its
+/// stage, email, pitch price, and the delivery/credential status (incl. the
+/// Managed worklist) so the team sees what still blocks each client.
 
 #[derive(Deserialize, Clone)]
 struct DossierPitch {
     price_eur_cents: u32,
     manual_quote: bool,
+}
+
+#[derive(Deserialize, Clone, Default)]
+struct DeliverySummary {
+    #[serde(default)] total: usize,
+    #[serde(default)] managed: usize,
+    #[serde(default)] oauth: usize,
+    #[serde(default)] api_key: usize,
 }
 
 #[derive(Deserialize, Clone)]
@@ -26,6 +36,12 @@ struct Dossier {
     updated_at: String,
     #[serde(default)]
     pitch: Option<DossierPitch>,
+    #[serde(default)]
+    workflow_url: Option<String>,
+    #[serde(default)]
+    delivery: Vec<DeliveryItem>,
+    #[serde(default)]
+    delivery_summary: DeliverySummary,
 }
 
 const TOKEN_KEY: &str = "pointe_admin_token";
@@ -162,8 +178,16 @@ pub fn Admin() -> impl IntoView {
                     }.into_view(),
                     Some(Ok(dossiers)) => {
                         let count = dossiers.len();
+                        let managed_items: usize = dossiers.iter().map(|d| d.delivery_summary.managed).sum();
+                        let managed_dossiers = dossiers.iter().filter(|d| d.delivery_summary.managed > 0).count();
                         view! {
                             <div class="space-y-3">
+                                {(managed_items > 0).then(|| view! {
+                                    <div class="glass-red rounded-2xl p-4 text-sm text-red-200">
+                                        <span class="font-semibold">{format!("🛠 {managed_items} intégration(s) sur mesure à traiter")}</span>
+                                        {format!(" — sur {managed_dossiers} dossier(s) (niveau Managé, nécessite votre intervention).")}
+                                    </div>
+                                })}
                                 <p class="text-xs text-muted">{format!("{count} dossier(s)")}</p>
                                 {dossiers.into_iter().map(|d| dossier_card(d, token, load)).collect_view()}
                             </div>
@@ -186,6 +210,10 @@ fn dossier_card(
     let updated = d.updated_at.split('T').next().unwrap_or(&d.updated_at).to_string();
     let pid = d.pipeline_id.clone();
     let email = d.email.unwrap_or_else(|| "— pas d'email".to_string());
+    let ds = d.delivery_summary.clone();
+    let managed_services: Vec<String> = d.delivery.iter().filter(|i| i.tier == "managed").map(|i| i.service.clone()).collect();
+    let oauth_services: Vec<String> = d.delivery.iter().filter(|i| i.auth == "oauth2").map(|i| i.service.clone()).collect();
+    let workflow_url = d.workflow_url.clone();
 
     // Re-run the dossier's pipeline (recovers a stuck/failed one). Confirmed
     // because publish re-emails the client; on success we refresh the list.
@@ -232,9 +260,30 @@ fn dossier_card(
                 <p class="text-xs text-muted leading-relaxed">{s}</p>
             })}
 
+            // Delivery / credential status — what still blocks this client going live.
+            {(ds.total > 0).then(|| view! {
+                <div class="border-t border-subtle pt-3 space-y-1.5">
+                    <div class="flex items-center gap-3 text-xs flex-wrap">
+                        <span class="text-cyan">{format!("🔑 {} clé(s) API", ds.api_key)}</span>
+                        <span class="text-amber-300">{format!("OAuth {}", ds.oauth)}</span>
+                        <span class="text-red-300">{format!("🛠 {} sur mesure", ds.managed)}</span>
+                    </div>
+                    {(!managed_services.is_empty()).then(|| view! {
+                        <p class="text-xs text-red-300/90">{format!("À intégrer (équipe) : {}", managed_services.join(", "))}</p>
+                    })}
+                    {(!oauth_services.is_empty()).then(|| view! {
+                        <p class="text-xs text-amber-300/80">{format!("OAuth à autoriser : {}", oauth_services.join(", "))}</p>
+                    })}
+                </div>
+            })}
+
             <div class="flex items-center justify-between gap-3 flex-wrap pt-1 text-xs text-muted">
                 <span>{email}</span>
                 <div class="flex items-center gap-3">
+                    {workflow_url.map(|url| view! {
+                        <a href=url target="_blank" rel="noopener noreferrer"
+                           class="font-medium text-cyan hover:text-cyan-mid transition-colors">"workflow ↗"</a>
+                    })}
                     <button
                         on:click=respawn
                         class="text-xs font-medium px-2.5 py-1 rounded-md border border-red-500/40 bg-red-500/10 text-red-300 hover:bg-red-500/20 hover:border-red-400 transition-colors"
