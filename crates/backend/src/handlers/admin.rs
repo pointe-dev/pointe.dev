@@ -14,6 +14,7 @@ use serde::Serialize;
 use std::sync::Arc;
 use uuid::Uuid;
 use crate::state::AppState;
+use crate::handlers::pipeline::{delivery_dtos, DeliveryItemDto};
 
 /// Reads the admin secret from `Authorization: Bearer …` or the `x-admin-token`
 /// header. Mirrors `handlers::ingest` so both admin routes accept the same auth.
@@ -51,6 +52,30 @@ pub struct DossierPitch {
     pub solution_desc: String,
 }
 
+/// At-a-glance count of what stands between a dossier and a live workflow — the
+/// admin's ops scan. `managed` is the human-integration worklist.
+#[derive(Serialize, Default, PartialEq, Debug)]
+pub struct DeliverySummary {
+    pub total: usize,
+    /// Bespoke / no-API integrations needing our hands (the Managed worklist).
+    pub managed: usize,
+    /// OAuth services awaiting consent (guided).
+    pub oauth: usize,
+    /// API-key services the client can self-serve.
+    pub api_key: usize,
+}
+
+/// Tallies a delivery plan into the ops summary.
+pub fn summarize_delivery(items: &[DeliveryItemDto]) -> DeliverySummary {
+    let mut s = DeliverySummary { total: items.len(), ..Default::default() };
+    for it in items {
+        if it.tier == "managed" { s.managed += 1; }
+        else if it.auth == "oauth2" { s.oauth += 1; }
+        else if it.provisionable { s.api_key += 1; }
+    }
+    s
+}
+
 #[derive(Serialize)]
 pub struct Dossier {
     pub pipeline_id: String,
@@ -64,6 +89,11 @@ pub struct Dossier {
     pub stage_reason: Option<String>,
     pub updated_at: String,
     pub pitch: Option<DossierPitch>,
+    /// Live n8n workflow link, once deployed.
+    pub workflow_url: Option<String>,
+    /// Per-integration delivery/credential status (the c.1 checklist).
+    pub delivery: Vec<DeliveryItemDto>,
+    pub delivery_summary: DeliverySummary,
 }
 
 /// GET /api/admin/dossiers — every pipeline, newest first, with its pitch + email.
@@ -89,6 +119,9 @@ pub async fn dossiers(
         let stage_label = sv.get("stage").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
         let stage_reason = sv.get("reason").and_then(|v| v.as_str()).map(String::from);
 
+        let delivery = delivery_dtos(ctx.design_summary.as_deref().unwrap_or(""));
+        let delivery_summary = summarize_delivery(&delivery);
+
         out.push(Dossier {
             pipeline_id: id.to_string(),
             session_id: ctx.session_id,
@@ -99,6 +132,9 @@ pub async fn dossiers(
             stage_reason,
             updated_at: updated_at.to_rfc3339(),
             pitch,
+            workflow_url: ctx.n8n_workflow_url,
+            delivery,
+            delivery_summary,
         });
     }
     Ok(Json(out))
@@ -129,4 +165,25 @@ pub async fn respawn(
 
     tracing::info!("[admin] respawned dossier {pid} → new pipeline {new_id}");
     Ok(Json(serde_json::json!({ "pipeline_id": new_id.to_string() })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summarize_delivery_tallies_each_bucket() {
+        // Notion (api_key), Gmail (oauth2), bespoke CRM (managed) + Webhook (none)
+        let items = delivery_dtos("Blocs clés: Notion, Gmail, CRM maison, Webhook");
+        let s = summarize_delivery(&items);
+        assert_eq!(s.total, 4);
+        assert_eq!(s.managed, 1, "the bespoke CRM is the Managed worklist item");
+        assert_eq!(s.oauth, 1, "Gmail needs consent");
+        assert_eq!(s.api_key, 1, "Notion is self-serve");
+    }
+
+    #[test]
+    fn summarize_delivery_empty_when_no_design() {
+        assert_eq!(summarize_delivery(&delivery_dtos("")), DeliverySummary::default());
+    }
 }
