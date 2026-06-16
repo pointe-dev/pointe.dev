@@ -9,6 +9,7 @@ pub mod agents;
 pub mod capabilities;
 pub mod cloudflare;
 pub mod config;
+pub mod credentials;
 pub mod email;
 pub mod embeddings;
 pub mod handlers;
