@@ -736,6 +736,11 @@ quote. Keep it tight: readable in 30 seconds.";
         feedback,
     );
 
+    // Capability catalog gates the blueprint: the designer may only present an
+    // integration as turnkey if it is cataloged Native/HTTP; bespoke/no-API systems
+    // are forced into [Managed] and flagged. Kills empty promises by construction.
+    let caps = crate::capabilities::designer_brief();
+
     // Grounded path: the blueprint is anchored in nodes that actually exist (and
     // honestly flags services with no dedicated node) so the post-payment build
     // matches the quote. NOTE: the designer is PRE-payment, so MCP calls add
@@ -743,16 +748,19 @@ quote. Keep it tight: readable in 30 seconds.";
     // latency matters. Higher token cap leaves room for the catalogue tool blocks.
     let outline = match &app.n8n_mcp {
         Some(mcp) => {
-            let system = format!("{SYSTEM}\n\n{DESIGNER_MCP_ADDENDUM}");
+            let system = format!("{SYSTEM}\n\n{caps}\n\n{DESIGNER_MCP_ADDENDUM}");
             anthropic_grounded_call(
                 &app.http, &app.anthropic_key, mcp, SONNET, 2500,
                 &system, &user, DESIGNER_GROUNDING_TOOLS,
             ).await
         }
-        None => anthropic_call(
-            &app.http, &app.anthropic_key, SONNET, 1200,
-            SYSTEM, &user,
-        ).await,
+        None => {
+            let system = format!("{SYSTEM}\n\n{caps}");
+            anthropic_call(
+                &app.http, &app.anthropic_key, SONNET, 1200,
+                &system, &user,
+            ).await
+        }
     }.map_err(|e| AgentError(format!("designer: {e}")))?;
 
     if outline.trim().is_empty() {
@@ -792,6 +800,11 @@ that requires approval).\n\
 3. Scope sanity — drastically over- or under-engineered for the need.\n\
 4. Honesty — a real prerequisite the client must provide (credentials, paid \
 account, API approval) is silently assumed instead of flagged.\n\
+5. Promesse réaliste — an integration is presented as turnkey/automatic when it is \
+actually [Managed] (bespoke/internal system, or a service with no public API) \
+without being flagged as requiring our setup; or a service is tagged [Native] that \
+plainly has no dedicated node. Check each integration against the capability \
+catalog below. Missing per-integration delivery tags → reject.\n\
 \n\
 Do NOT review JSON, exact node-type strings, or parameters — there is NO workflow \
 yet; that is the builder's job post-payment. Judge the BLUEPRINT: does it fully and \
@@ -805,6 +818,9 @@ specific enough for the designer to fix in one pass. Output only the verdict.";
         ctx.research_output.as_deref().unwrap_or(""),
         design,
     );
+
+    // The critic enforces tier-honesty against the same catalog the designer saw.
+    let system = format!("{SYSTEM}\n\n{}", crate::capabilities::designer_brief());
 
     #[derive(serde::Deserialize)]
     struct Verdict { approved: bool, feedback: Option<String> }
@@ -828,7 +844,7 @@ specific enough for the designer to fix in one pass. Output only the verdict.";
     // retries; after MAX_DESIGN_ATTEMPTS the human takes over the proposal.
     let input = match anthropic_tool_call(
         &app.http, &app.anthropic_key, SONNET, 1024,
-        SYSTEM, serde_json::Value::String(user),
+        &system, serde_json::Value::String(user),
         "submit_review", "Submit your review verdict for the solution design.",
         schema,
     ).await {
