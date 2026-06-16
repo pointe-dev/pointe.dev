@@ -63,6 +63,50 @@ pub async fn status(
     }))
 }
 
+#[derive(Serialize)]
+pub struct DeliveryItemDto {
+    pub service: String,
+    /// "native" | "http" | "managed"
+    pub tier: String,
+    /// "none" | "api_key" | "oauth2"
+    pub auth: String,
+    /// true when the client can self-serve provision it now (API-key + wired type).
+    pub provisionable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prerequisite: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct DeliveryResponse {
+    pub pipeline_id: String,
+    pub items: Vec<DeliveryItemDto>,
+}
+
+/// GET /api/pipeline/:id/delivery
+/// The post-payment delivery checklist (c.1): the design's integrations, each
+/// classified by the capability catalog with its provisioning path.
+pub async fn delivery(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<DeliveryResponse>, StatusCode> {
+    use crate::capabilities::{Auth, Tier};
+    let guard = state.pipelines.0.read().await;
+    let record = guard.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    let design = record.ctx.design_summary.as_deref().unwrap_or("");
+
+    let items = crate::capabilities::delivery_plan(design).into_iter().map(|d| {
+        DeliveryItemDto {
+            service: d.service,
+            tier: match d.tier { Tier::Native => "native", Tier::Http => "http", Tier::Managed => "managed" }.to_string(),
+            auth: match d.auth { Auth::None => "none", Auth::ApiKey => "api_key", Auth::OAuth2 => "oauth2" }.to_string(),
+            provisionable: d.auth == Auth::ApiKey && d.cred_type.is_some(),
+            prerequisite: d.auth.prerequisite().map(str::to_string),
+        }
+    }).collect();
+
+    Ok(Json(DeliveryResponse { pipeline_id: id.to_string(), items }))
+}
+
 /// POST /api/pipeline/:id/resume
 /// Called by the Stripe webhook after payment is confirmed.
 pub async fn resume(

@@ -135,6 +135,49 @@ pub fn classify(name: &str) -> Option<&'static Capability> {
     CATALOG.iter().find(|c| c.aliases.iter().any(|a| n.contains(a)))
 }
 
+/// One integration the client must set up, classified deterministically by the
+/// catalog (we do NOT trust the LLM's own tags here — the catalog is the source of
+/// truth). Drives the post-payment delivery checklist (c.1).
+#[derive(Debug, Clone)]
+pub struct DeliveryItem {
+    /// Canonical service name (catalog) or the raw token for an uncataloged one.
+    pub service: String,
+    pub tier: Tier,
+    pub auth: Auth,
+    /// n8n credential type for in-app provisioning, if wired.
+    pub cred_type: Option<&'static str>,
+}
+
+/// Build the delivery plan from a design blueprint: parse its "Blocs clés:" line
+/// (the distinct services), then classify each via the catalog. Uncataloged →
+/// Managed (human setup). De-duplicated, order preserved. Returns empty if no
+/// "Blocs clés" line is present.
+pub fn delivery_plan(design_summary: &str) -> Vec<DeliveryItem> {
+    let line = design_summary.lines().find(|l| {
+        let t = l.trim_start().to_lowercase();
+        t.starts_with("blocs cl") || t.starts_with("blocs-cl") || t.starts_with("key blocks")
+    });
+    let Some(line) = line else { return Vec::new() };
+    let after = line.splitn(2, ':').nth(1).unwrap_or("");
+
+    let mut out: Vec<DeliveryItem> = Vec::new();
+    for raw in after.split(',') {
+        // strip any "[Tier]" tag or "(...)" the LLM may have appended
+        let token = raw.split('[').next().unwrap_or(raw)
+            .split('(').next().unwrap_or(raw)
+            .trim();
+        if token.is_empty() { continue; }
+        let item = match classify(token) {
+            Some(c) => DeliveryItem { service: c.service.to_string(), tier: c.tier, auth: c.auth, cred_type: c.cred_type },
+            None => DeliveryItem { service: token.to_string(), tier: Tier::Managed, auth: Auth::None, cred_type: None },
+        };
+        if !out.iter().any(|d| d.service.eq_ignore_ascii_case(&item.service)) {
+            out.push(item);
+        }
+    }
+    out
+}
+
 /// The catalog brief injected into the designer's system prompt. Pins the tier
 /// vocabulary, lists the confidently-deliverable services, and forces honest
 /// per-integration tagging + the rule for long-tail/bespoke services.
@@ -198,6 +241,32 @@ mod tests {
         assert!(brief.contains("Slack") && brief.contains("HubSpot"));
         assert!(brief.contains("[Native]") && brief.contains("[HTTP]") && brief.contains("[Managed]"));
         assert!(brief.contains("Livraison par intégration"));
+    }
+
+    #[test]
+    fn delivery_plan_parses_and_classifies_blocs_cles() {
+        let design = "1. Trigger — Webhook\n\
+            2. Save — CRM maison\n\
+            Blocs clés: Webhook, CRM maison, Gmail, Notion\n\
+            Points de vigilance: aucun";
+        let plan = delivery_plan(design);
+        let by = |s: &str| plan.iter().find(|d| d.service == s).cloned();
+        assert_eq!(by("Gmail").unwrap().auth, Auth::OAuth2);
+        assert_eq!(by("Notion").unwrap().cred_type, Some("notionApi"));
+        // uncataloged bespoke CRM → Managed
+        assert_eq!(plan.iter().find(|d| d.service.contains("CRM")).unwrap().tier, Tier::Managed);
+    }
+
+    #[test]
+    fn delivery_plan_dedups_and_strips_tags() {
+        let plan = delivery_plan("Blocs clés: Slack [Native] (OAuth), Slack, slack");
+        assert_eq!(plan.len(), 1, "Slack must appear once");
+        assert_eq!(plan[0].service, "Slack");
+    }
+
+    #[test]
+    fn delivery_plan_empty_without_blocs_line() {
+        assert!(delivery_plan("just some steps, no key blocks line").is_empty());
     }
 
     #[test]
