@@ -714,6 +714,7 @@ async fn main() {
         .route("/api/pipeline/start", post(handlers::pipeline::start))
         .route("/api/pipeline/:id", get(handlers::pipeline::status))
         .route("/api/pipeline/:id/resume", post(handlers::pipeline::resume))
+        .route("/api/pipeline/:id/delivery", get(handlers::pipeline::delivery))
         .route("/api/credentials/provision", post(handlers::credentials::provision))
         .route("/api/admin/ingest", post(handlers::ingest::ingest))
         .route("/api/admin/dossiers", get(handlers::admin::dossiers))
