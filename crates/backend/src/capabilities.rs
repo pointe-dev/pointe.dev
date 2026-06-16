@@ -86,8 +86,8 @@ pub struct Capability {
 /// under-promise (safe), never over-promise.
 pub const CATALOG: &[Capability] = &[
     // ── Messaging / email ──────────────────────────────────────────────────────
-    Capability { service: "Slack",            aliases: &["slack"],                         tier: Tier::Native, auth: Auth::OAuth2, cred_type: None },
-    Capability { service: "Gmail",            aliases: &["gmail", "google mail"],          tier: Tier::Native, auth: Auth::OAuth2, cred_type: None },
+    Capability { service: "Slack",            aliases: &["slack"],                         tier: Tier::Native, auth: Auth::OAuth2, cred_type: Some("slackOAuth2Api") },
+    Capability { service: "Gmail",            aliases: &["gmail", "google mail"],          tier: Tier::Native, auth: Auth::OAuth2, cred_type: Some("gmailOAuth2") },
     Capability { service: "Microsoft Outlook",aliases: &["outlook", "office 365 mail"],    tier: Tier::Native, auth: Auth::OAuth2, cred_type: None },
     Capability { service: "Telegram",         aliases: &["telegram"],                      tier: Tier::Native, auth: Auth::ApiKey, cred_type: Some("telegramApi") },
     Capability { service: "Discord",          aliases: &["discord"],                       tier: Tier::Native, auth: Auth::ApiKey, cred_type: None },
@@ -95,12 +95,12 @@ pub const CATALOG: &[Capability] = &[
     Capability { service: "SendGrid",         aliases: &["sendgrid"],                      tier: Tier::Native, auth: Auth::ApiKey, cred_type: Some("sendGridApi") },
     Capability { service: "Mailchimp",        aliases: &["mailchimp"],                     tier: Tier::Native, auth: Auth::OAuth2, cred_type: None },
     // ── CRM / sales ─────────────────────────────────────────────────────────────
-    Capability { service: "HubSpot",          aliases: &["hubspot"],                       tier: Tier::Native, auth: Auth::OAuth2, cred_type: None },
+    Capability { service: "HubSpot",          aliases: &["hubspot"],                       tier: Tier::Native, auth: Auth::OAuth2, cred_type: Some("hubspotOAuth2Api") },
     Capability { service: "Pipedrive",        aliases: &["pipedrive"],                     tier: Tier::Native, auth: Auth::ApiKey, cred_type: Some("pipedriveApi") },
-    Capability { service: "Salesforce",       aliases: &["salesforce"],                    tier: Tier::Native, auth: Auth::OAuth2, cred_type: None },
+    Capability { service: "Salesforce",       aliases: &["salesforce"],                    tier: Tier::Native, auth: Auth::OAuth2, cred_type: Some("salesforceOAuth2Api") },
     Capability { service: "Zoho CRM",         aliases: &["zoho", "zoho crm"],              tier: Tier::Native, auth: Auth::OAuth2, cred_type: None },
     // ── Productivity / data ─────────────────────────────────────────────────────
-    Capability { service: "Google Sheets",    aliases: &["google sheets", "sheets", "gsheet"], tier: Tier::Native, auth: Auth::OAuth2, cred_type: None },
+    Capability { service: "Google Sheets",    aliases: &["google sheets", "sheets", "gsheet"], tier: Tier::Native, auth: Auth::OAuth2, cred_type: Some("googleSheetsOAuth2Api") },
     Capability { service: "Google Drive",     aliases: &["google drive", "gdrive", "drive"],   tier: Tier::Native, auth: Auth::OAuth2, cred_type: None },
     Capability { service: "Google Calendar",  aliases: &["google calendar", "gcal", "calendar"], tier: Tier::Native, auth: Auth::OAuth2, cred_type: None },
     Capability { service: "Notion",           aliases: &["notion"],                        tier: Tier::Native, auth: Auth::ApiKey, cred_type: Some("notionApi") },
