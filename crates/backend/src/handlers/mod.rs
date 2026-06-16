@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod client;
 pub mod credentials;
 pub mod health;
 pub mod ingest;
