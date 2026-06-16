@@ -154,13 +154,18 @@ pub fn Hero(on_chat_click: impl Fn() + 'static) -> impl IntoView {
                 </div>
 
                 {/* CTA */}
-                <div class="flex justify-center animate-fade-up stagger-3">
+                <div class="flex flex-col items-center gap-3 animate-fade-up stagger-3">
                     <button
                         on:click=move |_| (on_chat_click)()
                         class="btn-primary w-full max-w-xs"
                     >
                         {move || t(lang.get(), "hero.cta")}
                     </button>
+                    {/* Demo-proof microcopy — the moat competitors can't show */}
+                    <p class="text-sm text-muted max-w-md mx-auto flex items-center gap-2 justify-center">
+                        <span class="text-cyan">"✓"</span>
+                        {move || t(lang.get(), "hero.proof")}
+                    </p>
                 </div>
             </div>
         </section>

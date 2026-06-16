@@ -12,10 +12,13 @@ pub fn t(lang: Lang, key: &str) -> &'static str {
         // Hero
         (Fr,"hero.badge")=>"Agence IA", (En,"hero.badge")=>"AI Agency", (De,"hero.badge")=>"KI-Agentur",
         (Fr,"hero.line1")=>"Déléguez ce qui vous pèse.", (En,"hero.line1")=>"Delegate what weighs you down.", (De,"hero.line1")=>"Delegieren Sie, was Sie belastet.",
-        (Fr,"hero.sub")=>"Confiez vos tâches répétitives à des collaborateurs IA conçus sur mesure. Vous gardez le pilotage, ils font le reste — et vous gagnez du temps comme de l'argent.",
-        (En,"hero.sub")=>"Hand your repetitive work to custom-built AI collaborators. You stay in control, they do the rest — saving you time and money.",
-        (De,"hero.sub")=>"Übergeben Sie wiederkehrende Aufgaben maßgeschneiderten KI-Mitarbeitern. Sie behalten die Kontrolle, sie erledigen den Rest — und sparen Zeit und Geld.",
-        (Fr,"hero.cta")=>"Lancez-vous →", (En,"hero.cta")=>"Let's go →", (De,"hero.cta")=>"Loslegen →",
+        (Fr,"hero.sub")=>"Décrivez votre activité : devant vous, on conçoit et on déploie un vrai workflow d'automatisation. Pas une promesse — une démonstration en direct.",
+        (En,"hero.sub")=>"Describe your business: we design and deploy a real automation workflow, live, in front of you. Not a promise — a live demonstration.",
+        (De,"hero.sub")=>"Beschreiben Sie Ihr Geschäft: Wir entwerfen und implementieren einen echten Automatisierungs-Workflow — live, vor Ihren Augen. Kein Versprechen, sondern eine Live-Demonstration.",
+        (Fr,"hero.cta")=>"Voir la démo en direct →", (En,"hero.cta")=>"Watch the live demo →", (De,"hero.cta")=>"Live-Demo ansehen →",
+        (Fr,"hero.proof")=>"Construit et déployé en direct — vous repartez avec une automatisation qui tourne, pas un devis.",
+        (En,"hero.proof")=>"Built and deployed live — you leave with a running automation, not a quote.",
+        (De,"hero.proof")=>"Live erstellt und bereitgestellt — Sie gehen mit einer laufenden Automatisierung, nicht mit einem Angebot.",
         (Fr,"hero.alt")=>"Voir les solutions", (En,"hero.alt")=>"See solutions", (De,"hero.alt")=>"Lösungen ansehen",
         (Fr,"hero.scroll")=>"Défiler", (En,"hero.scroll")=>"Scroll", (De,"hero.scroll")=>"Scrollen",
         // Hero use cases
