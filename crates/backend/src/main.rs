@@ -716,6 +716,7 @@ async fn main() {
         .route("/api/pipeline/:id/resume", post(handlers::pipeline::resume))
         .route("/api/pipeline/:id/delivery", get(handlers::pipeline::delivery))
         .route("/api/credentials/provision", post(handlers::credentials::provision))
+        .route("/api/client/workflows", get(handlers::client::workflows))
         .route("/api/admin/ingest", post(handlers::ingest::ingest))
         .route("/api/admin/dossiers", get(handlers::admin::dossiers))
         .route("/api/admin/dossiers/:id/respawn", post(handlers::admin::respawn))
@@ -724,6 +725,7 @@ async fn main() {
         .route("/mcp", post(handlers::mcp::handle))
         .route("/merci", get(serve_index))
         .route("/admin", get(serve_index))
+        .route("/espace", get(serve_index))
         .with_state(state)
         .nest(
             "/pkg",

@@ -82,19 +82,11 @@ pub struct DeliveryResponse {
     pub items: Vec<DeliveryItemDto>,
 }
 
-/// GET /api/pipeline/:id/delivery
-/// The post-payment delivery checklist (c.1): the design's integrations, each
-/// classified by the capability catalog with its provisioning path.
-pub async fn delivery(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<Uuid>,
-) -> Result<Json<DeliveryResponse>, StatusCode> {
+/// Maps a design blueprint to delivery-checklist DTOs via the capability catalog.
+/// Shared by the per-pipeline endpoint and the client dashboard.
+pub fn delivery_dtos(design_summary: &str) -> Vec<DeliveryItemDto> {
     use crate::capabilities::{Auth, Tier};
-    let guard = state.pipelines.0.read().await;
-    let record = guard.get(&id).ok_or(StatusCode::NOT_FOUND)?;
-    let design = record.ctx.design_summary.as_deref().unwrap_or("");
-
-    let items = crate::capabilities::delivery_plan(design).into_iter().map(|d| {
+    crate::capabilities::delivery_plan(design_summary).into_iter().map(|d| {
         DeliveryItemDto {
             service: d.service,
             tier: match d.tier { Tier::Native => "native", Tier::Http => "http", Tier::Managed => "managed" }.to_string(),
@@ -102,9 +94,47 @@ pub async fn delivery(
             provisionable: d.auth == Auth::ApiKey && d.cred_type.is_some(),
             prerequisite: d.auth.prerequisite().map(str::to_string),
         }
-    }).collect();
+    }).collect()
+}
 
+/// GET /api/pipeline/:id/delivery
+/// The post-payment delivery checklist (c.1): the design's integrations, each
+/// classified by the capability catalog with its provisioning path.
+pub async fn delivery(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<DeliveryResponse>, StatusCode> {
+    let guard = state.pipelines.0.read().await;
+    let record = guard.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+    let items = delivery_dtos(record.ctx.design_summary.as_deref().unwrap_or(""));
     Ok(Json(DeliveryResponse { pipeline_id: id.to_string(), items }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delivery_dtos_classifies_and_flags_provisionable() {
+        let design = "Blocs clés: Notion, Gmail, CRM maison\nPoints de vigilance: aucun";
+        let dtos = delivery_dtos(design);
+        let notion = dtos.iter().find(|d| d.service == "Notion").unwrap();
+        assert_eq!(notion.tier, "native");
+        assert_eq!(notion.auth, "api_key");
+        assert!(notion.provisionable, "Notion (api_key + cred_type) is provisionable");
+
+        let gmail = dtos.iter().find(|d| d.service == "Gmail").unwrap();
+        assert_eq!(gmail.auth, "oauth2");
+        assert!(!gmail.provisionable, "OAuth services are not self-serve-provisionable");
+
+        let crm = dtos.iter().find(|d| d.service.contains("CRM")).unwrap();
+        assert_eq!(crm.tier, "managed");
+    }
+
+    #[test]
+    fn delivery_dtos_empty_without_design() {
+        assert!(delivery_dtos("").is_empty());
+    }
 }
 
 /// POST /api/pipeline/:id/resume

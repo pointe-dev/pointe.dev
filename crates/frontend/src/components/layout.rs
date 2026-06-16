@@ -6,6 +6,7 @@ use crate::pages::home::Home;
 use crate::pages::chat::Chat;
 use crate::pages::merci::Merci;
 use crate::pages::admin::Admin;
+use crate::pages::espace::Espace;
 use crate::i18n::{Lang, t};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -14,6 +15,7 @@ enum Page {
     Chat,
     Merci,
     Admin,
+    Espace,
 }
 
 fn detect_initial_lang() -> Lang {
@@ -33,6 +35,7 @@ fn detect_initial_page() -> Page {
         .map(|p| {
             if p.starts_with("/merci") { Page::Merci }
             else if p.starts_with("/admin") { Page::Admin }
+            else if p.starts_with("/espace") { Page::Espace }
             else { Page::Home }
         })
         .unwrap_or(Page::Home)
@@ -177,6 +180,11 @@ pub fn Layout() -> impl IntoView {
                     Page::Admin => view! {
                         <div class="page-transition">
                             <Admin />
+                        </div>
+                    }.into_view(),
+                    Page::Espace => view! {
+                        <div class="page-transition">
+                            <Espace />
                         </div>
                     }.into_view(),
                 }}
