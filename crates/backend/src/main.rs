@@ -17,6 +17,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::EnvFilter;
 
 mod agents;
+mod capabilities;
 mod cloudflare;
 mod config;
 mod email;
