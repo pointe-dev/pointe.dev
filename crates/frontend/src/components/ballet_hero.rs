@@ -16,11 +16,44 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
 use three_d::{
-    vec3, ClearState, ColorMaterial, CpuMesh, Gm, InstancedMesh, Instances, Mat4, Srgba, Viewport,
+    vec3, ClearState, ColorMaterial, CpuMesh, Gm, InnerSpace, InstancedMesh, Instances, Mat4,
+    Quaternion, Srgba, Vec3, Viewport,
 };
 
 /// Number of particles tracing the curve.
 const POINTS: usize = 240;
+
+/// The 12 vertices + edges of a regular icosahedron (edge length 2), scaled to
+/// enclose the pirouette curve. This is the "hidden complexity" cage under the grace.
+fn icosahedron(scale: f32) -> (Vec<Vec3>, Vec<(usize, usize)>) {
+    let p = (1.0 + 5f32.sqrt()) / 2.0; // golden ratio
+    let raw = [
+        (-1.0, p, 0.0), (1.0, p, 0.0), (-1.0, -p, 0.0), (1.0, -p, 0.0),
+        (0.0, -1.0, p), (0.0, 1.0, p), (0.0, -1.0, -p), (0.0, 1.0, -p),
+        (p, 0.0, -1.0), (p, 0.0, 1.0), (-p, 0.0, -1.0), (-p, 0.0, 1.0),
+    ];
+    let verts: Vec<Vec3> = raw.iter().map(|&(x, y, z)| vec3(x, y, z) * scale).collect();
+    // Edges = vertex pairs at the icosahedron edge length (²=4 before scaling).
+    let target = 4.0 * scale * scale;
+    let mut edges = Vec::new();
+    for i in 0..verts.len() {
+        for j in (i + 1)..verts.len() {
+            if ((verts[i] - verts[j]).magnitude2() - target).abs() < 1e-3 * scale * scale {
+                edges.push((i, j));
+            }
+        }
+    }
+    (verts, edges)
+}
+
+/// Transform a unit cylinder (along +X, range [0,1], radius 1) into the segment
+/// p1→p2 with the given radius.
+fn edge_transform(p1: Vec3, p2: Vec3, radius: f32) -> Mat4 {
+    let dir = p2 - p1;
+    let len = dir.magnitude();
+    let rot: Mat4 = Quaternion::from_arc(vec3(1.0, 0.0, 0.0), dir.normalize(), None).into();
+    Mat4::from_translation(p1) * rot * Mat4::from_nonuniform_scale(len, radius, radius)
+}
 
 fn request_animation_frame(cb: &Closure<dyn FnMut(f64)>) {
     let _ = web_sys::window()
@@ -98,6 +131,22 @@ pub fn BalletHero() -> impl IntoView {
             ColorMaterial::default(),
         );
 
+        // Hidden-complexity cage: a faint icosahedral wireframe (edges = thin
+        // instanced cylinders) enclosing the curve, counter-rotating behind it.
+        let (verts, edges) = icosahedron(1.4);
+        let cage_instances = Instances {
+            transformations: edges
+                .iter()
+                .map(|&(a, b)| edge_transform(verts[a], verts[b], 0.012))
+                .collect(),
+            colors: Some(vec![Srgba::new(44, 78, 74, 255); edges.len()]),
+            ..Default::default()
+        };
+        let mut cage = Gm::new(
+            InstancedMesh::new(&context, &cage_instances, &CpuMesh::cylinder(6)),
+            ColorMaterial::default(),
+        );
+
         let mut camera = three_d::Camera::new_perspective(
             Viewport::new_at_origo(1, 1),
             vec3(0.0, 1.2, 6.5),
@@ -144,12 +193,13 @@ pub fn BalletHero() -> impl IntoView {
             let viewport = Viewport::new_at_origo(w, h);
             camera.set_viewport(viewport);
 
-            // Slow rotation = grace; lift on the Y axis breathes like a plié.
+            // Grace turns one way; the hidden mechanism counter-rotates, slower.
             particles.set_transformation(Mat4::from_angle_y(three_d::Rad(time * 0.35)));
+            cage.set_transformation(Mat4::from_angle_y(three_d::Rad(time * -0.18)));
 
             three_d::RenderTarget::screen(&context, w, h)
                 .clear(ClearState::color_and_depth(0.0, 0.0, 0.0, 0.0, 1.0))
-                .render(&camera, &particles, &[]);
+                .render(&camera, (&cage).into_iter().chain(&particles), &[]);
 
             request_animation_frame(cb2.borrow().as_ref().unwrap());
         }) as Box<dyn FnMut(f64)>));
