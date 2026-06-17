@@ -702,6 +702,19 @@ async fn main() {
         db,
     });
 
+    // Re-drive pipelines that were mid-flight when the process last stopped.
+    // hydrate() restored their state from Postgres; spawn() resumes execution from
+    // their current stage. Paused (AwaitingPayment) and terminal stages are skipped.
+    {
+        let resumable = state.pipelines.resumable_ids().await;
+        if !resumable.is_empty() {
+            tracing::info!("[pipeline] re-spawning {} in-flight pipeline(s) after restart", resumable.len());
+            for id in resumable {
+                pipeline::spawn(id, state.pipelines.clone(), state.clone());
+            }
+        }
+    }
+
     let app = Router::new()
         .route("/api/health", get(handlers::health::health_check))
         .route("/api/services", get(handlers::services::get_services))

@@ -50,6 +50,23 @@ pub enum PipelineStage {
     Failed { reason: String },
 }
 
+impl PipelineStage {
+    /// Whether a pipeline at this stage should be re-driven by `spawn()` after a
+    /// process restart. True for stages the `run()` state machine actively advances;
+    /// false for terminal stages (Live/SavedForHuman/Failed) and for AwaitingPayment,
+    /// which is paused on purpose — it resumes only via the Stripe webhook, never on
+    /// boot (re-spawning it would be a harmless no-op but is semantically wrong).
+    pub fn is_resumable(&self) -> bool {
+        !matches!(
+            self,
+            PipelineStage::AwaitingPayment
+                | PipelineStage::Live
+                | PipelineStage::SavedForHuman { .. }
+                | PipelineStage::Failed { .. }
+        )
+    }
+}
+
 /// One sub-flow in a decomposed automation: a self-contained n8n workflow of ≤8
 /// nodes that the builder can construct reliably. Produced by run_decomposer when
 /// a tunnel is too large to fit a single workflow; chained to its neighbours
@@ -211,6 +228,19 @@ impl PipelineStore {
             }
             Err(e) => tracing::warn!("[pipeline] hydrate failed: {e}"),
         }
+    }
+
+    /// IDs of pipelines currently at a resumable (active, non-terminal, non-paused)
+    /// stage. Used at boot to re-`spawn()` pipelines that were mid-flight when the
+    /// process last stopped — `hydrate()` restores their state, this drives them on.
+    pub async fn resumable_ids(&self) -> Vec<Uuid> {
+        self.0
+            .read()
+            .await
+            .values()
+            .filter(|r| r.stage.is_resumable())
+            .map(|r| r.id)
+            .collect()
     }
 
     /// Write-through upsert, called after the in-memory mutation with the lock
@@ -507,6 +537,53 @@ mod tests {
     }
 
     // ── Postgres persistence (gated on TEST_DATABASE_URL, skipped otherwise) ──
+    #[test]
+    fn is_resumable_covers_active_and_skips_terminal_and_paused() {
+        // Active stages the run() loop advances → must resume on restart.
+        for s in [
+            PipelineStage::Qualifying,
+            PipelineStage::Researching,
+            PipelineStage::Designing,
+            PipelineStage::DesignValidating,
+            PipelineStage::Decomposing,
+            PipelineStage::Building,
+            PipelineStage::Validating,
+            PipelineStage::Pricing,
+            PipelineStage::PricingValidating,
+            PipelineStage::Deploying,
+        ] {
+            assert!(s.is_resumable(), "{s:?} should be resumable");
+        }
+        // Paused (resumes only via Stripe webhook) + terminal → must NOT resume.
+        for s in [
+            PipelineStage::AwaitingPayment,
+            PipelineStage::Live,
+            PipelineStage::SavedForHuman { reason: "r".into() },
+            PipelineStage::Failed { reason: "r".into() },
+        ] {
+            assert!(!s.is_resumable(), "{s:?} should NOT be resumable");
+        }
+    }
+
+    #[tokio::test]
+    async fn resumable_ids_returns_only_in_flight_pipelines() {
+        let store = PipelineStore::new(); // in-memory, no DB needed
+
+        let building = store.create("s1".into(), "need".into(), None).await;
+        store.advance(building, PipelineStage::Building, store.get_ctx(building).await.unwrap()).await;
+
+        let awaiting = store.create("s2".into(), "need".into(), None).await;
+        store.advance(awaiting, PipelineStage::AwaitingPayment, store.get_ctx(awaiting).await.unwrap()).await;
+
+        let live = store.create("s3".into(), "need".into(), None).await;
+        store.advance(live, PipelineStage::Live, store.get_ctx(live).await.unwrap()).await;
+
+        let ids = store.resumable_ids().await;
+        assert!(ids.contains(&building), "Building pipeline must be resumable");
+        assert!(!ids.contains(&awaiting), "AwaitingPayment must be skipped (webhook resumes it)");
+        assert!(!ids.contains(&live), "Live (terminal) must be skipped");
+    }
+
     // Run locally with: TEST_DATABASE_URL=postgres://… cargo test -p backend
     async fn test_pool() -> Option<sqlx::PgPool> {
         let url = std::env::var("TEST_DATABASE_URL").ok()?;
