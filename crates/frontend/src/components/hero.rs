@@ -9,6 +9,9 @@ pub fn Hero(on_chat_click: impl Fn() + 'static) -> impl IntoView {
     view! {
         <section class="hero-ambient min-h-screen relative flex flex-col justify-center items-center text-center py-20 px-6 overflow-hidden bg-deep">
 
+            {/* three-d ballet animation — grace en pointe over the deep field */}
+            <crate::components::ballet_hero::BalletHero/>
+
             {/* Ballet silhouettes — red ambient blurs */}
             <div class="absolute inset-0 pointer-events-none select-none overflow-hidden">
                 <div
