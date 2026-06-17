@@ -105,8 +105,21 @@ pub fn Layout() -> impl IntoView {
                     {/* Logo */}
                     <button
                         on:click=move |_| { active_page.set(Page::Home); scroll_to_top(); }
-                        class="text-2xl font-bold tracking-tight"
+                        class="text-2xl font-bold tracking-tight flex items-center gap-2"
                     >
+                        {/* Red triangle mark — "en pointe" */}
+                        <svg viewBox="0 0 64 64" width="22" height="22" aria-hidden="true" class="shrink-0">
+                            <defs>
+                                <linearGradient id="logoTri" x1="0" y1="0" x2="1" y2="1">
+                                    <stop offset="0%" stop-color="#ef4444"/>
+                                    <stop offset="100%" stop-color="#dc2626"/>
+                                </linearGradient>
+                            </defs>
+                            <path
+                                fill="url(#logoTri)"
+                                d="M30.27 8.9 a2 2 0 0 1 3.46 0 L55.7 47.2 a2 2 0 0 1 -1.73 3 H10.03 a2 2 0 0 1 -1.73 -3 Z"
+                            ></path>
+                        </svg>
                         <span class="text-gradient">"pointe"</span>
                         <span class="text-primary">"."</span>
                         <span class="text-primary">"dev"</span>
