@@ -1,17 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <defs>
-    <linearGradient id="red" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#ef4444"/>
-      <stop offset="100%" stop-color="#dc2626"/>
-    </linearGradient>
-  </defs>
-
-  <!-- pointe.dev mark: a red upward arrowhead ("en pointe").
-       Sharp apex on top, sides flaring out, concave notch at the base. -->
-  <path
-    fill="url(#red)"
-    stroke="url(#red)"
-    stroke-width="2"
-    stroke-linejoin="round"
-    d="M32 5 L46 53 L32 43 L18 53 Z"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- pointe.dev mark — the exact landing-page logo: a sharp crimson upward
+       arrowhead ("en pointe") with a shallow concave base. -->
+  <polygon points="16,2 29,30 16,23 3,30" fill="#e8163c"/>
 </svg>

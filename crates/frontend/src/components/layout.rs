@@ -107,21 +107,9 @@ pub fn Layout() -> impl IntoView {
                         on:click=move |_| { active_page.set(Page::Home); scroll_to_top(); }
                         class="text-2xl font-bold tracking-tight flex items-center gap-2"
                     >
-                        {/* Red upward arrowhead mark — "en pointe" */}
-                        <svg viewBox="0 0 64 64" width="22" height="22" aria-hidden="true" class="shrink-0">
-                            <defs>
-                                <linearGradient id="logoTri" x1="0" y1="0" x2="1" y2="1">
-                                    <stop offset="0%" stop-color="#ef4444"/>
-                                    <stop offset="100%" stop-color="#dc2626"/>
-                                </linearGradient>
-                            </defs>
-                            <path
-                                fill="url(#logoTri)"
-                                stroke="url(#logoTri)"
-                                stroke-width="2"
-                                stroke-linejoin="round"
-                                d="M32 5 L46 53 L32 43 L18 53 Z"
-                            ></path>
+                        {/* pointe.dev mark — exact landing-page crimson arrowhead */}
+                        <svg viewBox="0 0 32 32" width="20" height="20" aria-hidden="true" class="shrink-0">
+                            <polygon points="16,2 29,30 16,23 3,30" fill="#e8163c"></polygon>
                         </svg>
                         <span class="text-gradient">"pointe"</span>
                         <span class="text-primary">"."</span>
