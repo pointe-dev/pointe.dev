@@ -120,7 +120,7 @@ pub fn Layout() -> impl IntoView {
                                 stroke="url(#logoTri)"
                                 stroke-width="2"
                                 stroke-linejoin="round"
-                                d="M32 7 L55 51 L32 41 L9 51 Z"
+                                d="M32 5 L46 53 L32 43 L18 53 Z"
                             ></path>
                         </svg>
                         <span class="text-gradient">"pointe"</span>
