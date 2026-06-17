@@ -1,28 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#0d1420"/>
-      <stop offset="100%" stop-color="#080d14"/>
-    </linearGradient>
     <linearGradient id="red" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#ef4444"/>
       <stop offset="100%" stop-color="#dc2626"/>
     </linearGradient>
   </defs>
 
-  <!-- Rounded square background -->
-  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
-
-  <!-- Geometric "p" shape:
-       Vertical stem from y=12 to y=52, width 7px
-       Rounded bowl on the right: semicircle from y=12 to y=34 -->
-  <!-- Stem -->
-  <rect x="13" y="12" width="8" height="40" rx="4" fill="#f1f5f9"/>
-  <!-- Bowl (half-ellipse approximated by arc) -->
-  <path d="M21 13 Q42 13 42 24 Q42 35 21 35 L21 13Z" fill="#f1f5f9"/>
-
-  <!-- Cyan dot — accent, top right — "en pointe" -->
-  <circle cx="50" cy="14" r="6" fill="url(#red)"/>
-  <!-- Small inner highlight -->
-  <circle cx="48.5" cy="12.5" r="2" fill="rgba(255,255,255,0.35)"/>
+  <!-- pointe.dev mark: a red upward arrowhead ("en pointe").
+       Sharp apex on top, sides flaring out, concave notch at the base. -->
+  <path
+    fill="url(#red)"
+    stroke="url(#red)"
+    stroke-width="2"
+    stroke-linejoin="round"
+    d="M32 7 L55 51 L32 41 L9 51 Z"/>
 </svg>
