@@ -42,10 +42,16 @@ RUN cd crates/frontend && \
 # Use Debian instead of Alpine for libc compatibility
 FROM debian:bookworm-slim AS runtime
 
-# Install only runtime dependencies
+# Install only runtime dependencies.
+# `gringo` provides the `clingo` binary used by the abuse-guardrails engine; the
+# install is non-fatal (|| true) so a package-name change never breaks the build —
+# the engine degrades to "skipped" (fail-open) if clingo is absent.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 \
     ca-certificates && \
+    (apt-get install -y --no-install-recommends gringo \
+     || apt-get install -y --no-install-recommends clingo \
+     || echo "WARN: clingo not installed — guardrails will run in skipped mode") && \
     rm -rf /var/lib/apt/lists/*
 
 # Create app directory
