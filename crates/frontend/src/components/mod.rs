@@ -1,7 +1,6 @@
 pub mod layout;
 pub mod delivery;
 pub mod workflow_canvas;
-pub mod behind_curtain;
 pub mod theme;
 pub mod theme_toggle;
 pub mod contact_modal;

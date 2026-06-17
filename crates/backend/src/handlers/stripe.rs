@@ -111,28 +111,69 @@ pub async fn webhook(
     };
 
     let event_type = event["type"].as_str().unwrap_or("unknown");
-    tracing::info!("[stripe] webhook event={event_type}");
+    let session = &event["data"]["object"];
+    // Stripe Checkout payment_status: "paid" | "unpaid" | "no_payment_required".
+    // For card (synchronous) it's already "paid" on completed; for async methods
+    // (SEPA, Bancontact…) completed arrives "unpaid" and only async_payment_succeeded
+    // later flips it to "paid".
+    let payment_status = session["payment_status"].as_str().unwrap_or("");
+    tracing::info!("[stripe] webhook event={event_type} payment_status={payment_status}");
 
-    if event_type == "checkout.session.completed" {
-        let pipeline_id_str = event["data"]["object"]["metadata"]["pipeline_id"]
-            .as_str()
-            .unwrap_or("");
-
-        match pipeline_id_str.parse::<Uuid>() {
-            Ok(pipeline_id) => {
-                if state.pipelines.resume_after_payment(pipeline_id).await {
-                    tracing::info!("[stripe] payment confirmed — resuming pipeline {pipeline_id}");
-                    pipeline::spawn(pipeline_id, state.pipelines.clone(), state.clone());
-                } else {
-                    tracing::warn!("[stripe] pipeline {pipeline_id} not in AwaitingPayment state");
-                }
-            }
-            Err(_) => {
-                tracing::warn!("[stripe] invalid pipeline_id in metadata: '{pipeline_id_str}'");
+    match event_type {
+        // Synchronous (card) success — but only act once the money is actually captured.
+        // Guarding on payment_status prevents resuming a pipeline for an async method
+        // whose payment is still pending and could yet fail.
+        "checkout.session.completed" => {
+            if payment_status == "paid" {
+                resume_paid_pipeline(&state, session).await;
+            } else {
+                tracing::info!(
+                    "[stripe] checkout.session.completed but payment_status={payment_status} \
+                     — awaiting async_payment_succeeded before resuming"
+                );
             }
         }
+        // Async method (SEPA debit, etc.) cleared after the fact — this is the real
+        // money-confirmed signal for those flows.
+        "checkout.session.async_payment_succeeded" => {
+            resume_paid_pipeline(&state, session).await;
+        }
+        // Async payment bounced — leave the pipeline parked at AwaitingPayment so the
+        // client can retry; never advance delivery on a failed payment.
+        "checkout.session.async_payment_failed" => {
+            let pid = session["metadata"]["pipeline_id"].as_str().unwrap_or("");
+            tracing::warn!("[stripe] async payment FAILED for pipeline {pid} — pipeline left at AwaitingPayment");
+        }
+        // Abandoned session — nothing to do; pipeline stays parked.
+        "checkout.session.expired" => {
+            let pid = session["metadata"]["pipeline_id"].as_str().unwrap_or("");
+            tracing::info!("[stripe] checkout session expired for pipeline {pid}");
+        }
+        _ => {}
     }
 
     // Always return 200 so Stripe doesn't retry
     StatusCode::OK
+}
+
+/// Resume a pipeline parked at AwaitingPayment, given a verified Checkout Session
+/// object that carries `metadata.pipeline_id`. Idempotent: a duplicate webhook for
+/// an already-resumed pipeline is a no-op (resume_after_payment returns false).
+async fn resume_paid_pipeline(state: &Arc<AppState>, session: &serde_json::Value) {
+    let pipeline_id_str = session["metadata"]["pipeline_id"].as_str().unwrap_or("");
+
+    match pipeline_id_str.parse::<Uuid>() {
+        Ok(pipeline_id) => {
+            if state.pipelines.resume_after_payment(pipeline_id).await {
+                tracing::info!("[stripe] payment confirmed — resuming pipeline {pipeline_id}");
+                pipeline::spawn(pipeline_id, state.pipelines.clone(), state.clone());
+            } else {
+                // Either already resumed (duplicate event) or never in AwaitingPayment.
+                tracing::warn!("[stripe] pipeline {pipeline_id} not in AwaitingPayment state (already resumed?)");
+            }
+        }
+        Err(_) => {
+            tracing::warn!("[stripe] invalid pipeline_id in metadata: '{pipeline_id_str}'");
+        }
+    }
 }
