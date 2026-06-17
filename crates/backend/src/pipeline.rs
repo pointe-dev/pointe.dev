@@ -783,6 +783,26 @@ async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(),
             }
 
             PipelineStage::Deploying => {
+                // Abuse guardrails: evaluate the built workflow(s) BEFORE activating.
+                // A violation routes the pipeline to human review instead of going
+                // live — we never auto-activate a spam/flood/scraping workflow.
+                let to_check: Vec<serde_json::Value> = if !ctx.built_workflows.is_empty() {
+                    ctx.built_workflows.clone()
+                } else {
+                    ctx.workflow_json.clone().into_iter().collect()
+                };
+                let verdict = crate::guardrails::evaluate(&to_check);
+                if !verdict.allows_auto_deploy(crate::guardrails::fail_closed()) {
+                    let reason = verdict.reason();
+                    tracing::warn!("[pipeline {id}] guardrails blocked auto-deploy — {reason}");
+                    notify_owner_failure(app, id, &ctx.session_id, &reason).await;
+                    store.advance(id, PipelineStage::SavedForHuman { reason }, ctx).await;
+                    break;
+                }
+                if let crate::guardrails::Verdict::Skipped(why) = &verdict {
+                    tracing::warn!("[pipeline {id}] guardrails skipped, deploying anyway (fail-open): {why}");
+                }
+
                 agents::run_deploy(app, &mut ctx).await.map_err(|e| e.to_string())?;
                 store.advance(id, PipelineStage::Live, ctx).await;
                 break;

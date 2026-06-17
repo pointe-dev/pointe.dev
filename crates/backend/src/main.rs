@@ -23,6 +23,7 @@ mod config;
 mod credentials;
 mod email;
 mod embeddings;
+mod guardrails;
 mod handlers;
 mod langfuse;
 mod mcp;

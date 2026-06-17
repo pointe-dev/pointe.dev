@@ -12,6 +12,7 @@ pub mod config;
 pub mod credentials;
 pub mod email;
 pub mod embeddings;
+pub mod guardrails;
 pub mod handlers;
 pub mod langfuse;
 pub mod mcp;
