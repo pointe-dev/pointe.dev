@@ -1,6 +1,10 @@
 # Stage 1: Builder
-# This stage compiles both the frontend (WASM) and backend (Axum)
-FROM rust:latest AS builder
+# This stage compiles both the frontend (WASM) and backend (Axum).
+# Pinned to a bookworm base so the binary's glibc matches the bookworm-slim
+# runtime. `rust:latest` drifted to a newer Debian (glibc 2.39) and produced a
+# binary the runtime (glibc 2.36) could not load — keep builder + runtime on the
+# same Debian release.
+FROM rust:1-bookworm AS builder
 
 # Install system dependencies needed for compilation
 RUN apt-get update && apt-get install -y \
