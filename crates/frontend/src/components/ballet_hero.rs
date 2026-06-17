@@ -1,31 +1,27 @@
-//! BalletHero — a three-d (pure-Rust, WebGL2) hero animation embedded in a
-//! Leptos-owned <canvas>. The brand thesis made visible: classical dance *en
-//! pointe* — lightness and grace tracing a slow parametric "pirouette", over a
-//! deep dark field, above a faint counter-rotating icosahedral cage (the hidden
-//! complexity under the grace). Brand palette: red (#dc2626) lerped to teal.
+//! BalletHero — a discreet, mouse-reactive particle field rendered with three-d
+//! (pure-Rust, WebGL2) behind the hero content. A soft, slightly-blurred drift of
+//! brand-coloured points that gently parallaxes toward the cursor — present but
+//! never loud. Pause/resume freezes the drift; `prefers-reduced-motion` starts
+//! paused. The mouse parallax stays responsive.
 //!
 //! All WebGL / three-d code lives in the `scene` submodule, gated to
-//! `target_arch = "wasm32"`: glow's `from_webgl2_context` only exists on wasm, and
-//! the frontend only ever *runs* on wasm. On other targets (e.g. the host build
-//! used by `cargo test --all --lib`) the component still renders its markup, just
-//! without mounting the 3D scene.
+//! `target_arch = "wasm32"` (glow's `from_webgl2_context` only exists on wasm, and
+//! the frontend only ever *runs* on wasm). On other targets (e.g. the host build
+//! used by `cargo test --all --lib`) the component still renders its markup.
 
 use leptos::*;
 
 #[component]
 pub fn BalletHero() -> impl IntoView {
     let canvas_ref = create_node_ref::<html::Canvas>();
-
-    // `paused` is user-facing (button); it also starts true when the OS asks for
-    // reduced motion.
     let (paused, set_paused) = create_signal(prefers_reduced_motion());
 
-    // Mount the WebGL scene only on wasm; on the host build this is a no-op.
     #[cfg(target_arch = "wasm32")]
     scene::mount(canvas_ref, paused);
 
-    // Critical layout is inlined so the overlay + toggle render correctly even
-    // before the Tailwind CSS is rebuilt.
+    // Background layer: soft blur + reduced opacity push the field behind the
+    // content. pointer-events:none lets the page receive the mouse (the field
+    // listens on window). Inlined so it renders before the Tailwind CSS rebuilds.
     view! {
         <div
             class="ballet-hero-3d"
@@ -33,7 +29,7 @@ pub fn BalletHero() -> impl IntoView {
         >
             <canvas
                 node_ref=canvas_ref
-                style="width:100%; height:100%; display:block;"
+                style="width:100%; height:100%; display:block; filter:blur(1.4px); opacity:0.7;"
                 aria-hidden="true"
             ></canvas>
             <button
@@ -71,12 +67,12 @@ mod scene {
     use wasm_bindgen::JsCast;
 
     use three_d::{
-        vec3, ClearState, ColorMaterial, CpuMesh, Gm, InnerSpace, InstancedMesh, Instances, Mat4,
-        Quaternion, Srgba, Vec3, Viewport,
+        vec3, ClearState, ColorMaterial, CpuMesh, Gm, InstancedMesh, Instances, Mat4, Srgba, Vec3,
+        Viewport,
     };
 
-    /// Number of particles tracing the curve.
-    const POINTS: usize = 240;
+    /// Number of particles in the field.
+    const PARTICLES: usize = 460;
 
     fn request_animation_frame(cb: &Closure<dyn FnMut(f64)>) {
         let _ = web_sys::window()
@@ -84,61 +80,37 @@ mod scene {
             .request_animation_frame(cb.as_ref().unchecked_ref());
     }
 
-    /// Position on the 3D "pirouette" curve at parameter `u` ∈ [0,1).
-    /// A 3-petal rose swept on a graceful vertical sine — reads as an arabesque arc.
-    fn curve_point(u: f32) -> Vec3 {
-        let t = u * std::f32::consts::TAU;
-        let r = 2.0_f32;
-        let x = r * (3.0 * t).sin() * t.cos();
-        let z = r * (3.0 * t).sin() * t.sin();
-        let y = 1.4 * (2.0 * t).sin();
-        vec3(x, y, z)
+    /// Deterministic pseudo-random in [0,1) from an integer seed (no rng dep).
+    fn hash01(n: u32) -> f32 {
+        let mut x = n.wrapping_mul(0x9E37_79B1);
+        x ^= x >> 15;
+        x = x.wrapping_mul(0x85EB_CA77);
+        x ^= x >> 13;
+        (x & 0x00FF_FFFF) as f32 / 0x0100_0000 as f32
     }
 
-    /// Brand gradient red(#dc2626) → teal(#00e5cc) by `u` ∈ [0,1].
-    fn gradient(u: f32) -> Srgba {
-        let lerp = |a: f32, b: f32| (a + (b - a) * u) as u8;
-        Srgba::new(lerp(220.0, 0.0), lerp(38.0, 229.0), lerp(38.0, 204.0), 255)
+    /// Scattered rest position of particle `i` in a wide, shallow slab.
+    fn particle_pos(i: usize) -> Vec3 {
+        let i = i as u32;
+        let rx = hash01(i * 3) * 2.0 - 1.0;
+        let ry = hash01(i * 3 + 1) * 2.0 - 1.0;
+        let rz = hash01(i * 3 + 2) * 2.0 - 1.0;
+        vec3(rx * 5.2, ry * 3.2, rz * 2.4 - 0.4)
     }
 
-    /// The 12 vertices + edges of a regular icosahedron (edge length 2), scaled to
-    /// enclose the pirouette curve — the "hidden complexity" cage under the grace.
-    fn icosahedron(scale: f32) -> (Vec<Vec3>, Vec<(usize, usize)>) {
-        let p = (1.0 + 5f32.sqrt()) / 2.0; // golden ratio
-        let raw = [
-            (-1.0, p, 0.0), (1.0, p, 0.0), (-1.0, -p, 0.0), (1.0, -p, 0.0),
-            (0.0, -1.0, p), (0.0, 1.0, p), (0.0, -1.0, -p), (0.0, 1.0, -p),
-            (p, 0.0, -1.0), (p, 0.0, 1.0), (-p, 0.0, -1.0), (-p, 0.0, 1.0),
-        ];
-        let verts: Vec<Vec3> = raw.iter().map(|&(x, y, z)| vec3(x, y, z) * scale).collect();
-        let target = 4.0 * scale * scale;
-        let mut edges = Vec::new();
-        for i in 0..verts.len() {
-            for j in (i + 1)..verts.len() {
-                if ((verts[i] - verts[j]).magnitude2() - target).abs() < 1e-3 * scale * scale {
-                    edges.push((i, j));
-                }
-            }
-        }
-        (verts, edges)
+    /// Discreet brand colour for particle `i`: a dim red↔teal mix.
+    fn particle_color(i: usize) -> Srgba {
+        let t = hash01(i as u32 * 7 + 11);
+        let lerp = |a: f32, b: f32| (a + (b - a) * t) as u8;
+        // dim red (200,52,56) ↔ dim teal (32,168,150)
+        Srgba::new(lerp(200.0, 32.0), lerp(52.0, 168.0), lerp(56.0, 150.0), 255)
     }
 
-    /// Transform a unit cylinder (along +X, range [0,1], radius 1) into the segment
-    /// p1→p2 with the given radius.
-    fn edge_transform(p1: Vec3, p2: Vec3, radius: f32) -> Mat4 {
-        let dir = p2 - p1;
-        let len = dir.magnitude();
-        let rot: Mat4 = Quaternion::from_arc(vec3(1.0, 0.0, 0.0), dir.normalize(), None).into();
-        Mat4::from_translation(p1) * rot * Mat4::from_nonuniform_scale(len, radius, radius)
-    }
-
-    /// Build the WebGL2 context from the Leptos-owned canvas and run the render loop.
     pub fn mount(canvas_ref: NodeRef<html::Canvas>, paused: ReadSignal<bool>) {
         create_effect(move |_| {
             let Some(canvas) = canvas_ref.get() else { return };
             let canvas: web_sys::HtmlCanvasElement = (*canvas).clone();
 
-            // WebGL2 context (alpha so it overlays the existing hero background).
             let mut attrs = web_sys::WebGlContextAttributes::new();
             let _ = attrs.alpha(true).antialias(true);
             let gl = match canvas.get_context_with_context_options("webgl2", attrs.as_ref()) {
@@ -157,51 +129,56 @@ mod scene {
                 }
             };
 
-            // Particle curve: one instanced sphere mesh, gradient-coloured.
-            let transformations: Vec<Mat4> = (0..POINTS)
+            // The particle field: one instanced sphere mesh, dim brand colours,
+            // sizes varied slightly for depth.
+            let transformations: Vec<Mat4> = (0..PARTICLES)
                 .map(|i| {
-                    let u = i as f32 / POINTS as f32;
-                    Mat4::from_translation(curve_point(u)) * Mat4::from_scale(0.045)
+                    let s = 0.018 + hash01(i as u32 * 13 + 3) * 0.03;
+                    Mat4::from_translation(particle_pos(i)) * Mat4::from_scale(s)
                 })
                 .collect();
-            let colors: Vec<Srgba> = (0..POINTS).map(|i| gradient(i as f32 / POINTS as f32)).collect();
+            let colors: Vec<Srgba> = (0..PARTICLES).map(particle_color).collect();
             let instances = Instances {
                 transformations,
                 colors: Some(colors),
                 ..Default::default()
             };
-            let mut particles = Gm::new(
-                InstancedMesh::new(&context, &instances, &CpuMesh::sphere(8)),
-                ColorMaterial::default(),
-            );
-
-            // Hidden-complexity cage: faint icosahedral wireframe (edges = thin
-            // instanced cylinders) enclosing the curve, counter-rotating behind it.
-            let (verts, edges) = icosahedron(1.4);
-            let cage_instances = Instances {
-                transformations: edges
-                    .iter()
-                    .map(|&(a, b)| edge_transform(verts[a], verts[b], 0.012))
-                    .collect(),
-                colors: Some(vec![Srgba::new(44, 78, 74, 255); edges.len()]),
-                ..Default::default()
-            };
-            let mut cage = Gm::new(
-                InstancedMesh::new(&context, &cage_instances, &CpuMesh::cylinder(6)),
+            let mut field = Gm::new(
+                InstancedMesh::new(&context, &instances, &CpuMesh::sphere(6)),
                 ColorMaterial::default(),
             );
 
             let mut camera = three_d::Camera::new_perspective(
                 Viewport::new_at_origo(1, 1),
-                vec3(0.0, 1.2, 6.5),
+                vec3(0.0, 0.0, 7.0),
                 vec3(0.0, 0.0, 0.0),
                 vec3(0.0, 1.0, 0.0),
-                three_d::degrees(32.0),
+                three_d::degrees(34.0),
                 0.1,
                 100.0,
             );
 
-            // Animation clock that only advances while not paused.
+            // Raw mouse (normalised −1..1) updated by a window listener; smoothed
+            // each frame for a gentle, discreet parallax.
+            let mouse = Rc::new(Cell::new((0.0f32, 0.0f32)));
+            let smooth = Rc::new(Cell::new((0.0f32, 0.0f32)));
+            let mouse_cb = {
+                let mouse = mouse.clone();
+                Closure::wrap(Box::new(move |e: web_sys::MouseEvent| {
+                    let w = web_sys::window().unwrap();
+                    let iw = w.inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(1.0).max(1.0) as f32;
+                    let ih = w.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(1.0).max(1.0) as f32;
+                    let nx = (e.client_x() as f32 / iw) * 2.0 - 1.0;
+                    let ny = (e.client_y() as f32 / ih) * 2.0 - 1.0;
+                    mouse.set((nx, ny));
+                }) as Box<dyn FnMut(web_sys::MouseEvent)>)
+            };
+            let window = web_sys::window().unwrap();
+            let _ = window.add_event_listener_with_callback(
+                "mousemove",
+                mouse_cb.as_ref().unchecked_ref(),
+            );
+
             let clock = Rc::new(Cell::new(0.0_f64));
             let last = Rc::new(Cell::new(None::<f64>));
             let alive = Rc::new(Cell::new(true));
@@ -212,7 +189,7 @@ mod scene {
 
             *cb.borrow_mut() = Some(Closure::wrap(Box::new(move |ts: f64| {
                 if !alive2.get() {
-                    return; // unmounted — stop the loop, drop the closure.
+                    return;
                 }
 
                 let dt = last.get().map(|p| ts - p).unwrap_or(0.0);
@@ -221,6 +198,14 @@ mod scene {
                     clock.set(clock.get() + dt);
                 }
                 let time = (clock.get() / 1000.0) as f32;
+
+                // Ease the smoothed mouse toward the raw position (stays responsive
+                // even while paused — it's interaction, not animation).
+                let (mx, my) = mouse.get();
+                let (sx, sy) = smooth.get();
+                let sx = sx + (mx - sx) * 0.06;
+                let sy = sy + (my - sy) * 0.06;
+                smooth.set((sx, sy));
 
                 let dpr = web_sys::window().unwrap().device_pixel_ratio() as f32;
                 let w = (canvas.client_width().max(1) as f32 * dpr) as u32;
@@ -231,26 +216,41 @@ mod scene {
                 if canvas.height() != h {
                     canvas.set_height(h);
                 }
+
+                // Camera parallax: the field gently leans toward the cursor.
+                camera.set_view(
+                    vec3(sx * 1.3, -sy * 0.9, 7.0),
+                    vec3(sx * 0.4, -sy * 0.3, 0.0),
+                    vec3(0.0, 1.0, 0.0),
+                );
                 camera.set_viewport(Viewport::new_at_origo(w, h));
 
-                // Grace turns one way; the hidden mechanism counter-rotates, slower.
-                particles.set_transformation(Mat4::from_angle_y(three_d::Rad(time * 0.35)));
-                cage.set_transformation(Mat4::from_angle_y(three_d::Rad(time * -0.18)));
+                // A very slow drift gives life without drawing attention.
+                field.set_transformation(Mat4::from_angle_y(three_d::Rad(time * 0.05)));
 
                 three_d::RenderTarget::screen(&context, w, h)
                     .clear(ClearState::color_and_depth(0.0, 0.0, 0.0, 0.0, 1.0))
-                    .render(&camera, (&cage).into_iter().chain(&particles), &[]);
+                    .render(&camera, &field, &[]);
 
                 request_animation_frame(cb2.borrow().as_ref().unwrap());
             }) as Box<dyn FnMut(f64)>));
 
             request_animation_frame(cb.borrow().as_ref().unwrap());
 
-            // Keep the closure alive for the component's lifetime; stop on unmount.
+            // Keep closures alive for the component's lifetime; tear down on unmount.
+            // `mouse_cb` is moved into the cleanup so it stays alive until then,
+            // then the listener is removed and the closure dropped.
             let keep = cb.clone();
             on_cleanup(move || {
                 alive.set(false);
+                if let Some(w) = web_sys::window() {
+                    let _ = w.remove_event_listener_with_callback(
+                        "mousemove",
+                        mouse_cb.as_ref().unchecked_ref(),
+                    );
+                }
                 drop(keep.borrow_mut().take());
+                drop(mouse_cb);
             });
         });
     }
