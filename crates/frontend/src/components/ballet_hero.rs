@@ -72,7 +72,7 @@ mod scene {
     };
 
     /// Number of particles in the field.
-    const PARTICLES: usize = 460;
+    const PARTICLES: usize = 620;
 
     fn request_animation_frame(cb: &Closure<dyn FnMut(f64)>) {
         let _ = web_sys::window()
@@ -133,7 +133,8 @@ mod scene {
             // sizes varied slightly for depth.
             let transformations: Vec<Mat4> = (0..PARTICLES)
                 .map(|i| {
-                    let s = 0.018 + hash01(i as u32 * 13 + 3) * 0.03;
+                    // Tiny — reads as dots, not spheres.
+                    let s = 0.006 + hash01(i as u32 * 13 + 3) * 0.006;
                     Mat4::from_translation(particle_pos(i)) * Mat4::from_scale(s)
                 })
                 .collect();
