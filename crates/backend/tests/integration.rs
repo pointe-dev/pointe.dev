@@ -12,8 +12,8 @@
 //!   - Pipeline run() state machine (requires Anthropic API)
 
 use axum::{
-    extract::{ConnectInfo, Query, State},
-    http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
+    extract::State,
+    http::{HeaderName, HeaderValue, StatusCode},
     routing::{get, post},
     Json, Router,
 };
@@ -26,11 +26,21 @@ use backend_lib::{
     stripe::StripeClient,
 };
 use serde_json::{json, Value};
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 // ── Shared test helpers ────────────────────────────────────────────────────────
 
 fn test_state() -> Arc<AppState> {
+    state_with_stripe(StripeClient::new(
+        reqwest::Client::new(),
+        "sk_test_fake".to_string(),
+        "whsec_test_fake_webhook_secret".to_string(),
+    ))
+}
+
+/// Same as `test_state` but with a caller-supplied StripeClient — lets the live
+/// checkout test inject a real `sk_test_...` key without cloning AppState.
+fn state_with_stripe(stripe: StripeClient) -> Arc<AppState> {
     Arc::new(AppState {
         anthropic_key: "sk-fake-for-tests".to_string(),
         http: reqwest::Client::new(),
@@ -44,11 +54,7 @@ fn test_state() -> Arc<AppState> {
         embeddings: None,
         cloudflare: None,
         n8n_mcp: None,
-        stripe: Some(StripeClient::new(
-            reqwest::Client::new(),
-            "sk_test_fake".to_string(),
-            "whsec_test_fake_webhook_secret".to_string(),
-        )),
+        stripe: Some(stripe),
         session_secret: b"integration-test-secret".to_vec(),
         resend_api_key: None,
         base_url: "http://localhost".to_string(),
@@ -373,6 +379,243 @@ async fn stripe_webhook_wrong_signature_returns_400() {
         "wrong signature must be rejected with 400, got {}",
         resp.status_code()
     );
+}
+
+/// Signs a raw webhook body with the test webhook secret the way Stripe does, and
+/// returns the full `Stripe-Signature` header value (`t=<ts>,v1=<hmac>`).
+fn sign_stripe_webhook(raw: &[u8]) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+    let signed = format!("{ts}.{}", String::from_utf8_lossy(raw));
+    let mut mac = Hmac::<Sha256>::new_from_slice(b"whsec_test_fake_webhook_secret").unwrap();
+    mac.update(signed.as_bytes());
+    let sig = hex::encode(mac.finalize().into_bytes());
+    format!("t={ts},v1={sig}")
+}
+
+/// Seeds a pipeline parked at AwaitingPayment with a quoted price, exactly as the
+/// live pipeline leaves it just before the client pays.
+async fn seed_awaiting_payment(state: &std::sync::Arc<AppState>, session_id: &str) -> uuid::Uuid {
+    use backend_lib::pipeline::PipelineStage;
+    let pid = state.pipelines.create(
+        session_id.to_string(),
+        "Automatiser la facturation".to_string(),
+        Some("résumé qualif".to_string()),
+    ).await;
+    let mut ctx = state.pipelines.get_ctx(pid).await.unwrap();
+    ctx.price_quote = Some(1200);
+    ctx.price_monthly = Some(90);
+    state.pipelines.advance(pid, PipelineStage::AwaitingPayment, ctx).await;
+    pid
+}
+
+/// POSTs a signed body to the webhook route and returns the test response.
+async fn post_signed_webhook(server: &TestServer, raw: Vec<u8>) -> axum_test::TestResponse {
+    let sig_header = sign_stripe_webhook(&raw);
+    server
+        .post("/api/stripe/webhook")
+        .add_header("stripe-signature", sig_header.parse::<HeaderValue>().unwrap())
+        .bytes(raw.into())
+        .content_type("application/json")
+        .await
+}
+
+// ── POST /api/stripe/webhook — paid checkout resumes a pipeline (E2E seam) ──────
+//
+// The genuine encaissabilité seam: a *correctly-signed* `checkout.session.completed`
+// with `payment_status: "paid"`, carrying a pipeline's `metadata.pipeline_id`, must
+// move that pipeline out of AwaitingPayment (resume_after_payment → Decomposing,
+// then spawn() drives it on). Proves "payment captured → funnel advances", with a
+// real HMAC over the raw body.
+#[tokio::test]
+async fn stripe_webhook_paid_checkout_resumes_pipeline() {
+    use backend_lib::pipeline::PipelineStage;
+
+    let state = test_state();
+    let pid = seed_awaiting_payment(&state, "sess-pay").await;
+
+    let app = stripe_webhook_router(state.clone());
+    let server = TestServer::new(app).unwrap();
+
+    // Event Stripe POSTs after a card payment captures: completed + paid.
+    let payload = json!({
+        "type": "checkout.session.completed",
+        "data": { "object": {
+            "payment_status": "paid",
+            "metadata": { "pipeline_id": pid.to_string() }
+        } }
+    });
+    let raw = serde_json::to_vec(&payload).unwrap();
+
+    let resp = post_signed_webhook(&server, raw).await;
+    resp.assert_status_ok(); // Stripe always wants a 200 so it stops retrying.
+
+    // The pipeline must have left AwaitingPayment — payment captured advanced it.
+    let (stage, _) = state.pipelines.status(pid).await.expect("pipeline still exists");
+    assert_ne!(
+        stage, PipelineStage::AwaitingPayment,
+        "a paid checkout.session.completed must resume the pipeline, got {stage:?}"
+    );
+}
+
+// ── POST /api/stripe/webhook — async-PENDING completed must NOT resume ───────────
+//
+// Security/correctness guard: for async payment methods (SEPA, Bancontact…) Stripe
+// fires `checkout.session.completed` with `payment_status: "unpaid"` BEFORE the money
+// clears. We must NOT resume the pipeline yet — otherwise we'd deliver work for a
+// payment that could still fail. The pipeline must stay parked at AwaitingPayment.
+#[tokio::test]
+async fn stripe_webhook_completed_unpaid_does_not_resume() {
+    use backend_lib::pipeline::PipelineStage;
+
+    let state = test_state();
+    let pid = seed_awaiting_payment(&state, "sess-async-pending").await;
+
+    let app = stripe_webhook_router(state.clone());
+    let server = TestServer::new(app).unwrap();
+
+    let payload = json!({
+        "type": "checkout.session.completed",
+        "data": { "object": {
+            "payment_status": "unpaid",
+            "metadata": { "pipeline_id": pid.to_string() }
+        } }
+    });
+    let raw = serde_json::to_vec(&payload).unwrap();
+
+    let resp = post_signed_webhook(&server, raw).await;
+    resp.assert_status_ok(); // still 200 — we acknowledge but take no action.
+
+    // Must remain parked: no money captured yet.
+    let (stage, _) = state.pipelines.status(pid).await.expect("pipeline still exists");
+    assert_eq!(
+        stage, PipelineStage::AwaitingPayment,
+        "an unpaid (async-pending) completed event must NOT resume the pipeline, got {stage:?}"
+    );
+}
+
+// ── POST /api/stripe/webhook — async_payment_succeeded resumes the pipeline ──────
+//
+// The real money-confirmed signal for async methods. Once SEPA/etc. clears, Stripe
+// fires `checkout.session.async_payment_succeeded`; that must resume the pipeline that
+// the earlier (unpaid) `completed` deliberately left parked.
+#[tokio::test]
+async fn stripe_webhook_async_payment_succeeded_resumes_pipeline() {
+    use backend_lib::pipeline::PipelineStage;
+
+    let state = test_state();
+    let pid = seed_awaiting_payment(&state, "sess-async-ok").await;
+
+    let app = stripe_webhook_router(state.clone());
+    let server = TestServer::new(app).unwrap();
+
+    let payload = json!({
+        "type": "checkout.session.async_payment_succeeded",
+        "data": { "object": {
+            "payment_status": "paid",
+            "metadata": { "pipeline_id": pid.to_string() }
+        } }
+    });
+    let raw = serde_json::to_vec(&payload).unwrap();
+
+    let resp = post_signed_webhook(&server, raw).await;
+    resp.assert_status_ok();
+
+    let (stage, _) = state.pipelines.status(pid).await.expect("pipeline still exists");
+    assert_ne!(
+        stage, PipelineStage::AwaitingPayment,
+        "async_payment_succeeded must resume the pipeline, got {stage:?}"
+    );
+}
+
+// ── POST /api/stripe/webhook — async_payment_failed must NOT resume ─────────────
+//
+// A bounced async payment must never advance delivery. The pipeline stays parked at
+// AwaitingPayment so the client can retry — we don't deliver work that wasn't paid for.
+#[tokio::test]
+async fn stripe_webhook_async_payment_failed_does_not_resume() {
+    use backend_lib::pipeline::PipelineStage;
+
+    let state = test_state();
+    let pid = seed_awaiting_payment(&state, "sess-async-fail").await;
+
+    let app = stripe_webhook_router(state.clone());
+    let server = TestServer::new(app).unwrap();
+
+    let payload = json!({
+        "type": "checkout.session.async_payment_failed",
+        "data": { "object": {
+            "payment_status": "unpaid",
+            "metadata": { "pipeline_id": pid.to_string() }
+        } }
+    });
+    let raw = serde_json::to_vec(&payload).unwrap();
+
+    let resp = post_signed_webhook(&server, raw).await;
+    resp.assert_status_ok();
+
+    let (stage, _) = state.pipelines.status(pid).await.expect("pipeline still exists");
+    assert_eq!(
+        stage, PipelineStage::AwaitingPayment,
+        "a failed async payment must leave the pipeline parked, got {stage:?}"
+    );
+}
+
+// ── POST /api/stripe/checkout — creates a real Stripe session (test mode) ──────
+//
+// Hits the live Stripe **test** API, so it's #[ignore]d by default and only runs
+// when STRIPE_TEST_SECRET_KEY is exported:
+//   STRIPE_TEST_SECRET_KEY=sk_test_... cargo test -p backend \
+//     --test integration -- --ignored stripe_checkout_creates_real_session --nocapture
+// Proves we can actually create a payable Checkout Session from a quoted pipeline.
+#[tokio::test]
+#[ignore = "calls live Stripe test API; needs STRIPE_TEST_SECRET_KEY"]
+async fn stripe_checkout_creates_real_session() {
+    use backend_lib::pipeline::PipelineStage;
+
+    let secret = std::env::var("STRIPE_TEST_SECRET_KEY")
+        .expect("set STRIPE_TEST_SECRET_KEY (sk_test_...) to run this test");
+    assert!(secret.starts_with("sk_test_"), "must use a TEST key, never live");
+
+    // Build state carrying a real test StripeClient.
+    let state = state_with_stripe(StripeClient::new(
+        reqwest::Client::new(),
+        secret,
+        "whsec_unused_for_checkout".to_string(),
+    ));
+
+    // Seed a quoted pipeline at AwaitingPayment, as the live funnel would.
+    let pid = state.pipelines.create(
+        "sess-checkout".to_string(),
+        "Automatiser les devis".to_string(),
+        None,
+    ).await;
+    let mut ctx = state.pipelines.get_ctx(pid).await.unwrap();
+    ctx.price_quote = Some(1500);
+    ctx.price_monthly = Some(120);
+    ctx.workflow_json = Some(json!({ "name": "Devis automatiques" }));
+    state.pipelines.advance(pid, PipelineStage::AwaitingPayment, ctx).await;
+
+    let app = Router::new()
+        .route("/api/stripe/checkout", post(backend_lib::handlers::stripe::create_checkout))
+        .with_state(state);
+    let server = TestServer::new(app).unwrap();
+
+    let resp = server
+        .post("/api/stripe/checkout")
+        .json(&json!({ "pipeline_id": pid.to_string() }))
+        .await;
+    resp.assert_status_ok();
+
+    let body: Value = resp.json();
+    let url = body["checkout_url"].as_str().expect("checkout_url present");
+    let sid = body["session_id"].as_str().expect("session_id present");
+    println!("[encaissabilité] real Stripe TEST session created:\n  id={sid}\n  url={url}");
+    assert!(url.contains("checkout.stripe.com"), "expected hosted Stripe URL, got {url}");
+    assert!(sid.starts_with("cs_test_"), "expected a TEST session id, got {sid}");
 }
 
 // ── POST /api/pipeline/start ───────────────────────────────────────────────────
