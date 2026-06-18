@@ -616,8 +616,11 @@ async fn main() {
     }
 
     let stripe = match (
-        std::env::var("STRIPE_SECRET_KEY").ok(),
-        std::env::var("STRIPE_WEBHOOK_SECRET").ok(),
+        // Treat an empty value (`STRIPE_SECRET_KEY=` in .env) as unset — otherwise we'd
+        // build a StripeClient with an empty key that passes the 503 "not configured"
+        // guard and only fails later at the API call with an opaque 502.
+        std::env::var("STRIPE_SECRET_KEY").ok().filter(|s| !s.is_empty()),
+        std::env::var("STRIPE_WEBHOOK_SECRET").ok().filter(|s| !s.is_empty()),
     ) {
         (Some(sk), Some(wh)) => {
             tracing::info!("Stripe configured");
