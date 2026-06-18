@@ -66,6 +66,16 @@ redémarrage — sinon les sessions seraient invalidées à chaque restart.
 | `CLINGO_PATH` | Chemin du binaire clingo (sinon cherché dans le PATH). |
 | `GUARDRAILS_FAIL_CLOSED` | Si vrai, une erreur d'évaluation **bloque** au lieu de laisser passer. Voir [guardrails.md](guardrails.md). |
 
+## Partage de secrets (OneTimeSecret)
+
+Utilisé par `POST /api/admin/secret-share` (partage sortant team → client). Tous
+optionnels : sans creds, le partage se fait en anonyme sur le SaaS public.
+
+| Variable | Rôle |
+|----------|------|
+| `ONETIMESECRET_URL` | Base de l'instance OTS. Défaut : `https://onetimesecret.com`. |
+| `ONETIMESECRET_USER` / `ONETIMESECRET_TOKEN` | Auth Basic OTS (limites/TTL supérieurs). Absents → partage anonyme. |
+
 ## OAuth — clés d'app par provider
 
 Lues dynamiquement par `oauth::app_keys_for` sous la forme

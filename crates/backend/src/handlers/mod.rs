@@ -5,5 +5,6 @@ pub mod health;
 pub mod ingest;
 pub mod mcp;
 pub mod pipeline;
+pub mod secret_share;
 pub mod services;
 pub mod stripe;

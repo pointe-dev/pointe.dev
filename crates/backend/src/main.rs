@@ -739,6 +739,7 @@ async fn main() {
         .route("/api/admin/ingest", post(handlers::ingest::ingest))
         .route("/api/admin/dossiers", get(handlers::admin::dossiers))
         .route("/api/admin/dossiers/:id/respawn", post(handlers::admin::respawn))
+        .route("/api/admin/secret-share", post(handlers::secret_share::secret_share))
         .route("/api/stripe/checkout", post(handlers::stripe::create_checkout))
         .route("/api/stripe/webhook", post(handlers::stripe::webhook))
         .route("/mcp", post(handlers::mcp::handle))

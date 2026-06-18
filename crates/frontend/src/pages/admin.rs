@@ -167,6 +167,9 @@ pub fn Admin() -> impl IntoView {
                     </button>
                 </div>
 
+                // Secret sharing (outbound: team → client). Shown once a token is entered.
+                {move || (!token.get().is_empty()).then(|| view! { <SecretShare token=token /> })}
+
                 // Results
                 {move || match result.get() {
                     None => view! { <p class="text-sm text-muted">"Entrez votre token pour charger les dossiers."</p> }.into_view(),
@@ -197,6 +200,125 @@ pub fn Admin() -> impl IntoView {
 
             </div>
         </div>
+    }
+}
+
+/// Mint a one-time OneTimeSecret link (team → client). The admin token gates the
+/// backend call; the OTS request itself happens server-side so no OTS credential
+/// ever lives in this WASM bundle. See `handlers::secret_share`.
+async fn mint_secret_link(token: String, secret: String, passphrase: String) -> Result<String, String> {
+    let mut body = serde_json::json!({ "secret": secret });
+    if !passphrase.trim().is_empty() {
+        body["passphrase"] = serde_json::Value::String(passphrase);
+    }
+    let resp = Request::post("/api/admin/secret-share")
+        .header("x-admin-token", &token)
+        .json(&body)
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    match resp.status() {
+        200 => {
+            let v: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+            v.get("link").and_then(|l| l.as_str()).map(str::to_string)
+                .ok_or_else(|| "Réponse inattendue.".to_string())
+        }
+        401 => Err("Token invalide.".to_string()),
+        503 => Err("Partage de secret non configuré côté serveur.".to_string()),
+        s => Err(format!("Erreur serveur ({s}).")),
+    }
+}
+
+#[component]
+fn SecretShare(token: RwSignal<String>) -> impl IntoView {
+    let secret = create_rw_signal(String::new());
+    let passphrase = create_rw_signal(String::new());
+    let copied = create_rw_signal(false);
+
+    let mint = create_action(|args: &(String, String, String)| {
+        let (token, secret, passphrase) = args.clone();
+        async move { mint_secret_link(token, secret, passphrase).await }
+    });
+
+    let on_generate = move |_| {
+        let s = secret.get();
+        if s.trim().is_empty() { return; }
+        copied.set(false);
+        mint.dispatch((token.get(), s, passphrase.get()));
+    };
+
+    let pending = mint.pending();
+    let result = mint.value();
+
+    view! {
+        <details class="glass rounded-2xl p-4 group">
+            <summary class="flex items-center justify-between cursor-pointer list-none text-sm font-medium text-primary marker:hidden">
+                <span>"🔐 Partager un secret (lien à usage unique)"</span>
+                <span class="text-muted text-lg leading-none transition-transform group-open:rotate-45">"+"</span>
+            </summary>
+            <p class="mt-3 text-xs text-muted">
+                "Génère un lien OneTimeSecret à usage unique — à envoyer au client au lieu d'un secret en clair. Le lien s'autodétruit après lecture."
+            </p>
+            <div class="mt-3 space-y-2">
+                <textarea
+                    placeholder="Le secret à transmettre (clé, mot de passe temporaire…)"
+                    prop:value=move || secret.get()
+                    on:input=move |ev| secret.set(event_target_value(&ev))
+                    class="w-full bg-surface border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-muted focus:outline-none focus:border-red-400 font-mono"
+                    rows="2"
+                />
+                <input
+                    type="text"
+                    placeholder="Phrase de passe (optionnel) — demandée au destinataire"
+                    prop:value=move || passphrase.get()
+                    on:input=move |ev| passphrase.set(event_target_value(&ev))
+                    class="w-full bg-surface border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-muted focus:outline-none focus:border-red-400"
+                />
+                <button
+                    on:click=on_generate
+                    class="btn-primary btn-sm"
+                    disabled=move || pending.get() || secret.get().trim().is_empty()
+                >
+                    {move || if pending.get() { "Génération…" } else { "Générer le lien" }}
+                </button>
+            </div>
+            {move || match result.get() {
+                Some(Ok(link)) => {
+                    let link_for_copy = link.clone();
+                    view! {
+                        <div class="mt-3 flex flex-wrap items-center gap-2">
+                            <input
+                                type="text"
+                                readonly=true
+                                prop:value=link.clone()
+                                class="flex-1 min-w-[220px] bg-deep border border-subtle rounded-lg px-3 py-2 text-xs text-cyan font-mono focus:outline-none"
+                            />
+                            <button
+                                on:click=move |_| {
+                                    // Same clipboard pattern as chat.rs (avoids the web-sys
+                                    // Clipboard feature): native API with a textarea fallback.
+                                    let _ = js_sys::Function::new_with_args(
+                                        "t",
+                                        "try{navigator.clipboard.writeText(t)}catch(e){\
+                                         var ta=document.createElement('textarea');\
+                                         ta.value=t;document.body.appendChild(ta);\
+                                         ta.select();document.execCommand('copy');\
+                                         document.body.removeChild(ta);}"
+                                    ).call1(&wasm_bindgen::JsValue::NULL, &wasm_bindgen::JsValue::from_str(&link_for_copy));
+                                    copied.set(true);
+                                }
+                                class="text-xs font-medium px-3 py-2 rounded-lg glass-cyan text-cyan hover:text-cyan-mid transition-colors"
+                            >
+                                {move || if copied.get() { "Copié ✓" } else { "Copier" }}
+                            </button>
+                        </div>
+                    }.into_view()
+                }
+                Some(Err(e)) => view! { <p class="mt-3 text-xs text-red-400">{e}</p> }.into_view(),
+                None => ().into_view(),
+            }}
+        </details>
     }
 }
 
