@@ -150,6 +150,11 @@ pub struct PipelineContext {
     pub price_quote: Option<u32>,
     /// Monthly recurring fee in euros (maintenance + monitoring + n8n hosting if deploy_target="own").
     pub price_monthly: Option<u32>,
+    /// True when the deterministic setup price exceeded SETUP_CAP — too bespoke for
+    /// self-serve, so the pitch is published as "sur devis" (manual quote) instead of
+    /// a scary 4-figure number. Set by run_pricing.
+    #[serde(default)]
+    pub pricing_capped: bool,
     /// Client-facing justification covering both one-time and monthly fees.
     pub price_justification: Option<String>,
     /// Number of pricing attempts (incremented before each run_pricing call).

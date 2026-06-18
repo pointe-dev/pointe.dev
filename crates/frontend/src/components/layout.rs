@@ -7,6 +7,7 @@ use crate::pages::chat::Chat;
 use crate::pages::merci::Merci;
 use crate::pages::admin::Admin;
 use crate::pages::espace::Espace;
+use crate::pages::faq::Faq;
 use crate::i18n::{Lang, t};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -16,6 +17,7 @@ enum Page {
     Merci,
     Admin,
     Espace,
+    Faq,
 }
 
 fn detect_initial_lang() -> Lang {
@@ -36,6 +38,7 @@ fn detect_initial_page() -> Page {
             if p.starts_with("/merci") { Page::Merci }
             else if p.starts_with("/admin") { Page::Admin }
             else if p.starts_with("/espace") { Page::Espace }
+            else if p.starts_with("/faq") { Page::Faq }
             else { Page::Home }
         })
         .unwrap_or(Page::Home)
@@ -191,6 +194,11 @@ pub fn Layout() -> impl IntoView {
                             <Espace />
                         </div>
                     }.into_view(),
+                    Page::Faq => view! {
+                        <div class="page-transition">
+                            <Faq on_talk=move |_| active_page.set(Page::Chat) />
+                        </div>
+                    }.into_view(),
                 }}
             </main>
 
@@ -216,6 +224,14 @@ pub fn Layout() -> impl IntoView {
                                     {move || t(lang.get(), "footer.product")}
                                 </h4>
                                 <ul class="space-y-2 text-sm text-secondary">
+                                    <li>
+                                        <button
+                                            class="hover:text-red-400 transition-colors"
+                                            on:click=move |_| { active_page.set(Page::Faq); scroll_to_top(); }
+                                        >
+                                            {move || t(lang.get(), "footer.faq")}
+                                        </button>
+                                    </li>
                                     <li>
                                         <button class="hover:text-red-400 transition-colors" on:click=on_contact>
                                             {move || t(lang.get(), "footer.contact")}

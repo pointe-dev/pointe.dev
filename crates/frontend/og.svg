@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <!-- pointe.dev social card (Open Graph / Twitter), 1200×630.
+       Épuré centré: onyx stage, centred wordmark, discreet tagline.
+       Source of truth — rasterised to /og.png (crawlers ignore SVG og:image). -->
+  <defs>
+    <!-- Onyx background with a barely-there warmth, matching the site bg-deep. -->
+    <radialGradient id="bg" cx="50%" cy="38%" r="75%">
+      <stop offset="0%" stop-color="#161018"/>
+      <stop offset="60%" stop-color="#0f0c10"/>
+      <stop offset="100%" stop-color="#0b090c"/>
+    </radialGradient>
+    <!-- Wordmark gradient: pale → crimson, echoing the site's text-gradient. -->
+    <linearGradient id="wm" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#f1f5f9"/>
+      <stop offset="100%" stop-color="#e8163c"/>
+    </linearGradient>
+    <!-- Soft crimson glow behind the mark. -->
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#e8163c" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#e8163c" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+
+  <!-- Hairline frame for a crafted, contained feel. -->
+  <rect x="32" y="32" width="1136" height="566" rx="20" fill="none"
+        stroke="#ffffff" stroke-opacity="0.06" stroke-width="1"/>
+
+  <!-- Glow + crimson arrowhead mark (the exact landing-page logo), centred above. -->
+  <circle cx="600" cy="225" r="150" fill="url(#glow)"/>
+  <g transform="translate(600 225) scale(3.1) translate(-16 -16)">
+    <polygon points="16,2 29,30 16,23 3,30" fill="#e8163c"/>
+  </g>
+
+  <!-- Wordmark. -->
+  <text x="600" y="430" text-anchor="middle"
+        font-family="'Clash Display', 'Satoshi', system-ui, sans-serif"
+        font-weight="700" font-size="92" letter-spacing="-3">
+    <tspan fill="url(#wm)">pointe</tspan><tspan fill="#f1f5f9">.dev</tspan>
+  </text>
+
+  <!-- Tagline. -->
+  <text x="600" y="492" text-anchor="middle"
+        font-family="'Satoshi', system-ui, sans-serif"
+        font-weight="500" font-size="30" letter-spacing="0.5" fill="#94a3b8">
+    Déléguez ce qui vous pèse.
+  </text>
+
+  <!-- Eyebrow, discreet. -->
+  <text x="600" y="556" text-anchor="middle"
+        font-family="'Satoshi', system-ui, sans-serif"
+        font-weight="600" font-size="18" letter-spacing="4" fill="#e8163c"
+        opacity="0.85">
+    AUTOMATISATION POINTUE
+  </text>
+</svg>

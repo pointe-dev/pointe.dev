@@ -131,6 +131,39 @@ html.dark {
   --accent-secondary: #e8163c;
 }
 
+/* ── Global scrollbars ───────────────────────────────────────────────────
+   The root/page scrollbar should match the theme: dark track in dark mode,
+   light track in light mode. `color-scheme` is the cross-browser lever —
+   it tells Firefox + the native overlay scrollbar which palette to use; the
+   `::-webkit-scrollbar` rules give Chrome/WebKit an explicit track/thumb tied
+   to the same theme variables so it stays consistent.                       */
+html.dark      { color-scheme: dark; }
+html:not(.dark) { color-scheme: light; }
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-subtle) var(--bg-surface);
+}
+::-webkit-scrollbar { width: 12px; height: 12px; }
+::-webkit-scrollbar-track { background: var(--bg-surface); }
+::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 8px;
+  border: 3px solid var(--bg-surface); /* inset look: thumb floats in the track */
+}
+::-webkit-scrollbar-thumb:hover { background: var(--border-accent); }
+::-webkit-scrollbar-corner { background: var(--bg-surface); }
+
+/* ── Text selection ──────────────────────────────────────────────────────
+   Drop the heavy browser-default blue for a soft, on-brand crimson wash.
+   Kept very transparent so it tints rather than highlights, and the text
+   colour is left untouched so contrast never breaks. Tuned per theme:
+   a touch stronger on light paper, airier on the dark stage.              */
+::selection      { background: rgba(232, 22, 60, 0.18); }
+::-moz-selection { background: rgba(232, 22, 60, 0.18); }
+html:not(.dark) ::selection      { background: rgba(196, 18, 47, 0.14); }
+html:not(.dark) ::-moz-selection { background: rgba(196, 18, 47, 0.14); }
+
 /* ── Fonts ───────────────────────────────────────────────────────────── */
 
 .font-display { font-family: 'Clash Display', system-ui, sans-serif; }
@@ -1943,13 +1976,13 @@ html.dark {
 .pitch-pricing-amount {
   font-size: 22px;
   font-weight: 700;
-  color: #f3f4f6;
+  color: var(--text-primary);
   margin: 0;
 }
 .pitch-pricing-delay {
   font-size: 14px;
   font-weight: 600;
-  color: #d1d5db;
+  color: var(--text-secondary);
   margin: 0;
 }
 .pitch-pricing-note {
@@ -1972,15 +2005,17 @@ html.dark {
 .pitch-price-amount {
   font-size: 1.75rem;
   font-weight: 700;
-  color: #f1f5f9;
+  /* Theme var so it stays legible in light mode (was a hardcoded near-white,
+     invisible on the light paper background). */
+  color: var(--text-primary);
   letter-spacing: -0.03em;
   line-height: 1;
 }
 .pitch-price-validity {
   font-size: 0.7rem;
-  color: #94a3b8;
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(255,255,255,0.1);
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
   border-radius: 20px;
   padding: 3px 10px;
   white-space: nowrap;
@@ -1996,9 +2031,9 @@ html.dark {
   width: 100%;
   padding: 10px 14px;
   border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.1);
-  background: rgba(255,255,255,0.04);
-  color: #f3f4f6;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
   font-size: 13px;
   outline: none;
   transition: border-color 0.15s;

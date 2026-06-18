@@ -88,28 +88,28 @@ pub const CATALOG: &[Capability] = &[
     // ── Messaging / email ──────────────────────────────────────────────────────
     Capability { service: "Slack",            aliases: &["slack"],                         tier: Tier::Native, auth: Auth::OAuth2, cred_type: Some("slackOAuth2Api") },
     Capability { service: "Gmail",            aliases: &["gmail", "google mail"],          tier: Tier::Native, auth: Auth::OAuth2, cred_type: Some("gmailOAuth2") },
-    Capability { service: "Microsoft Outlook",aliases: &["outlook", "office 365 mail"],    tier: Tier::Native, auth: Auth::OAuth2, cred_type: None },
+    Capability { service: "Microsoft Outlook",aliases: &["outlook", "office 365 mail"],    tier: Tier::Native, auth: Auth::OAuth2, cred_type: Some("microsoftOutlookOAuth2Api") },
     Capability { service: "Telegram",         aliases: &["telegram"],                      tier: Tier::Native, auth: Auth::ApiKey, cred_type: Some("telegramApi") },
     Capability { service: "Discord",          aliases: &["discord"],                       tier: Tier::Native, auth: Auth::ApiKey, cred_type: None },
     Capability { service: "Twilio",           aliases: &["twilio", "sms"],                 tier: Tier::Native, auth: Auth::ApiKey, cred_type: Some("twilioApi") },
     Capability { service: "SendGrid",         aliases: &["sendgrid"],                      tier: Tier::Native, auth: Auth::ApiKey, cred_type: Some("sendGridApi") },
-    Capability { service: "Mailchimp",        aliases: &["mailchimp"],                     tier: Tier::Native, auth: Auth::OAuth2, cred_type: None },
+    Capability { service: "Mailchimp",        aliases: &["mailchimp"],                     tier: Tier::Native, auth: Auth::OAuth2, cred_type: Some("mailchimpOAuth2Api") },
     // ── CRM / sales ─────────────────────────────────────────────────────────────
     Capability { service: "HubSpot",          aliases: &["hubspot"],                       tier: Tier::Native, auth: Auth::OAuth2, cred_type: Some("hubspotOAuth2Api") },
     Capability { service: "Pipedrive",        aliases: &["pipedrive"],                     tier: Tier::Native, auth: Auth::ApiKey, cred_type: Some("pipedriveApi") },
     Capability { service: "Salesforce",       aliases: &["salesforce"],                    tier: Tier::Native, auth: Auth::OAuth2, cred_type: Some("salesforceOAuth2Api") },
-    Capability { service: "Zoho CRM",         aliases: &["zoho", "zoho crm"],              tier: Tier::Native, auth: Auth::OAuth2, cred_type: None },
+    Capability { service: "Zoho CRM",         aliases: &["zoho", "zoho crm"],              tier: Tier::Native, auth: Auth::OAuth2, cred_type: Some("zohoOAuth2Api") },
     // ── Productivity / data ─────────────────────────────────────────────────────
     Capability { service: "Google Sheets",    aliases: &["google sheets", "sheets", "gsheet"], tier: Tier::Native, auth: Auth::OAuth2, cred_type: Some("googleSheetsOAuth2Api") },
-    Capability { service: "Google Drive",     aliases: &["google drive", "gdrive", "drive"],   tier: Tier::Native, auth: Auth::OAuth2, cred_type: None },
-    Capability { service: "Google Calendar",  aliases: &["google calendar", "gcal", "calendar"], tier: Tier::Native, auth: Auth::OAuth2, cred_type: None },
+    Capability { service: "Google Drive",     aliases: &["google drive", "gdrive", "drive"],   tier: Tier::Native, auth: Auth::OAuth2, cred_type: Some("googleDriveOAuth2Api") },
+    Capability { service: "Google Calendar",  aliases: &["google calendar", "gcal", "calendar"], tier: Tier::Native, auth: Auth::OAuth2, cred_type: Some("googleCalendarOAuth2Api") },
     Capability { service: "Notion",           aliases: &["notion"],                        tier: Tier::Native, auth: Auth::ApiKey, cred_type: Some("notionApi") },
     Capability { service: "Airtable",         aliases: &["airtable"],                      tier: Tier::Native, auth: Auth::ApiKey, cred_type: Some("airtableTokenApi") },
     Capability { service: "Trello",           aliases: &["trello"],                        tier: Tier::Native, auth: Auth::ApiKey, cred_type: Some("trelloApi") },
-    Capability { service: "Asana",            aliases: &["asana"],                         tier: Tier::Native, auth: Auth::OAuth2, cred_type: None },
+    Capability { service: "Asana",            aliases: &["asana"],                         tier: Tier::Native, auth: Auth::OAuth2, cred_type: Some("asanaOAuth2Api") },
     // ── Commerce / billing ──────────────────────────────────────────────────────
     Capability { service: "Stripe",           aliases: &["stripe"],                        tier: Tier::Native, auth: Auth::ApiKey, cred_type: Some("stripeApi") },
-    Capability { service: "Shopify",          aliases: &["shopify"],                       tier: Tier::Native, auth: Auth::OAuth2, cred_type: None },
+    Capability { service: "Shopify",          aliases: &["shopify"],                       tier: Tier::Native, auth: Auth::OAuth2, cred_type: Some("shopifyOAuth2Api") },
     Capability { service: "WooCommerce",      aliases: &["woocommerce", "woo"],            tier: Tier::Native, auth: Auth::ApiKey, cred_type: Some("wooCommerceApi") },
     // ── Databases ───────────────────────────────────────────────────────────────
     Capability { service: "PostgreSQL",       aliases: &["postgres", "postgresql"],        tier: Tier::Native, auth: Auth::ApiKey, cred_type: Some("postgres") },
@@ -119,9 +119,9 @@ pub const CATALOG: &[Capability] = &[
     Capability { service: "OpenAI",           aliases: &["openai", "gpt", "chatgpt"],      tier: Tier::Native, auth: Auth::ApiKey, cred_type: Some("openAiApi") },
     Capability { service: "Anthropic Claude", aliases: &["anthropic", "claude"],           tier: Tier::Native, auth: Auth::ApiKey, cred_type: Some("anthropicApi") },
     // ── Social / content ────────────────────────────────────────────────────────
-    Capability { service: "X / Twitter",      aliases: &["twitter", "x.com", "tweet"],     tier: Tier::Native, auth: Auth::OAuth2, cred_type: None },
-    Capability { service: "YouTube",          aliases: &["youtube"],                       tier: Tier::Native, auth: Auth::OAuth2, cred_type: None },
-    Capability { service: "LinkedIn",         aliases: &["linkedin"],                      tier: Tier::Native, auth: Auth::OAuth2, cred_type: None },
+    Capability { service: "X / Twitter",      aliases: &["twitter", "x.com", "tweet"],     tier: Tier::Native, auth: Auth::OAuth2, cred_type: Some("twitterOAuth2Api") },
+    Capability { service: "YouTube",          aliases: &["youtube"],                       tier: Tier::Native, auth: Auth::OAuth2, cred_type: Some("youTubeOAuth2Api") },
+    Capability { service: "LinkedIn",         aliases: &["linkedin"],                      tier: Tier::Native, auth: Auth::OAuth2, cred_type: Some("linkedInOAuth2Api") },
     // ── Generic triggers / data sources (no credential) ─────────────────────────
     Capability { service: "Webhook (HTTP entrant)", aliases: &["webhook", "http trigger"], tier: Tier::Native, auth: Auth::None, cred_type: None },
     Capability { service: "Planification (cron)",    aliases: &["schedule", "cron", "planification"], tier: Tier::Native, auth: Auth::None, cred_type: None },

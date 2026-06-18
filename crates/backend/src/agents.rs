@@ -1507,15 +1507,27 @@ pub async fn run_pricing(app: &AppState, ctx: &mut PipelineContext) -> Result<()
         .or_else(|| research.and_then(|r| r["feasibility_score"].as_f64()).map(|f| f as f32))
         .unwrap_or(7.0);
 
-    let base: u32 = match complexity { "simple" => 900, "complex" => 6000, _ => 2500 };
-    let integration_premium  = (integration_count.saturating_sub(2) as u32) * 200;
-    let feasibility_buffer: u32 = if feasibility < 6.0 { 600 } else { 0 };
+    // Setup is a LOW one-time fee to get started, not an agency dev quote. The
+    // recurring value is captured by the monthly tier (execution-based), not here.
+    // A simple automation should land near SETUP_FLOOR (~50€); anything that prices
+    // above SETUP_CAP is too bespoke for self-serve and routes to a human "sur devis"
+    // (the Managed tier) instead of quoting a scary 4-figure number.
+    const SETUP_CAP: u32 = 300;
+    let base: u32 = match complexity { "simple" => 50, "complex" => 300, _ => 150 };
+    // Premiums kept proportional but ~5× smaller than the old agency-style figures.
+    let integration_premium  = (integration_count.saturating_sub(2) as u32) * 40;
+    let feasibility_buffer: u32 = if feasibility < 6.0 { 100 } else { 0 };
     // Pre-payment the JSON isn't built yet, so estimate node count from the scope:
     // ~2 nodes per integration + a couple of control/trigger nodes.
     let est_node_count = integration_count * 2 + 2;
-    let node_premium = (est_node_count.saturating_sub(5) as u32) * 60;
-    let subtotal    = base + integration_premium + risk_premium + feasibility_buffer + node_premium;
-    let setup_price = ((subtotal + 49) / 50) * 50;
+    let node_premium = (est_node_count.saturating_sub(5) as u32) * 15;
+    // Risk severity scaled down too (high 80 / medium 40 / low 20) — see risk_premium.
+    let scaled_risk = risk_premium / 4;
+    let subtotal    = base + integration_premium + scaled_risk + feasibility_buffer + node_premium;
+    let setup_raw   = ((subtotal + 24) / 25) * 25; // round to nearest 25€
+    // Cap: above SETUP_CAP we don't self-serve quote — fall through to manual quote.
+    let setup_capped = setup_raw > SETUP_CAP;
+    let setup_price  = if setup_capped { 0 } else { setup_raw };
 
     let monthly_base: u32 = match complexity { "simple" => 100, "complex" => 500, _ => 250 };
     let monthly_integration_fee = (integration_count.saturating_sub(2) as u32) * 50;
@@ -1583,6 +1595,7 @@ Setup fee: {setup}€ (one-time) | Monthly: {monthly}€/mo (maintenance + monit
 
     ctx.price_quote         = Some(setup_price);
     ctx.price_monthly       = Some(monthly_price);
+    ctx.pricing_capped      = setup_capped;
     ctx.price_justification = Some(justification.clone());
 
     // ── 2. Haiku generates the 3 proposal slides ──────────────────────────────
@@ -1872,6 +1885,14 @@ async fn email_proposal(app: &AppState, session_id: &str, slides: &[PitchSlide])
 }
 
 async fn publish_pitch(app: &AppState, ctx: &PipelineContext) {
+    // Above the setup cap we never self-serve quote a 4-figure number — route to the
+    // manual "sur devis" pitch (Managed tier, human follow-up) instead.
+    if ctx.pricing_capped {
+        tracing::info!("[pricing] setup over cap — publishing manual quote (sur devis)");
+        publish_manual_pitch(app, ctx).await;
+        return;
+    }
+
     let research = ctx.research_json.as_ref();
 
     let externals_needed: Vec<String> = research
@@ -2557,41 +2578,40 @@ mod tests {
     //
     // Instead, test only the pure formula in isolation.
 
-    #[test]
-    fn pricing_formula_simple_baseline() {
-        // Replicate the formula from run_pricing for complexity=simple,
-        // 2 integrations, no risks, feasibility=7.0, 0 nodes.
-        let complexity = "simple";
-        let integration_count: usize = 2;
-        let risk_premium: u32 = 0;
-        let feasibility: f32 = 7.0;
-        let base: u32 = match complexity { "simple" => 900, "complex" => 6000, _ => 2500 };
-        let integration_premium = (integration_count.saturating_sub(2) as u32) * 200;
-        let feasibility_buffer: u32 = if feasibility < 6.0 { 600 } else { 0 };
-        let node_count: usize = 0;
-        let node_premium = (node_count.saturating_sub(5) as u32) * 60;
-        let subtotal = base + integration_premium + risk_premium + feasibility_buffer + node_premium;
-        let setup_price = ((subtotal + 49) / 50) * 50;
-        // base=900, no premiums → subtotal=900, rounded to 50 → 900
-        assert_eq!(setup_price, 900);
+    // Pure replica of the (low-setup, capped) formula in run_pricing. Returns
+    // (setup_price, capped) so tests assert the properties that matter rather than a
+    // brittle magic number.
+    fn setup_formula(complexity: &str, integration_count: usize, risk_premium: u32, feasibility: f32) -> (u32, bool) {
+        const SETUP_CAP: u32 = 300;
+        let base: u32 = match complexity { "simple" => 50, "complex" => 300, _ => 150 };
+        let integration_premium = (integration_count.saturating_sub(2) as u32) * 40;
+        let feasibility_buffer: u32 = if feasibility < 6.0 { 100 } else { 0 };
+        let est_node_count = integration_count * 2 + 2;
+        let node_premium = (est_node_count.saturating_sub(5) as u32) * 15;
+        let scaled_risk = risk_premium / 4;
+        let subtotal = base + integration_premium + scaled_risk + feasibility_buffer + node_premium;
+        let setup_raw = ((subtotal + 24) / 25) * 25;
+        let capped = setup_raw > SETUP_CAP;
+        (if capped { 0 } else { setup_raw }, capped)
     }
 
     #[test]
-    fn pricing_formula_complex_with_risks() {
-        let complexity = "complex";
-        let integration_count: usize = 5;
-        let risk_premium: u32 = 300 + 150; // high + medium
-        let feasibility: f32 = 5.0; // triggers buffer
-        let base: u32 = 6000;
-        let integration_premium = (integration_count.saturating_sub(2) as u32) * 200; // 3*200=600
-        let feasibility_buffer: u32 = 600;
-        let node_count: usize = 8;
-        let node_premium = (node_count.saturating_sub(5) as u32) * 60; // 3*60=180
-        let subtotal = base + integration_premium + risk_premium + feasibility_buffer + node_premium;
-        let setup_price = ((subtotal + 49) / 50) * 50;
-        // 6000+600+450+600+180 = 7830 → rounded to next multiple of 50 = 7850
-        assert_eq!(subtotal, 7830);
-        assert_eq!(setup_price, 7850);
+    fn pricing_simple_is_low_and_not_capped() {
+        // A simple 2-integration automation should land near the floor (~50€),
+        // never a 4-figure agency quote, and must not hit the manual-quote cap.
+        let (setup, capped) = setup_formula("simple", 2, 0, 7.0);
+        assert!(!capped, "simple automation should self-serve quote, not 'sur devis'");
+        assert!(setup <= 100, "simple setup should be low (~50€), got {setup}");
+    }
+
+    #[test]
+    fn pricing_complex_with_risks_exceeds_cap() {
+        // A heavy, risky, many-integration build prices above SETUP_CAP and therefore
+        // routes to a manual quote (setup_price = 0, capped = true) instead of scaring
+        // the client with a big number.
+        let (setup, capped) = setup_formula("complex", 5, 300 + 150, 5.0);
+        assert!(capped, "complex+risky build should exceed the cap → manual quote");
+        assert_eq!(setup, 0, "capped setup is published as 'sur devis' (0)");
     }
 
     #[test]

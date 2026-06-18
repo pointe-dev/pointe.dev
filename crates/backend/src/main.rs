@@ -27,6 +27,7 @@ mod guardrails;
 mod handlers;
 mod langfuse;
 mod mcp;
+mod oauth;
 mod pending;
 mod pipeline;
 mod pitch;
@@ -615,8 +616,11 @@ async fn main() {
     }
 
     let stripe = match (
-        std::env::var("STRIPE_SECRET_KEY").ok(),
-        std::env::var("STRIPE_WEBHOOK_SECRET").ok(),
+        // Treat an empty value (`STRIPE_SECRET_KEY=` in .env) as unset — otherwise we'd
+        // build a StripeClient with an empty key that passes the 503 "not configured"
+        // guard and only fails later at the API call with an opaque 502.
+        std::env::var("STRIPE_SECRET_KEY").ok().filter(|s| !s.is_empty()),
+        std::env::var("STRIPE_WEBHOOK_SECRET").ok().filter(|s| !s.is_empty()),
     ) {
         (Some(sk), Some(wh)) => {
             tracing::info!("Stripe configured");
@@ -730,10 +734,12 @@ async fn main() {
         .route("/api/pipeline/:id/resume", post(handlers::pipeline::resume))
         .route("/api/pipeline/:id/delivery", get(handlers::pipeline::delivery))
         .route("/api/credentials/provision", post(handlers::credentials::provision))
+        .route("/api/oauth/start", post(handlers::credentials::oauth_start))
         .route("/api/client/workflows", get(handlers::client::workflows))
         .route("/api/admin/ingest", post(handlers::ingest::ingest))
         .route("/api/admin/dossiers", get(handlers::admin::dossiers))
         .route("/api/admin/dossiers/:id/respawn", post(handlers::admin::respawn))
+        .route("/api/admin/secret-share", post(handlers::secret_share::secret_share))
         .route("/api/stripe/checkout", post(handlers::stripe::create_checkout))
         .route("/api/stripe/webhook", post(handlers::stripe::webhook))
         .route("/mcp", post(handlers::mcp::handle))

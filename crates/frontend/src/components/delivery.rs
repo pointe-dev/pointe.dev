@@ -5,6 +5,16 @@ use leptos::*;
 use gloo_net::http::Request;
 use serde::Deserialize;
 
+/// Backend response for `POST /api/oauth/start`. We only act on the `consent` shape
+/// (redirect the browser to the provider); other shapes surface a guided note.
+#[derive(Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum OauthStart {
+    Consent { consent_url: String },
+    NotOauth { message: String },
+    NotWired { message: String },
+}
+
 /// One integration in a delivery checklist, as returned by the backend
 /// (`/api/pipeline/:id/delivery` and `/api/client/workflows`).
 #[derive(Deserialize, Clone)]
@@ -58,6 +68,44 @@ pub fn delivery_row(item: DeliveryItem) -> impl IntoView {
         }
     };
 
+    // OAuth consent: ask the backend for the provider consent URL, then send the
+    // browser there. n8n's callback finishes the token exchange; nothing to store here.
+    let oauth_err = create_rw_signal(String::new());
+    let on_authorize = {
+        let service = service.clone();
+        move |_| {
+            let service = service.clone();
+            oauth_err.set(String::new());
+            status.set("saving");
+            spawn_local(async move {
+                let body = serde_json::json!({ "session_id": session_id(), "service": service });
+                let parsed = match Request::post("/api/oauth/start").json(&body) {
+                    Ok(req) => match req.send().await {
+                        Ok(r) if r.status() == 200 => r.json::<OauthStart>().await.ok(),
+                        _ => None,
+                    },
+                    Err(_) => None,
+                };
+                match parsed {
+                    Some(OauthStart::Consent { consent_url }) => {
+                        // Full-page navigation to the provider's consent screen.
+                        if let Some(w) = web_sys::window() {
+                            let _ = w.location().set_href(&consent_url);
+                        }
+                    }
+                    Some(OauthStart::NotOauth { message }) | Some(OauthStart::NotWired { message }) => {
+                        status.set("err");
+                        oauth_err.set(message);
+                    }
+                    None => {
+                        status.set("err");
+                        oauth_err.set("Connexion impossible — notre équipe vous guide.".into());
+                    }
+                }
+            });
+        }
+    };
+
     let label = item.service.clone();
     let prereq = item.prerequisite.clone();
 
@@ -95,9 +143,19 @@ pub fn delivery_row(item: DeliveryItem) -> impl IntoView {
                     }.into_view()
                 } else if auth == "oauth2" {
                     view! {
-                        <p class="mt-1 text-xs text-amber-400/90">
-                            "Connexion OAuth à autoriser — assistance guidée par notre équipe."
-                        </p>
+                        <div class="mt-2">
+                            <button
+                                on:click=on_authorize
+                                disabled=move || status.get() == "saving" || status.get() == "ok"
+                                class="text-xs font-medium px-3 py-2 rounded-lg glass-cyan text-cyan hover:text-cyan-mid transition-colors disabled:opacity-50"
+                            >"Autoriser la connexion"</button>
+                            {move || {
+                                let e = oauth_err.get();
+                                (!e.is_empty()).then(|| view! {
+                                    <p class="mt-1 text-xs text-amber-400/90">{e}</p>
+                                })
+                            }}
+                        </div>
                     }.into_view()
                 } else if tier == "managed" {
                     view! {

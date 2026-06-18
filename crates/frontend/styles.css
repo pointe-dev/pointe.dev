@@ -619,6 +619,10 @@ video {
   margin-bottom: 2.5rem;
 }
 
+.mb-12 {
+  margin-bottom: 3rem;
+}
+
 .mb-2 {
   margin-bottom: 0.5rem;
 }
@@ -653,6 +657,10 @@ video {
 
 .mt-1 {
   margin-top: 0.25rem;
+}
+
+.mt-14 {
+  margin-top: 3.5rem;
 }
 
 .mt-2 {
@@ -693,6 +701,10 @@ video {
 
 .grid {
   display: grid;
+}
+
+.hidden {
+  display: none;
 }
 
 .h-1\.5 {
@@ -803,6 +815,10 @@ video {
   min-width: 200px;
 }
 
+.min-w-\[220px\] {
+  min-width: 220px;
+}
+
 .max-w-2xl {
   max-width: 42rem;
 }
@@ -897,6 +913,10 @@ video {
 
 .resize-none {
   resize: none;
+}
+
+.list-none {
+  list-style-type: none;
 }
 
 .grid-cols-1 {
@@ -1270,6 +1290,10 @@ video {
   padding-top: 0.25rem;
 }
 
+.pt-10 {
+  padding-top: 2.5rem;
+}
+
 .pt-3 {
   padding-top: 0.75rem;
 }
@@ -1393,6 +1417,10 @@ video {
 
 .tracking-wide {
   letter-spacing: 0.025em;
+}
+
+.tracking-wider {
+  letter-spacing: 0.05em;
 }
 
 .tracking-widest {
@@ -1564,6 +1592,12 @@ video {
   transition-duration: 150ms;
 }
 
+.transition-transform {
+  transition-property: transform;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+
 /* ── Design tokens ───────────────────────────────────────────────────── */
 
 :root {
@@ -1687,6 +1721,80 @@ html.dark {
   --border-color:   rgba(148, 163, 184, 0.12);
   --accent-primary:   #c4122f;
   --accent-secondary: #e8163c;
+}
+
+/* ── Global scrollbars ───────────────────────────────────────────────────
+   The root/page scrollbar should match the theme: dark track in dark mode,
+   light track in light mode. `color-scheme` is the cross-browser lever —
+   it tells Firefox + the native overlay scrollbar which palette to use; the
+   `::-webkit-scrollbar` rules give Chrome/WebKit an explicit track/thumb tied
+   to the same theme variables so it stays consistent.                       */
+
+html.dark      {
+  color-scheme: dark;
+}
+
+html:not(.dark) {
+  color-scheme: light;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-subtle) var(--bg-surface);
+}
+
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-surface);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 8px;
+  border: 3px solid var(--bg-surface);
+  /* inset look: thumb floats in the track */
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-accent);
+}
+
+::-webkit-scrollbar-corner {
+  background: var(--bg-surface);
+}
+
+/* ── Text selection ──────────────────────────────────────────────────────
+   Drop the heavy browser-default blue for a soft, on-brand crimson wash.
+   Kept very transparent so it tints rather than highlights, and the text
+   colour is left untouched so contrast never breaks. Tuned per theme:
+   a touch stronger on light paper, airier on the dark stage.              */
+
+::-moz-selection      {
+  background: rgba(232, 22, 60, 0.18);
+}
+
+::selection      {
+  background: rgba(232, 22, 60, 0.18);
+}
+
+::-moz-selection {
+  background: rgba(232, 22, 60, 0.18);
+}
+
+html:not(.dark) ::-moz-selection      {
+  background: rgba(196, 18, 47, 0.14);
+}
+
+html:not(.dark) ::selection      {
+  background: rgba(196, 18, 47, 0.14);
+}
+
+html:not(.dark) ::-moz-selection {
+  background: rgba(196, 18, 47, 0.14);
 }
 
 /* ── Fonts ───────────────────────────────────────────────────────────── */
@@ -3944,14 +4052,14 @@ html.dark {
 .pitch-pricing-amount {
   font-size: 22px;
   font-weight: 700;
-  color: #f3f4f6;
+  color: var(--text-primary);
   margin: 0;
 }
 
 .pitch-pricing-delay {
   font-size: 14px;
   font-weight: 600;
-  color: #d1d5db;
+  color: var(--text-secondary);
   margin: 0;
 }
 
@@ -3978,16 +4086,18 @@ html.dark {
 .pitch-price-amount {
   font-size: 1.75rem;
   font-weight: 700;
-  color: #f1f5f9;
+  /* Theme var so it stays legible in light mode (was a hardcoded near-white,
+     invisible on the light paper background). */
+  color: var(--text-primary);
   letter-spacing: -0.03em;
   line-height: 1;
 }
 
 .pitch-price-validity {
   font-size: 0.7rem;
-  color: #94a3b8;
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(255,255,255,0.1);
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
   border-radius: 20px;
   padding: 3px 10px;
   white-space: nowrap;
@@ -4004,9 +4114,9 @@ html.dark {
   width: 100%;
   padding: 10px 14px;
   border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.1);
-  background: rgba(255,255,255,0.04);
-  color: #f3f4f6;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
   font-size: 13px;
   outline: none;
   transition: border-color 0.15s;
@@ -4414,6 +4524,14 @@ html.dark {
   }
 }
 
+.marker\:hidden *::marker {
+  display: none;
+}
+
+.marker\:hidden::marker {
+  display: none;
+}
+
 .first\:border-t-0:first-child {
   border-top-width: 0px;
 }
@@ -4515,6 +4633,11 @@ html.dark {
   opacity: 0.5;
 }
 
+.group[open] .group-open\:rotate-45 {
+  --tw-rotate: 45deg;
+  transform: translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y));
+}
+
 .group:hover .group-hover\:text-red-600 {
   --tw-text-opacity: 1;
   color: rgb(220 38 38 / var(--tw-text-opacity, 1));
@@ -4586,9 +4709,19 @@ html.dark {
     gap: 0.5rem;
   }
 
+  .md\:py-24 {
+    padding-top: 6rem;
+    padding-bottom: 6rem;
+  }
+
   .md\:text-2xl {
     font-size: 1.5rem;
     line-height: 2rem;
+  }
+
+  .md\:text-4xl {
+    font-size: 2.25rem;
+    line-height: 2.5rem;
   }
 
   .md\:text-7xl {
