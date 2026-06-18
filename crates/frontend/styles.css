@@ -1689,6 +1689,50 @@ html.dark {
   --accent-secondary: #e8163c;
 }
 
+/* ── Global scrollbars ───────────────────────────────────────────────────
+   The root/page scrollbar should match the theme: dark track in dark mode,
+   light track in light mode. `color-scheme` is the cross-browser lever —
+   it tells Firefox + the native overlay scrollbar which palette to use; the
+   `::-webkit-scrollbar` rules give Chrome/WebKit an explicit track/thumb tied
+   to the same theme variables so it stays consistent.                       */
+
+html.dark      {
+  color-scheme: dark;
+}
+
+html:not(.dark) {
+  color-scheme: light;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-subtle) var(--bg-surface);
+}
+
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-surface);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 8px;
+  border: 3px solid var(--bg-surface);
+  /* inset look: thumb floats in the track */
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-accent);
+}
+
+::-webkit-scrollbar-corner {
+  background: var(--bg-surface);
+}
+
 /* ── Fonts ───────────────────────────────────────────────────────────── */
 
 .font-display {
