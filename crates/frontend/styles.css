@@ -4052,14 +4052,14 @@ html.dark {
 .pitch-pricing-amount {
   font-size: 22px;
   font-weight: 700;
-  color: #f3f4f6;
+  color: var(--text-primary);
   margin: 0;
 }
 
 .pitch-pricing-delay {
   font-size: 14px;
   font-weight: 600;
-  color: #d1d5db;
+  color: var(--text-secondary);
   margin: 0;
 }
 
@@ -4086,16 +4086,18 @@ html.dark {
 .pitch-price-amount {
   font-size: 1.75rem;
   font-weight: 700;
-  color: #f1f5f9;
+  /* Theme var so it stays legible in light mode (was a hardcoded near-white,
+     invisible on the light paper background). */
+  color: var(--text-primary);
   letter-spacing: -0.03em;
   line-height: 1;
 }
 
 .pitch-price-validity {
   font-size: 0.7rem;
-  color: #94a3b8;
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(255,255,255,0.1);
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
   border-radius: 20px;
   padding: 3px 10px;
   white-space: nowrap;
@@ -4112,9 +4114,9 @@ html.dark {
   width: 100%;
   padding: 10px 14px;
   border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.1);
-  background: rgba(255,255,255,0.04);
-  color: #f3f4f6;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
   font-size: 13px;
   outline: none;
   transition: border-color 0.15s;
