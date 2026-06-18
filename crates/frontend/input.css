@@ -154,6 +154,16 @@ html:not(.dark) { color-scheme: light; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-accent); }
 ::-webkit-scrollbar-corner { background: var(--bg-surface); }
 
+/* ── Text selection ──────────────────────────────────────────────────────
+   Drop the heavy browser-default blue for a soft, on-brand crimson wash.
+   Kept very transparent so it tints rather than highlights, and the text
+   colour is left untouched so contrast never breaks. Tuned per theme:
+   a touch stronger on light paper, airier on the dark stage.              */
+::selection      { background: rgba(232, 22, 60, 0.18); }
+::-moz-selection { background: rgba(232, 22, 60, 0.18); }
+html:not(.dark) ::selection      { background: rgba(196, 18, 47, 0.14); }
+html:not(.dark) ::-moz-selection { background: rgba(196, 18, 47, 0.14); }
+
 /* ── Fonts ───────────────────────────────────────────────────────────── */
 
 .font-display { font-family: 'Clash Display', system-ui, sans-serif; }
