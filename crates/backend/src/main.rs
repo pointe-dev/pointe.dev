@@ -27,6 +27,7 @@ mod guardrails;
 mod handlers;
 mod langfuse;
 mod mcp;
+mod oauth;
 mod pending;
 mod pipeline;
 mod pitch;
@@ -730,6 +731,7 @@ async fn main() {
         .route("/api/pipeline/:id/resume", post(handlers::pipeline::resume))
         .route("/api/pipeline/:id/delivery", get(handlers::pipeline::delivery))
         .route("/api/credentials/provision", post(handlers::credentials::provision))
+        .route("/api/oauth/start", post(handlers::credentials::oauth_start))
         .route("/api/client/workflows", get(handlers::client::workflows))
         .route("/api/admin/ingest", post(handlers::ingest::ingest))
         .route("/api/admin/dossiers", get(handlers::admin::dossiers))

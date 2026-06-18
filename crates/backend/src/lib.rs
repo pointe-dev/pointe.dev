@@ -16,6 +16,7 @@ pub mod guardrails;
 pub mod handlers;
 pub mod langfuse;
 pub mod mcp;
+pub mod oauth;
 pub mod pending;
 pub mod pipeline;
 pub mod pitch;
