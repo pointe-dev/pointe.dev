@@ -796,7 +796,21 @@ async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(),
                 } else {
                     ctx.workflow_json.clone().into_iter().collect()
                 };
-                let verdict = crate::guardrails::evaluate(&to_check);
+                // Ownership context: a build may legitimately hammer the client's OWN
+                // domain, but not a third party's. The ONLY proof of ownership we trust
+                // is the client's double-opt-in verified email domain — controlling a
+                // mailbox on a business domain is a strong signal the domain is theirs.
+                // We deliberately do NOT trust `client_n8n_url`: it is a free-text field
+                // the client types, so accepting it as proof would let anyone "own"
+                // victim.com just by typing it. A real DNS/HTTP domain-verification
+                // flow (→ persisted owns_domain facts) is the next hardening step.
+                let client_email = app.sessions.get_email(&ctx.session_id).await;
+                let owned_domains = crate::guardrails::facts::owned_domains(
+                    client_email.as_deref(),
+                    &[],
+                );
+                let gctx = crate::guardrails::GuardrailContext { owned_domains };
+                let verdict = crate::guardrails::evaluate_with_context(&to_check, &gctx);
                 if !verdict.allows_auto_deploy(crate::guardrails::fail_closed()) {
                     let reason = verdict.reason();
                     tracing::warn!("[pipeline {id}] guardrails blocked auto-deploy — {reason}");

@@ -1,3 +1,46 @@
+# Handoff
+
+## ⟳ Re-audit code — 2026-06-20
+
+Audit du code réel cette session (pas de nouveau déploiement). Corrige plusieurs
+notes de mémoire qui retardaient. **Source de vérité = ce fichier.**
+
+**Vérifié au boot/CI :** déploiement `b2a641d` **passé** (run 2026-06-19 07:51,
+success) ; `Stripe configured` présent dans les logs prod (clé live chargée).
+
+**Confirmé FAIT dans le code (notes antérieures périmées) :**
+- **Re-spawn des pipelines in-flight au boot** — `PipelineStage::is_resumable()`
+  (exclut terminaux + AwaitingPayment), `resumable_ids()`, boucle de re-spawn
+  `main.rs:710-721`, tests « building must be resumable / AwaitingPayment skipped ».
+  Le « gap résiduel » (pipeline mid-flight non repris au restart) est **résolu**.
+- **Guardrails v1 câblés** au stade `Deploying` (`pipeline.rs:790-809`) : `evaluate()`
+  AVANT `run_deploy` → si pas `allows_auto_deploy(fail_closed())` → `SavedForHuman`
+  + `notify_owner_failure`. Fail-open par défaut (`GUARDRAILS_FAIL_CLOSED`).
+  Classes : flood / mass_post / scrape_loop. **v2 = pas commencé.**
+- **Persistence** complète (pitch/sessions/pipelines, write-through + hydrate au boot).
+  Migrations embarquées en code (`run_migrations`), pas de répertoire `migrations/`.
+- Backend = **0 TODO/FIXME/unwrap/panic** (base propre).
+
+**Nouveau point à clarifier — le mensuel récurrent n'est probablement PAS souscrit :**
+le checkout (`stripe.rs:44-67`) met le mensuel en **line-item ponctuel** « 1er mois »
+en `mode=payment` ; le commentaire dit « recurring subscription handled separately
+after payment » mais **aucun `create_subscription` n'existe**. À trancher AVANT le
+« tiers d'exécutions » (qui suppose un récurrent réel).
+
+**Bug A toujours OUVERT mais NON reproduit** depuis le deploy `b2a641d` (aucun
+`create_checkout` dans les logs) → il faut une repro fraîche pour capturer
+`[stripe] checkout failed: …`. Suspect #1 : `invoice_creation[enabled]=true`
+(`stripe.rs:66`) qui exige les réglages de facturation du compte live complétés.
+
+**Décision owner 2026-06-20 :** Hero 3D **abandonné** (branche `feat/hero-3d-ballet`
+à supprimer).
+
+**Next steps révisés (ordre) :** 1) reproduire + fixer **Bug A** ; 2) clarifier le
+**mensuel récurrent** ; 3) **env OAuth** (action owner) ; 4) **guardrails v2**
+(ownership/intent/AUP).
+
+---
+
 # Handoff — 2026-06-19
 
 Reprise après changement de machine. Tout le travail ci-dessous est **déjà sur

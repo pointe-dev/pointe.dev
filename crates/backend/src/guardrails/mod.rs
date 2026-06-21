@@ -33,10 +33,20 @@ impl Violation {
             "flood" => "high-frequency trigger feeding an outbound action (spam/flood risk)",
             "mass_post" => "loop feeding an external HTTP POST (mass-submission risk)",
             "scrape_loop" => "loop feeding repeated external HTTP GETs (scraping risk)",
+            "unowned_bulk_post" => "loop feeding HTTP POSTs to a domain the client does not own (mass submission against a third party)",
+            "unowned_flood" => "high-frequency trigger hitting a domain the client does not own (flooding a third-party service)",
             other => other,
         };
         format!("[{}] node \"{}\" — {what}", self.kind, self.node)
     }
+}
+
+/// Inputs that depend on *who* the build is for — chiefly the domains the client has
+/// proven they control. Used to tell "hammer my own CRM" (fine) apart from "hammer a
+/// third party" (abuse). Already-normalised hosts (see `facts::owned_domains`).
+#[derive(Debug, Clone, Default)]
+pub struct GuardrailContext {
+    pub owned_domains: Vec<String>,
 }
 
 /// The outcome of a guardrail evaluation.
@@ -83,16 +93,41 @@ pub fn fail_closed() -> bool {
         .unwrap_or(false)
 }
 
-/// Evaluate the built workflows against the abuse policy.
+/// Evaluate the built workflows against the abuse policy, with no ownership context.
+/// Equivalent to `evaluate_with_context` with an empty context: structural rules
+/// (flood/mass_post/scrape_loop) fire, ownership rules can't (every known domain is
+/// treated as third-party only when ownership facts exist — with none, the
+/// `unowned_*` rules still fire on any known third-party domain, which is the safe
+/// default when we genuinely don't know what the client owns).
 ///
 /// Pure w.r.t. the workflows; the only side effect is spawning clingo. Safe on any
 /// input — unparseable workflow shapes simply yield fewer facts.
+///
+/// The pipeline always goes through `evaluate_with_context` (it has the client's
+/// ownership info); this no-context entry point is kept for callers/tests that have
+/// no ownership data.
+#[allow(dead_code)]
 pub fn evaluate(workflows: &[Value]) -> Verdict {
-    let facts = facts::workflow_facts(workflows);
+    evaluate_with_context(workflows, &GuardrailContext::default())
+}
+
+/// Assemble the fact block (workflow facts + ownership facts) handed to clingo.
+/// Returns None when there are no workflow facts at all (nothing to check).
+/// Split out so the exact clingo input is unit-testable without the binary.
+fn build_fact_block(workflows: &[Value], ctx: &GuardrailContext) -> Option<String> {
+    let mut facts = facts::workflow_facts(workflows);
     if facts.is_empty() {
-        return Verdict::Allowed;
+        return None;
     }
-    let fact_block = facts.join("\n");
+    facts.extend(facts::owned_domain_facts(&ctx.owned_domains));
+    Some(facts.join("\n"))
+}
+
+/// Evaluate the built workflows against the abuse policy, given what the client owns.
+pub fn evaluate_with_context(workflows: &[Value], ctx: &GuardrailContext) -> Verdict {
+    let Some(fact_block) = build_fact_block(workflows, ctx) else {
+        return Verdict::Allowed;
+    };
 
     match clingo::solve(&fact_block, POLICY) {
         Ok(atoms) if atoms.is_empty() => Verdict::Allowed,
@@ -146,6 +181,30 @@ mod tests {
         assert_eq!(evaluate(&[]), Verdict::Allowed);
     }
 
+    #[test]
+    fn fact_block_includes_ownership_facts() {
+        // The clingo input must carry the owns_domain facts alongside workflow facts,
+        // so the ASP ownership rules can see them. Verified without the binary.
+        let ctx = GuardrailContext { owned_domains: vec!["acme.com".into()] };
+        let block = build_fact_block(&[flood_workflow()], &ctx).expect("non-empty");
+        assert!(block.contains("owns_domain(\"acme.com\")."), "block was:\n{block}");
+        assert!(block.contains("trigger_interval(0, \"Every minute\", 60)."));
+    }
+
+    #[test]
+    fn fact_block_is_none_when_nothing_to_check() {
+        // No nodes → no facts → None → caller short-circuits to Allowed.
+        let empty = json!({ "nodes": [], "connections": {} });
+        assert!(build_fact_block(&[empty], &GuardrailContext::default()).is_none());
+    }
+
+    #[test]
+    fn fact_block_without_ownership_has_no_owns_domain() {
+        let block = build_fact_block(&[flood_workflow()], &GuardrailContext::default())
+            .expect("non-empty");
+        assert!(!block.contains("owns_domain("), "block was:\n{block}");
+    }
+
     // End-to-end against the real clingo binary. #[ignore]d because clingo may not
     // be installed in CI; run with:  cargo test -p backend -- --ignored guardrails
     #[test]
@@ -173,5 +232,84 @@ mod tests {
             "connections": { "Daily": { "main": [[{ "node": "Digest", "type": "main", "index": 0 }]] } }
         });
         assert_eq!(evaluate(&[wf]), Verdict::Allowed);
+    }
+
+    // ── v2 ownership rules ───────────────────────────────────────────────────────
+
+    /// A loop feeding an HTTP POST to an external domain.
+    fn bulk_post_workflow(target_url: &str) -> Value {
+        json!({
+            "nodes": [
+                { "name": "Batch", "type": "n8n-nodes-base.splitInBatches",
+                  "parameters": { "batchSize": 50 } },
+                { "name": "Post", "type": "n8n-nodes-base.httpRequest",
+                  "parameters": { "url": target_url, "method": "POST" } }
+            ],
+            "connections": { "Batch": { "main": [[{ "node": "Post", "type": "main", "index": 0 }]] } }
+        })
+    }
+
+    #[test]
+    #[ignore = "needs the clingo binary on PATH (or CLINGO_PATH)"]
+    fn bulk_post_to_third_party_is_flagged_unowned() {
+        // No ownership context → competitor.com is third-party → unowned_bulk_post.
+        let verdict = evaluate(&[bulk_post_workflow("https://competitor.com/api")]);
+        match verdict {
+            Verdict::NeedsReview(vs) => {
+                assert!(vs.iter().any(|v| v.kind == "unowned_bulk_post"),
+                    "expected unowned_bulk_post, got {vs:?}");
+            }
+            other => panic!("expected NeedsReview, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[ignore = "needs the clingo binary on PATH (or CLINGO_PATH)"]
+    fn bulk_post_to_own_domain_is_allowed() {
+        // Same workflow, but acme.com is proven-owned → not third-party → no
+        // unowned_bulk_post. (mass_post is ownership-agnostic and would still fire;
+        // this asserts the ownership rule specifically does NOT add a violation.)
+        let ctx = GuardrailContext { owned_domains: vec!["acme.com".into()] };
+        let verdict = evaluate_with_context(&[bulk_post_workflow("https://acme.com/leads")], &ctx);
+        let unowned = match &verdict {
+            Verdict::NeedsReview(vs) => vs.iter().any(|v| v.kind == "unowned_bulk_post"),
+            _ => false,
+        };
+        assert!(!unowned, "owned-domain POST must NOT raise unowned_bulk_post; got {verdict:?}");
+    }
+
+    #[test]
+    #[ignore = "needs the clingo binary on PATH (or CLINGO_PATH)"]
+    fn high_freq_hitting_third_party_is_unowned_flood() {
+        let wf = json!({
+            "nodes": [
+                { "name": "Every 30s", "type": "n8n-nodes-base.scheduleTrigger",
+                  "parameters": { "rule": { "interval": [ { "field": "seconds", "secondsInterval": 30 } ] } } },
+                { "name": "Ping", "type": "n8n-nodes-base.httpRequest",
+                  "parameters": { "url": "https://victim.example/health", "method": "GET" } }
+            ],
+            "connections": { "Every 30s": { "main": [[{ "node": "Ping", "type": "main", "index": 0 }]] } }
+        });
+        match evaluate(&[wf]) {
+            Verdict::NeedsReview(vs) => {
+                assert!(vs.iter().any(|v| v.kind == "unowned_flood"),
+                    "expected unowned_flood, got {vs:?}");
+            }
+            other => panic!("expected NeedsReview, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[ignore = "needs the clingo binary on PATH (or CLINGO_PATH)"]
+    fn dynamic_url_is_not_treated_as_unowned() {
+        // A dynamic ({{…}}) URL resolves to host "unknown"; ownership rules must NOT
+        // fire on it (we never block on a domain we couldn't read).
+        let ctx = GuardrailContext::default();
+        let verdict = evaluate_with_context(&[bulk_post_workflow("={{ $json.endpoint }}")], &ctx);
+        let unowned = match &verdict {
+            Verdict::NeedsReview(vs) => vs.iter().any(|v| v.kind.starts_with("unowned_")),
+            _ => false,
+        };
+        assert!(!unowned, "dynamic URL must not raise an unowned_* violation; got {verdict:?}");
     }
 }

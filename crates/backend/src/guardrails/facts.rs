@@ -97,6 +97,69 @@ fn is_loop(node_type: &str) -> bool {
     t.ends_with(".splitinbatches") || t.ends_with(".loop") || t.contains("splitinbatches")
 }
 
+/// Normalise a host the same way `host_of` does, so an owned domain compares equal
+/// to the host extracted from a workflow URL. A bare domain (`example.com`) or a
+/// full URL (`https://example.com/x`) both reduce to `example.com`. `www.` is
+/// stripped so `www.example.com` and `example.com` are the same owner.
+pub fn normalise_owned(input: &str) -> Option<String> {
+    // Give host_of a scheme so its `split("://")` always finds a host part, whether
+    // the caller passed a bare domain or a full URL.
+    let with_scheme = if input.contains("://") {
+        input.to_string()
+    } else {
+        format!("https://{}", input.trim_start_matches('/'))
+    };
+    let h = host_of(&with_scheme);
+    if h == "unknown" || h.is_empty() {
+        return None;
+    }
+    Some(h.strip_prefix("www.").unwrap_or(&h).to_string())
+}
+
+/// Derive the set of domains a client has proven they control, from their verified
+/// email address plus any extra **already-proven** hosts. Deterministic, de-duplicated.
+/// Free webmail domains are excluded — a gmail.com address does not make gmail.com a
+/// domain the client may blast at scale.
+///
+/// `extra_hosts` must contain ONLY domains whose ownership has been independently
+/// proven (e.g. via a future DNS-TXT / .well-known verification flow). It must NOT
+/// receive free-text fields the client merely typed (like the n8n URL), or anyone
+/// could claim to own an arbitrary target. Today the caller passes `&[]`; the
+/// parameter exists so the verification flow can feed proven domains in later.
+pub fn owned_domains(email: Option<&str>, extra_hosts: &[String]) -> Vec<String> {
+    const WEBMAIL: &[&str] = &[
+        "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com",
+        "yahoo.com", "yahoo.fr", "icloud.com", "me.com", "proton.me", "protonmail.com",
+        "gmx.com", "gmx.net", "aol.com", "orange.fr", "free.fr", "laposte.net",
+    ];
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |d: String| {
+        if !out.contains(&d) {
+            out.push(d);
+        }
+    };
+    if let Some(e) = email {
+        if let Some(domain) = e.rsplit('@').next().filter(|d| d.contains('.')) {
+            if let Some(n) = normalise_owned(domain) {
+                if !WEBMAIL.contains(&n.as_str()) {
+                    push(n);
+                }
+            }
+        }
+    }
+    for h in extra_hosts {
+        if let Some(n) = normalise_owned(h) {
+            push(n);
+        }
+    }
+    out
+}
+
+/// Emit `owns_domain("d").` facts for a set of already-normalised owned domains.
+pub fn owned_domain_facts(domains: &[String]) -> Vec<String> {
+    domains.iter().map(|d| format!("owns_domain({}).", q(d))).collect()
+}
+
 /// Build the full fact base for a set of workflows (one ASP fact per line).
 pub fn workflow_facts(workflows: &[Value]) -> Vec<String> {
     let mut facts = Vec::new();
@@ -220,5 +283,53 @@ mod tests {
         });
         let facts = workflow_facts(&[wf]);
         assert!(facts.iter().any(|f| f == "http_out(0, \"Submit\", \"kkk.com\", \"POST\")."));
+    }
+
+    #[test]
+    fn normalise_owned_matches_host_of_extraction() {
+        assert_eq!(normalise_owned("example.com").as_deref(), Some("example.com"));
+        assert_eq!(normalise_owned("https://example.com/x").as_deref(), Some("example.com"));
+        assert_eq!(normalise_owned("www.example.com").as_deref(), Some("example.com"));
+        assert_eq!(normalise_owned("Example.COM").as_deref(), Some("example.com"));
+        assert_eq!(normalise_owned("={{ $json.x }}"), None);
+        assert_eq!(normalise_owned(""), None);
+    }
+
+    #[test]
+    fn owned_domains_from_business_email() {
+        let d = owned_domains(Some("alice@acme-corp.com"), &[]);
+        assert_eq!(d, vec!["acme-corp.com"]);
+    }
+
+    #[test]
+    fn owned_domains_excludes_free_webmail() {
+        assert!(owned_domains(Some("someone@gmail.com"), &[]).is_empty());
+        assert!(owned_domains(Some("someone@outlook.com"), &[]).is_empty());
+        assert!(owned_domains(Some("someone@proton.me"), &[]).is_empty());
+    }
+
+    #[test]
+    fn owned_domains_merges_email_and_extra_hosts_deduped() {
+        let d = owned_domains(
+            Some("bob@acme.com"),
+            &["https://n8n.acme.com".into(), "acme.com".into(), "shop.acme.io".into()],
+        );
+        // email → acme.com ; n8n host → n8n.acme.com ; "acme.com" is a dup ; shop.acme.io new
+        assert_eq!(d, vec!["acme.com", "n8n.acme.com", "shop.acme.io"]);
+    }
+
+    #[test]
+    fn owned_domains_handles_no_email() {
+        assert!(owned_domains(None, &[]).is_empty());
+        assert_eq!(owned_domains(None, &["acme.com".into()]), vec!["acme.com"]);
+    }
+
+    #[test]
+    fn owned_domain_facts_are_quoted() {
+        let f = owned_domain_facts(&["acme.com".into(), "n8n.acme.com".into()]);
+        assert_eq!(f, vec![
+            "owns_domain(\"acme.com\").".to_string(),
+            "owns_domain(\"n8n.acme.com\").".to_string(),
+        ]);
     }
 }
