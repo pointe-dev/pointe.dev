@@ -27,13 +27,24 @@ Bien distinguer deux choses **orthogonales** :
 En résumé : ASP = *ce que le workflow a le droit de faire dehors* ; OAuth = *ce à quoi il
 a le droit d'accéder*. Les deux se complètent, ne se remplacent pas.
 
-## Pourquoi ASP et pas un LLM juge
+## Deux couches complémentaires : intention (amont) + structure (aval)
 
-Le signal d'abus vit dans la **structure** du workflow (fréquence de trigger, boucles,
-cibles sortantes), pas dans de la prose. ASP donne un verdict complet, reproductible,
-auditable — et ajouter une politique, c'est **une règle**, pas un re-prompt fragile. Le
-LLM garde sa place **en amont** (intention au stade qualify) ; cette couche est le gate
-structurel dur.
+L'abus se détecte à deux endroits, et on couvre les deux :
+
+1. **Intention — LLM au stade `qualify`** (`agents::run_intent_check`). Un classifieur
+   Haiku lit le besoin exprimé par le prospect et rend un verdict structuré (tool call
+   forcé → JSON `{verdict, category, reason}`). Il flague l'**intention** d'abus visible
+   dans la prose (spam, scraping de données perso, harcèlement, illégalité…) **avant**
+   qu'on ne construise quoi que ce soit. `Review` → `SavedForHuman` + notif owner.
+   **Fail-open** : toute erreur LLM → `Allow` (le gate ASP en aval reste le filet dur).
+2. **Structure — ASP/clingo au stade `Deploying`** (ce module). Évalue le workflow
+   *construit* et bloque l'auto-activation sur les patterns structurels d'abus.
+
+Pourquoi pas un LLM juge pour tout : le signal structurel (fréquence de trigger, boucles,
+cibles sortantes) ne vit pas dans la prose mais dans le JSON — l'ASP donne là un verdict
+complet, reproductible, auditable, et ajouter une règle ≠ re-prompt fragile. Inversement,
+l'intention malveillante exprimée en langage naturel n'a pas de signature structurelle
+fiable — c'est le terrain du LLM. Les deux se complètent ; aucune ne remplace l'autre.
 
 ## Classes d'abus
 
@@ -128,6 +139,9 @@ supplémentaire pour exposer une nouvelle classe.
 
 ## Roadmap (reste V2+)
 
-Intention LLM au stade **qualify** (couche amont complémentaire), AUP/ToS signée au
-paiement, surfaçage côté **espace client**, élargissement des classes d'abus. Suivi en
-mémoire projet (« Security & Guardrails Watch »).
+✅ **Fait** : intention LLM au stade qualify (`run_intent_check`, voir plus haut).
+**Reste** : AUP/ToS signée au paiement, surfaçage côté **espace client** (l'admin reçoit
+déjà le `stage_reason`), élargissement des classes d'abus ASP, et — durcissement le plus
+important — une vraie **vérification de propriété de domaine** (DNS-TXT / `.well-known`)
+pour alimenter `owns_domain` avec des domaines *prouvés* au-delà de l'email vérifié. Suivi
+en mémoire projet (« Security & Guardrails Watch »).

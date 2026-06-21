@@ -666,6 +666,18 @@ async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(),
         match stage {
             PipelineStage::Qualifying => {
                 agents::run_qualifier(app, &mut ctx).await.map_err(|e| e.to_string())?;
+                // Upstream abuse guardrail: LLM intent check on the stated need before
+                // we build anything. Complements the deterministic ASP gate at Deploying
+                // (intent-in-prose vs structure-of-workflow). Fail-open by design.
+                if let agents::IntentVerdict::Review { category, reason } =
+                    agents::run_intent_check(app, &ctx).await
+                {
+                    let full = format!("intent review ({category}): {reason}");
+                    tracing::warn!("[pipeline {id}] intent check flagged — {full}");
+                    notify_owner_failure(app, id, &ctx.session_id, &full).await;
+                    store.advance(id, PipelineStage::SavedForHuman { reason: full }, ctx).await;
+                    break;
+                }
                 store.advance(id, PipelineStage::Researching, ctx).await;
             }
 

@@ -531,6 +531,102 @@ compta | Shopify, logiciel de compta | ~80 commandes/jour\n\
     Ok(())
 }
 
+/// The upstream half of the abuse guardrails: an LLM intent check at the qualify
+/// stage. The ASP gate (`crate::guardrails`) catches abuse in the *structure* of the
+/// built workflow; this catches abuse in the *intent* of the prose, before we build
+/// anything. The two are complementary — neither replaces the other.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IntentVerdict {
+    /// Nothing concerning — proceed with the build.
+    Allow,
+    /// Abuse intent detected — route to human review. Carries category + reason.
+    Review { category: String, reason: String },
+}
+
+/// Classify the client's stated need for abusive intent. Uses Haiku with a forced
+/// tool call so the verdict is always well-formed JSON (no prose-parsing). Fail-open:
+/// on any LLM error we return `Allow` — the deterministic ASP gate at `Deploying`
+/// still backstops every build, so a flaky classifier never blocks legitimate work
+/// nor silently lets a structurally-abusive workflow through.
+pub async fn run_intent_check(app: &AppState, ctx: &PipelineContext) -> IntentVerdict {
+    tracing::info!("[intent] session={}", ctx.session_id);
+
+    const SYSTEM: &str = "\
+You are the abuse-intent reviewer at pointe.dev, an agency that BUILDS automation \
+workflows (n8n) for clients. A prospect has described what they want automated. \
+Your ONLY job: decide whether building this would help the client abuse a THIRD \
+PARTY or break the law — not whether it's a good business idea.\n\
+\n\
+Flag (verdict=\"review\") ONLY clear abuse intent, e.g.:\n\
+- spam / unsolicited bulk messaging to people who didn't opt in\n\
+- mass account creation, fake reviews, astroturfing, vote manipulation\n\
+- scraping personal data without consent, credential stuffing, hacking\n\
+- harassment, doxxing, stalking, or targeting a specific person/competitor to harm\n\
+- circumventing a platform's terms (ban evasion, rate-limit dodging at scale)\n\
+- anything plainly illegal (fraud, phishing, malware).\n\
+\n\
+Do NOT flag normal business automation, even at volume, when it targets the \
+client's OWN customers/data/systems or clearly-consented recipients: CRM sync, \
+their own newsletter to opted-in subscribers, internal reporting, lead routing, \
+invoicing, support triage, their own data backups. When genuinely unsure, ALLOW — \
+a deterministic structural check runs later. Judge intent, not scale.\n\
+\n\
+Answer in the SAME language the prospect used for the reason.";
+
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "verdict": { "type": "string", "enum": ["allow", "review"],
+                "description": "review only for clear third-party abuse or illegality" },
+            "category": { "type": "string",
+                "description": "short slug when review (e.g. spam, scraping, harassment, illegal); empty when allow" },
+            "reason": { "type": "string",
+                "description": "one sentence; why it needs review, or why it's fine" }
+        },
+        "required": ["verdict", "category", "reason"]
+    });
+
+    let user = serde_json::json!(ctx.client_need);
+
+    let out = anthropic_tool_call(
+        &app.http, &app.anthropic_key, HAIKU, 300,
+        SYSTEM, user,
+        "record_intent_verdict",
+        "Record the abuse-intent verdict for this prospect's request.",
+        schema,
+    ).await;
+
+    match out {
+        Ok(v) => {
+            let verdict = parse_intent_verdict(&v);
+            if let IntentVerdict::Review { category, reason } = &verdict {
+                tracing::warn!("[intent] session={} REVIEW category={category} — {reason}", ctx.session_id);
+            }
+            verdict
+        }
+        Err(e) => {
+            // Fail-open: the ASP gate at Deploying still backstops the build.
+            tracing::warn!("[intent] session={} check failed ({e}) — allowing (ASP gate backstops)", ctx.session_id);
+            IntentVerdict::Allow
+        }
+    }
+}
+
+/// Map the tool-call JSON into an `IntentVerdict`. Anything that isn't an explicit
+/// "review" is treated as Allow (fail-open on a malformed/unknown verdict).
+fn parse_intent_verdict(v: &serde_json::Value) -> IntentVerdict {
+    if v["verdict"].as_str() == Some("review") {
+        IntentVerdict::Review {
+            category: v["category"].as_str().filter(|s| !s.is_empty())
+                .unwrap_or("unspecified").to_string(),
+            reason: v["reason"].as_str().filter(|s| !s.is_empty())
+                .unwrap_or("intent flagged for review").to_string(),
+        }
+    } else {
+        IntentVerdict::Allow
+    }
+}
+
 /// Researches the client's domain: required APIs, integration points, feasibility.
 pub async fn run_research(app: &AppState, ctx: &mut PipelineContext) -> Result<(), AgentError> {
     tracing::info!("[research] session={}", ctx.session_id);
@@ -2309,6 +2405,51 @@ pub async fn run_deploy(app: &AppState, ctx: &mut PipelineContext) -> Result<(),
 mod tests {
     use super::*;
     use crate::pipeline::PipelineContext;
+
+    // ── intent verdict parsing ─────────────────────────────────────────────
+
+    #[test]
+    fn intent_review_carries_category_and_reason() {
+        let v = serde_json::json!({
+            "verdict": "review", "category": "spam",
+            "reason": "envoi de masse à des destinataires non consentants"
+        });
+        assert_eq!(
+            parse_intent_verdict(&v),
+            IntentVerdict::Review {
+                category: "spam".into(),
+                reason: "envoi de masse à des destinataires non consentants".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn intent_allow_passes_through() {
+        let v = serde_json::json!({ "verdict": "allow", "category": "", "reason": "ok" });
+        assert_eq!(parse_intent_verdict(&v), IntentVerdict::Allow);
+    }
+
+    #[test]
+    fn intent_unknown_or_missing_verdict_fails_open_to_allow() {
+        // Malformed / unexpected verdict must NOT block (the ASP gate backstops).
+        assert_eq!(parse_intent_verdict(&serde_json::json!({})), IntentVerdict::Allow);
+        assert_eq!(
+            parse_intent_verdict(&serde_json::json!({ "verdict": "maybe" })),
+            IntentVerdict::Allow
+        );
+    }
+
+    #[test]
+    fn intent_review_with_blank_fields_uses_defaults() {
+        let v = serde_json::json!({ "verdict": "review", "category": "", "reason": "" });
+        match parse_intent_verdict(&v) {
+            IntentVerdict::Review { category, reason } => {
+                assert_eq!(category, "unspecified");
+                assert!(!reason.is_empty());
+            }
+            other => panic!("expected Review, got {other:?}"),
+        }
+    }
 
     // ── anthropic_backoff ──────────────────────────────────────────────────
 
