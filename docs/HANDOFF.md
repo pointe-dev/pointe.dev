@@ -1,5 +1,50 @@
 # Handoff
 
+## ⟳ Session 2026-06-22 — guardrails v2 mergé sur main
+
+**Ce qui vient d'être mergé (`feat/guardrails-v2-ownership` → `main`, ce merge).**
+Le push de `main` déclenche le déploiement prod via `.github/workflows/deploy.yml` —
+**vérifier que le run passe** (onglet Actions, ou `docker pull …:sha-<sha>` côté serveur).
+clingo tournera en vrai en prod (paquet `gringo` dans le Dockerfile) ; les 6 tests e2e
+ASP `#[ignore]` ne tournent pas en CI sans clingo, mais la policy a été **validée contre
+clingo 5.8.0 réel** cette session (7 scénarios).
+
+Guardrails v2 = **architecture hybride à 2 couches, complémentaires** :
+1. **Intention (amont, stade `qualify`)** — `agents::run_intent_check` : classifieur
+   Haiku via tool call forcé → `{verdict, category, reason}`. Flague l'abus tiers /
+   illégalité dans la PROSE avant de construire ; autorise le business normal même à
+   volume s'il vise les propres clients/données du client. `Review` → `SavedForHuman` +
+   notif owner. **Fail-open** (erreur LLM → Allow ; l'ASP backstoppe).
+2. **Structure + ownership (aval, stade `Deploying`)** — ASP/clingo. v1 (flood/mass_post/
+   scrape_loop) + v2 ownership (`unowned_bulk_post`, `unowned_flood`) : distingue
+   « marteler SON domaine » de « un tiers ». **Preuve de propriété = domaine de l'email
+   vérifié UNIQUEMENT** (webmails exclus ; le `client_n8n_url` tapé a été retiré comme
+   preuve — sinon on pourrait « posséder » victim.com en le tapant).
+Les deux remontent à l'admin via `stage_reason`. 23 nouveaux tests, suite verte, 0 clippy
+sur le code neuf. Périmètre : ASP = sortant/abus ; OAuth = entrant/accès (voir oauth.md).
+Détail → `docs/guardrails.md`.
+
+### 🚧 NEXT STEPS (ordre, 2026-06-22)
+1. **Vérifier le déploiement prod** de ce merge (Actions).
+2. **🐛 BUG A — paiement prod KO (clé LIVE) — TOUJOURS OUVERT, bloqueur #1 encaissement.**
+   Pas rediagnostiqué cette session. `Stripe configured` OK au boot mais aucun
+   `create_checkout` dans les logs depuis le deploy → besoin d'une REPRO fraîche pour
+   capturer `[stripe] checkout failed: …` (corps d'erreur Stripe exact, `handlers/stripe.rs:66`).
+   Soit clic browser sur go.pointe.dev pendant qu'on lit les logs, soit repro directe de
+   l'API Stripe live depuis le serveur (session non payée = 0€). **Suspect #1 :**
+   `invoice_creation[enabled]=true` (`stripe.rs:66`) qui exige les réglages facturation
+   du compte live complétés. **Suspect #2 :** compte live pas pleinement activé.
+3. **⚠️ Mensuel récurrent non souscrit** (trouvé à l'audit du 2026-06-20) : le checkout
+   met le mensuel en line-item PONCTUEL « 1er mois » (`mode=payment`), aucun
+   `create_subscription`. À trancher avant tout « tiers d'exécutions ».
+4. **Guardrails v2+ restant** : vraie **vérif de propriété de domaine DNS-TXT / .well-known**
+   (le durcissement le + important ; param `extra_hosts` de `owned_domains` déjà prêt à
+   recevoir des domaines prouvés), AUP/ToS au paiement, surfaçage espace client, élargir
+   les classes ASP. Voir mémoire « Security & Guardrails Watch ».
+5. **Env OAuth** (action owner) : poser `GOOGLE_OAUTH_CLIENT_ID/SECRET` etc.
+
+---
+
 ## ⟳ Re-audit code — 2026-06-20
 
 Audit du code réel cette session (pas de nouveau déploiement). Corrige plusieurs
