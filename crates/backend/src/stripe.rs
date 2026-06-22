@@ -91,6 +91,38 @@ impl StripeClient {
         Ok(CheckoutSession { id: data.id, url })
     }
 
+    /// Read-only account health. `GET /v1/account` returns the account this key
+    /// belongs to; `charges_enabled` is the single flag that decides whether ANY
+    /// checkout can succeed. When it is false (e.g. live account pending identity
+    /// verification), every `create_checkout` call fails at Stripe's side with an
+    /// `invalid_request_error` — the funnel then shows "Paiement momentanément
+    /// indisponible" only AFTER the client clicks. Probing this at boot turns that
+    /// silent, late failure into a loud, accurate startup signal. Returns
+    /// `Ok(charges_enabled)`; `Err` only on transport/parse failure (treated as
+    /// "unknown", non-fatal).
+    pub async fn account_health(&self) -> Result<bool, String> {
+        #[derive(serde::Deserialize)]
+        struct Account { charges_enabled: bool }
+
+        let resp = self.http
+            .get("https://api.stripe.com/v1/account")
+            .basic_auth(&self.secret_key, Option::<&str>::None)
+            .header("Stripe-Version", "2024-12-18.acacia")
+            .send()
+            .await
+            .map_err(|e| format!("Stripe account request: {e}"))?;
+
+        if !resp.status().is_success() {
+            let s = resp.status();
+            let b = resp.text().await.unwrap_or_default();
+            return Err(format!("Stripe account {s}: {b}"));
+        }
+
+        let acct: Account = resp.json().await
+            .map_err(|e| format!("Stripe account parse: {e}"))?;
+        Ok(acct.charges_enabled)
+    }
+
     /// Creates a Stripe Checkout session for a pitch quote (no pipeline needed).
     pub async fn create_direct_checkout(
         &self,
@@ -225,6 +257,29 @@ mod tests {
             "sk_test_fake".to_string(),
             WEBHOOK_SECRET.to_string(),
         )
+    }
+
+    // ── account_health response parsing ────────────────────────────────────
+    // Mirrors the inline `Account` struct in account_health(): the boot probe
+    // hinges on reading `charges_enabled` out of GET /v1/account. A live account
+    // pending identity verification returns false (this is Bug A's root cause).
+
+    #[derive(serde::Deserialize)]
+    struct AccountProbe { charges_enabled: bool }
+
+    #[test]
+    fn account_health_parses_charges_disabled() {
+        // Shape Stripe returns for an unverified live account (Bug A).
+        let body = r#"{"id":"acct_1Tc4xtE9iwCUGFAq","object":"account","charges_enabled":false,"payouts_enabled":false}"#;
+        let acct: AccountProbe = serde_json::from_str(body).unwrap();
+        assert!(!acct.charges_enabled);
+    }
+
+    #[test]
+    fn account_health_parses_charges_enabled() {
+        let body = r#"{"id":"acct_x","object":"account","charges_enabled":true,"payouts_enabled":true}"#;
+        let acct: AccountProbe = serde_json::from_str(body).unwrap();
+        assert!(acct.charges_enabled);
     }
 
     // ── constant_time_eq ───────────────────────────────────────────────────

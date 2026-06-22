@@ -1,5 +1,34 @@
 # Handoff
 
+## 🐛 BUG A — DIAGNOSTIQUÉ (2026-06-22) : cause = compte Stripe non activé, PAS le code
+
+**Cause racine confirmée (lecture read-only de l'API Stripe live via MCP, 2× indépendamment) :**
+le compte live `acct_1Tc4xtE9iwCUGFAq` (Pointe.dev) a **`charges_enabled: false`** et
+**toutes les capabilities `inactive`** (`card_payments: inactive`). Donc **aucun** checkout
+ne peut aboutir — ce n'était ni la clé vide, ni `invoice_creation`, ni le code.
+
+**Pourquoi :** la **vérification d'identité Stripe a échoué / est past-due**.
+`requirements.disabled_reason = "requirements.past_due"`, et `currently_due` =
+`individual.{first_name,last_name,phone,dob.day,dob.month,dob.year}`, chacun avec
+l'erreur `verification_failed_keyed_identity` (« Insufficient records found for the person »).
+
+**👉 ACTION OWNER (rien d'autre ne débloque l'encaissement) :** dans le Stripe Dashboard,
+compléter la vérification d'identité. Deux alternatives proposées par Stripe
+(`requirements.alternatives`) : fournir une **pièce d'identité** (`individual.verification.document`)
+**ou** une **preuve de présence** (`individual.verification.proof_of_liveness`). Un compte
+bancaire (Boursorama, last4 7181) est déjà rattaché. Une fois `charges_enabled: true`, le
+funnel paiement marchera tel quel.
+
+**Correction CODE apportée cette session (fail honestly early, dans la lignée de `18f7258`) :**
+`StripeClient::account_health()` (GET `/v1/account`, read-only) + sonde au boot
+(`main.rs`) : si `charges_enabled=false`, log `ERROR` explicite au démarrage au lieu du
+`Stripe configured` trompeur — l'échec devient diagnosticable immédiatement plutôt que de
+surgir en « Paiement momentanément indisponible » après le clic client. Tests unitaires
+sur le parsing de `charges_enabled` ajoutés. **Ça ne rend pas les charges actives** (action
+owner ci-dessus) — ça rend juste l'état honnête et visible.
+
+---
+
 ## ⟳ Session 2026-06-22 — guardrails v2 mergé sur main
 
 **Ce qui vient d'être mergé (`feat/guardrails-v2-ownership` → `main`, ce merge).**

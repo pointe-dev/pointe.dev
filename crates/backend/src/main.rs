@@ -623,8 +623,20 @@ async fn main() {
         std::env::var("STRIPE_WEBHOOK_SECRET").ok().filter(|s| !s.is_empty()),
     ) {
         (Some(sk), Some(wh)) => {
-            tracing::info!("Stripe configured");
-            Some(StripeClient::new(http.clone(), sk, wh))
+            let client = StripeClient::new(http.clone(), sk, wh);
+            // Probe account health so a live account that can't take charges (e.g.
+            // identity verification past-due) surfaces loudly at boot instead of as
+            // an opaque "Paiement momentanément indisponible" after the client clicks.
+            match client.account_health().await {
+                Ok(true) => tracing::info!("Stripe configured — charges_enabled=true"),
+                Ok(false) => tracing::error!(
+                    "Stripe configured BUT charges_enabled=false — checkout WILL fail. \
+                     The account cannot take live charges yet (check Stripe Dashboard → \
+                     account requirements / identity verification). No code change fixes this."
+                ),
+                Err(e) => tracing::warn!("Stripe configured — account health unknown ({e})"),
+            }
+            Some(client)
         }
         _ => {
             tracing::warn!("STRIPE_SECRET_KEY or STRIPE_WEBHOOK_SECRET not set — payments disabled");
