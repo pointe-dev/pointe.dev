@@ -10,15 +10,45 @@ contre une politique fixe (`policy.lp`) par clingo (`clingo.rs`). Une violation 
 l'auto-activation** et route le pipeline vers une revue humaine — on ne déploie jamais en
 silence un workflow de spam/flood/scraping.
 
-## Pourquoi ASP et pas un LLM juge
+## Périmètre : abus SORTANT, pas autorisation d'ACCÈS
 
-Le signal d'abus vit dans la **structure** du workflow (fréquence de trigger, boucles,
-cibles sortantes), pas dans de la prose. ASP donne un verdict complet, reproductible,
-auditable — et ajouter une politique, c'est **une règle**, pas un re-prompt fragile. Le
-LLM garde sa place **en amont** (intention au stade qualify) ; cette couche est le gate
-structurel dur.
+Bien distinguer deux choses **orthogonales** :
 
-## Classes d'abus (V1)
+- **Cette couche (ASP) régule le SORTANT** : ce que le workflow *fait au monde* —
+  envois/POST/GET répétés vers une cible. Le risque couvert est « pointe.dev devient la
+  source d'un flood/scraping vers un tiers ». Pour ça, la preuve de propriété de la cible
+  par **email vérifié (double opt-in / OTP) suffit** : flooder *son propre* domaine n'est
+  pas une attaque tierce, donc une preuve faible est proportionnée.
+- **L'accès ENTRANT** (lire le contenu d'une boîte Gmail, un Drive, etc.) n'est **PAS**
+  géré ici et l'email vérifié n'y suffirait pas. Il passe par **OAuth2** (consentement du
+  vrai propriétaire validé par Google/Microsoft, token scopé, aucun mot de passe stocké) —
+  voir [oauth.md](oauth.md). C'est le bon mécanisme, bien plus solide qu'une vérif maison.
+
+En résumé : ASP = *ce que le workflow a le droit de faire dehors* ; OAuth = *ce à quoi il
+a le droit d'accéder*. Les deux se complètent, ne se remplacent pas.
+
+## Deux couches complémentaires : intention (amont) + structure (aval)
+
+L'abus se détecte à deux endroits, et on couvre les deux :
+
+1. **Intention — LLM au stade `qualify`** (`agents::run_intent_check`). Un classifieur
+   Haiku lit le besoin exprimé par le prospect et rend un verdict structuré (tool call
+   forcé → JSON `{verdict, category, reason}`). Il flague l'**intention** d'abus visible
+   dans la prose (spam, scraping de données perso, harcèlement, illégalité…) **avant**
+   qu'on ne construise quoi que ce soit. `Review` → `SavedForHuman` + notif owner.
+   **Fail-open** : toute erreur LLM → `Allow` (le gate ASP en aval reste le filet dur).
+2. **Structure — ASP/clingo au stade `Deploying`** (ce module). Évalue le workflow
+   *construit* et bloque l'auto-activation sur les patterns structurels d'abus.
+
+Pourquoi pas un LLM juge pour tout : le signal structurel (fréquence de trigger, boucles,
+cibles sortantes) ne vit pas dans la prose mais dans le JSON — l'ASP donne là un verdict
+complet, reproductible, auditable, et ajouter une règle ≠ re-prompt fragile. Inversement,
+l'intention malveillante exprimée en langage naturel n'a pas de signature structurelle
+fiable — c'est le terrain du LLM. Les deux se complètent ; aucune ne remplace l'autre.
+
+## Classes d'abus
+
+**V1 — structurelles (sans notion de propriété) :**
 
 | `kind` | Ce que ça détecte |
 |--------|-------------------|
@@ -26,8 +56,40 @@ structurel dur.
 | `mass_post` | boucle alimentant un HTTP POST externe (soumission de masse) |
 | `scrape_loop` | boucle alimentant des HTTP GET externes répétés (scraping) |
 
+**V2 — sensibles à la propriété (ownership) :**
+
+| `kind` | Ce que ça détecte |
+|--------|-------------------|
+| `unowned_bulk_post` | boucle → HTTP POST vers un domaine que le client **ne possède pas** (soumission de masse contre un tiers) |
+| `unowned_flood` | trigger haute fréquence frappant un domaine que le client **ne possède pas** (flood d'un service tiers) |
+
 Chaque `Violation` sait s'expliquer en une ligne (`Violation::explain`) pour la file de
 revue / la notif owner.
+
+### Notion de propriété (ownership)
+
+Marteler **son propre** CRM est légitime ; marteler **un tiers** ne l'est pas. On distingue
+les deux via les domaines que le client a *prouvé* contrôler.
+
+**Seule preuve acceptée aujourd'hui : le domaine de l'email vérifié (double opt-in).**
+Contrôler une boîte mail sur un domaine d'entreprise est un signal fort de propriété
+(seul l'admin du domaine distribue les adresses). Les webmails grand public
+(gmail.com, outlook.com, proton.me…) sont **exclus** : une adresse gmail ne rend pas
+gmail.com « possédé ».
+
+> ⚠️ Le `client_n8n_url` (champ tapé librement) **n'est PAS** une preuve : l'accepter
+> laisserait n'importe qui « posséder » `victim.com` en le tapant. Il est donc ignoré.
+> La rigueur supérieure (vérif **DNS-TXT** / fichier `.well-known`, gold standard ACME /
+> Search Console) est le prochain durcissement : elle alimentera des faits `owns_domain`
+> *prouvés* via le paramètre `extra_hosts` de `owned_domains` (aujourd'hui `&[]`).
+
+Ces domaines deviennent des faits `owns_domain(D)`. Un `http_out` vers un domaine **connu**
+et **non possédé** est un `third_party` ; une URL dynamique (`{{…}}` → host `unknown`)
+n'est **jamais** traitée comme non-possédée (on ne bloque pas sur un domaine illisible).
+
+API : `evaluate_with_context(workflows, &GuardrailContext { owned_domains })`.
+`evaluate(workflows)` reste l'entrée sans contexte (équivaut à `owned_domains` vide).
+Les domaines possédés se dérivent via `facts::owned_domains(email, &extra_hosts)`.
 
 ## Verdict et politique fail-open / fail-closed
 
@@ -58,7 +120,28 @@ Dans le pipeline, juste après `Building`/`Validating` et **avant** `Deploying` 
   une règle par classe d'abus. Pour ajouter une classe : une règle dans `policy.lp` + son
   libellé dans `Violation::explain`.
 
-## Roadmap (V2)
+## Surfaçage admin
 
-Règles de propriété (ownership), intention LLM au stade qualify, et surfaçage des verdicts
-dans l'admin. Suivi en mémoire projet (« Security & Guardrails Watch »).
+Les violations remontent automatiquement : le pipeline route vers
+`SavedForHuman { reason }` où `reason = verdict.reason()` (liste lisible des
+`explain()`), et l'admin affiche ce `stage_reason` sur chaque dossier. Pas de câblage
+supplémentaire pour exposer une nouvelle classe.
+
+## Tests
+
+- Unitaires (sans clingo) : extraction de faits, dérivation des domaines possédés
+  (`owned_domains`, exclusion webmail, dédup), assemblage du programme clingo
+  (`build_fact_block` inclut bien `owns_domain`).
+- End-to-end (binaire clingo requis, `#[ignore]`) : un même workflow bloqué
+  (`unowned_bulk_post`) sans contexte vs **autorisé** quand le domaine est possédé ;
+  `unowned_flood` ; URL dynamique non traitée comme non-possédée.
+  Lancer : `cargo test -p backend -- --ignored guardrails` (clingo sur le PATH).
+
+## Roadmap (reste V2+)
+
+✅ **Fait** : intention LLM au stade qualify (`run_intent_check`, voir plus haut).
+**Reste** : AUP/ToS signée au paiement, surfaçage côté **espace client** (l'admin reçoit
+déjà le `stage_reason`), élargissement des classes d'abus ASP, et — durcissement le plus
+important — une vraie **vérification de propriété de domaine** (DNS-TXT / `.well-known`)
+pour alimenter `owns_domain` avec des domaines *prouvés* au-delà de l'email vérifié. Suivi
+en mémoire projet (« Security & Guardrails Watch »).

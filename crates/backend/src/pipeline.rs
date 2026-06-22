@@ -666,6 +666,18 @@ async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(),
         match stage {
             PipelineStage::Qualifying => {
                 agents::run_qualifier(app, &mut ctx).await.map_err(|e| e.to_string())?;
+                // Upstream abuse guardrail: LLM intent check on the stated need before
+                // we build anything. Complements the deterministic ASP gate at Deploying
+                // (intent-in-prose vs structure-of-workflow). Fail-open by design.
+                if let agents::IntentVerdict::Review { category, reason } =
+                    agents::run_intent_check(app, &ctx).await
+                {
+                    let full = format!("intent review ({category}): {reason}");
+                    tracing::warn!("[pipeline {id}] intent check flagged — {full}");
+                    notify_owner_failure(app, id, &ctx.session_id, &full).await;
+                    store.advance(id, PipelineStage::SavedForHuman { reason: full }, ctx).await;
+                    break;
+                }
                 store.advance(id, PipelineStage::Researching, ctx).await;
             }
 
@@ -796,7 +808,21 @@ async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(),
                 } else {
                     ctx.workflow_json.clone().into_iter().collect()
                 };
-                let verdict = crate::guardrails::evaluate(&to_check);
+                // Ownership context: a build may legitimately hammer the client's OWN
+                // domain, but not a third party's. The ONLY proof of ownership we trust
+                // is the client's double-opt-in verified email domain — controlling a
+                // mailbox on a business domain is a strong signal the domain is theirs.
+                // We deliberately do NOT trust `client_n8n_url`: it is a free-text field
+                // the client types, so accepting it as proof would let anyone "own"
+                // victim.com just by typing it. A real DNS/HTTP domain-verification
+                // flow (→ persisted owns_domain facts) is the next hardening step.
+                let client_email = app.sessions.get_email(&ctx.session_id).await;
+                let owned_domains = crate::guardrails::facts::owned_domains(
+                    client_email.as_deref(),
+                    &[],
+                );
+                let gctx = crate::guardrails::GuardrailContext { owned_domains };
+                let verdict = crate::guardrails::evaluate_with_context(&to_check, &gctx);
                 if !verdict.allows_auto_deploy(crate::guardrails::fail_closed()) {
                     let reason = verdict.reason();
                     tracing::warn!("[pipeline {id}] guardrails blocked auto-deploy — {reason}");
