@@ -91,6 +91,59 @@ impl StripeClient {
         Ok(CheckoutSession { id: data.id, url })
     }
 
+    /// Creates a Checkout Session to buy chat credits (one-time payment). The paid
+    /// webhook reads `metadata.kind=topup` + `session_id` + `credit_cents` to add the
+    /// purchased credits. `credit_cents` is what the client receives; `price_cents`
+    /// is what they pay (allow a markup if desired — here they're equal).
+    pub async fn create_credit_topup_checkout(
+        &self,
+        session_key: &str,
+        credit_cents: i64,
+        price_cents: i64,
+        success_url: &str,
+        cancel_url: &str,
+    ) -> Result<CheckoutSession, String> {
+        let amount = price_cents.to_string();
+        let credit = credit_cents.to_string();
+        let params = [
+            ("mode", "payment"),
+            ("currency", "eur"),
+            ("line_items[0][quantity]", "1"),
+            ("line_items[0][price_data][currency]", "eur"),
+            ("line_items[0][price_data][product_data][name]", "Crédits de conversation — pointe.dev"),
+            ("line_items[0][price_data][unit_amount]", &amount),
+            ("metadata[kind]", "topup"),
+            ("metadata[session_id]", session_key),
+            ("metadata[credit_cents]", &credit),
+            ("success_url", success_url),
+            ("cancel_url", cancel_url),
+            ("allow_promotion_codes", "true"),
+            ("billing_address_collection", "auto"),
+        ];
+
+        #[derive(serde::Deserialize)]
+        struct Resp { id: String, url: Option<String> }
+
+        let resp = self.http
+            .post("https://api.stripe.com/v1/checkout/sessions")
+            .basic_auth(&self.secret_key, Option::<&str>::None)
+            .header("Stripe-Version", "2024-12-18.acacia")
+            .form(&params)
+            .send()
+            .await
+            .map_err(|e| format!("Stripe topup request: {e}"))?;
+
+        if !resp.status().is_success() {
+            let s = resp.status();
+            let b = resp.text().await.unwrap_or_default();
+            return Err(format!("Stripe topup {s}: {b}"));
+        }
+        let data: Resp = resp.json().await
+            .map_err(|e| format!("Stripe topup parse: {e}"))?;
+        let url = data.url.ok_or("Stripe returned no checkout URL")?;
+        Ok(CheckoutSession { id: data.id, url })
+    }
+
     /// Creates a Stripe Checkout session for a pitch quote (no pipeline needed).
     pub async fn create_direct_checkout(
         &self,

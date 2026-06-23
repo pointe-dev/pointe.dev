@@ -78,6 +78,52 @@ pub async fn create_checkout(
     }))
 }
 
+#[derive(Deserialize)]
+pub struct TopupRequest {
+    /// The chat session id to credit after payment.
+    pub session_id: String,
+    /// How many credit cents to buy. Defaults to TOPUP_DEFAULT_CENTS if absent/0.
+    #[serde(default)]
+    pub credit_cents: i64,
+}
+
+/// POST /api/credits/topup
+/// Returns a Stripe Checkout URL to buy chat credits. The paid webhook adds the
+/// purchased credits to the session (kind=topup).
+pub async fn create_topup(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<TopupRequest>,
+) -> Result<Json<CheckoutResponse>, (StatusCode, String)> {
+    let stripe = state.stripe.as_ref()
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Stripe not configured".to_string()))?;
+
+    let credit_cents = if payload.credit_cents > 0 {
+        payload.credit_cents
+    } else {
+        crate::sessions::TOPUP_DEFAULT_CENTS
+    };
+    // Price == credits (no markup for now); both are in cents.
+    let price_cents = credit_cents;
+
+    let app_url = std::env::var("APP_URL").unwrap_or_else(|_| "https://go.pointe.dev".to_string());
+    let success_url = format!("{app_url}/#chat");
+    let cancel_url = format!("{app_url}/#chat");
+
+    let session = stripe
+        .create_credit_topup_checkout(&payload.session_id, credit_cents, price_cents, &success_url, &cancel_url)
+        .await
+        .map_err(|e| {
+            tracing::error!("[stripe] topup checkout failed: {e}");
+            (StatusCode::BAD_GATEWAY, e)
+        })?;
+
+    tracing::info!("[stripe] topup checkout created session={} credit={credit_cents}c", session.id);
+    Ok(Json(CheckoutResponse {
+        checkout_url: session.url,
+        session_id: session.id,
+    }))
+}
+
 /// POST /api/stripe/webhook
 /// Stripe sends events here. We only act on `checkout.session.completed`.
 /// Must consume raw bytes (not Json) to verify the HMAC signature.
@@ -125,7 +171,7 @@ pub async fn webhook(
         // whose payment is still pending and could yet fail.
         "checkout.session.completed" => {
             if payment_status == "paid" {
-                resume_paid_pipeline(&state, session).await;
+                handle_paid_session(&state, session).await;
             } else {
                 tracing::info!(
                     "[stripe] checkout.session.completed but payment_status={payment_status} \
@@ -136,7 +182,21 @@ pub async fn webhook(
         // Async method (SEPA debit, etc.) cleared after the fact — this is the real
         // money-confirmed signal for those flows.
         "checkout.session.async_payment_succeeded" => {
-            resume_paid_pipeline(&state, session).await;
+            handle_paid_session(&state, session).await;
+        }
+        // Recurring subscription invoice paid → re-apply the monthly chat-credit
+        // allocation (the gift pocket resets each period; purchased credits persist).
+        "invoice.paid" | "invoice.payment_succeeded" => {
+            let md = &event["data"]["object"]["lines"]["data"][0]["metadata"];
+            let session_key = md["session_id"].as_str()
+                .or_else(|| event["data"]["object"]["subscription_details"]["metadata"]["session_id"].as_str())
+                .unwrap_or("");
+            let gift = md["monthly_gift_cents"].as_str().and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or(0);
+            if !session_key.is_empty() && gift > 0 {
+                state.sessions.set_monthly_gift(session_key, gift).await;
+                tracing::info!("[stripe] invoice.paid — monthly gift {gift}c re-applied to {session_key}");
+            }
         }
         // Async payment bounced — leave the pipeline parked at AwaitingPayment so the
         // client can retry; never advance delivery on a failed payment.
@@ -154,6 +214,39 @@ pub async fn webhook(
 
     // Always return 200 so Stripe doesn't retry
     StatusCode::OK
+}
+
+/// Route a paid Checkout Session by `metadata.kind`:
+/// - `topup`        → add purchased chat credits to the session.
+/// - `project_sub`  → activate the project's monthly chat-credit allocation, then
+///   resume the parked pipeline (setup + recurring just paid).
+/// - default/legacy → resume the parked pipeline (pitch payment).
+async fn handle_paid_session(state: &Arc<AppState>, session: &serde_json::Value) {
+    let kind = session["metadata"]["kind"].as_str().unwrap_or("");
+    match kind {
+        "topup" => {
+            let session_key = session["metadata"]["session_id"].as_str().unwrap_or("");
+            let cents = session["metadata"]["credit_cents"].as_str()
+                .and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+            if !session_key.is_empty() && cents > 0 {
+                state.sessions.add_purchased_credits(session_key, cents).await;
+                tracing::info!("[stripe] top-up — {cents}c purchased credits added to {session_key}");
+            } else {
+                tracing::warn!("[stripe] top-up webhook missing session_id/credit_cents metadata");
+            }
+        }
+        "project_sub" => {
+            let session_key = session["metadata"]["session_id"].as_str().unwrap_or("");
+            let gift = session["metadata"]["monthly_gift_cents"].as_str()
+                .and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+            if !session_key.is_empty() && gift > 0 {
+                state.sessions.set_monthly_gift(session_key, gift).await;
+                tracing::info!("[stripe] project_sub — monthly gift {gift}c activated for {session_key}");
+            }
+            resume_paid_pipeline(state, session).await;
+        }
+        _ => resume_paid_pipeline(state, session).await,
+    }
 }
 
 /// Resume a pipeline parked at AwaitingPayment, given a verified Checkout Session

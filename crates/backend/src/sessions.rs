@@ -4,15 +4,73 @@ use tokio::sync::RwLock;
 use hmac::{Hmac, Mac};
 use sha2::{Sha256, Digest};
 
-pub const FREE_MESSAGES: u32 = 5;
-
 type HmacSha256 = Hmac<Sha256>;
+
+// ── Credit pricing (all amounts in cents; adjustable in one line each) ───────────
+/// Free credits granted once, when the visitor captures their email.
+pub const SIGNUP_CREDITS_CENTS: i64 = 500; // 5 $
+/// Cost charged per chat message to the agent.
+pub const MESSAGE_COST_CENTS: i64 = 10; // 0,10 $
+/// Pre-payment pipeline step costs (heavier than a chat message). The build/deploy
+/// steps run *after* payment, so they don't consume free chat credits — no BUILD cost.
+pub const RESEARCH_COST_CENTS: i64 = 50; // 0,50 $
+pub const DESIGN_COST_CENTS: i64 = 50; // 0,50 $
+pub const PITCH_COST_CENTS: i64 = 50; // 0,50 $
+/// Default top-up amount offered when credits run out.
+pub const TOPUP_DEFAULT_CENTS: i64 = 1000; // 10 $
+
+/// Monthly chat-credit allocation granted by a *project subscription*, by tier.
+/// These reset to the allocation each month (non-cumulative). PLACEHOLDER values —
+/// the owner sets the real per-tier numbers here (one line each).
+pub const MONTHLY_GIFT_INSTANT_CENTS: i64 = 0; // TODO(owner): set Instant-tier monthly chat credits
+pub const MONTHLY_GIFT_ASSISTED_CENTS: i64 = 0; // TODO(owner): set Assisted-tier monthly chat credits
+pub const MONTHLY_GIFT_MANAGED_CENTS: i64 = 0; // TODO(owner): set Managed-tier monthly chat credits
+
+/// Resolve a tier slug ("instant"/"assisted"/"managed") to its monthly allocation.
+/// Used when the pitch checkout is converted to a real Stripe subscription (the
+/// `mode=subscription` wiring is the next step); kept ready for that call site.
+#[allow(dead_code)]
+pub fn monthly_gift_for_tier(tier: &str) -> i64 {
+    match tier.to_lowercase().as_str() {
+        "instant" => MONTHLY_GIFT_INSTANT_CENTS,
+        "assisted" => MONTHLY_GIFT_ASSISTED_CENTS,
+        "managed" => MONTHLY_GIFT_MANAGED_CENTS,
+        _ => 0,
+    }
+}
+
+/// Current calendar month as "YYYY-MM" (UTC), used to detect a new gift period.
+fn current_period() -> String {
+    chrono::Utc::now().format("%Y-%m").to_string()
+}
 
 #[derive(Default, Clone)]
 pub struct Session {
+    /// Lifetime message counter — kept for stats only, no longer a gate.
     pub message_count: u32,
+    /// True once the visitor has *captured* their email (chat enabled, 5 $ granted).
     pub unlocked: bool,
+    /// True only after the double-opt-in confirmation link is clicked. Required
+    /// before payment, not before chatting.
+    pub email_verified: bool,
     pub email: Option<String>,
+    /// Free chat credits (cents). Reset monthly to the subscription allocation;
+    /// consumed before purchased credits. Starts at SIGNUP_CREDITS_CENTS at capture.
+    pub gift_credits_cents: i64,
+    /// Purchased chat credits (cents). Never reset; consumed after gift credits.
+    pub purchased_credits_cents: i64,
+    /// Monthly gift allocation in cents (0 for a non-subscriber). Re-applied to
+    /// gift_credits_cents at the start of each new period.
+    pub monthly_gift_cents: i64,
+    /// "YYYY-MM" of the last gift allocation, so we reset gift credits once per month.
+    pub gift_period: Option<String>,
+}
+
+impl Session {
+    /// Total spendable balance (gift + purchased), in cents.
+    pub fn balance_cents(&self) -> i64 {
+        self.gift_credits_cents + self.purchased_credits_cents
+    }
 }
 
 /// In-memory store with optional Postgres write-through.
@@ -56,16 +114,28 @@ impl SessionStore {
     async fn hydrate(&self) {
         let Some(pool) = &self.db else { return };
 
-        match sqlx::query_as::<_, (String, i32, bool, Option<String>)>(
-            "SELECT session_key, message_count, unlocked, email FROM sessions",
+        match sqlx::query_as::<_, (String, i32, bool, bool, Option<String>, i64, i64, i64, Option<String>)>(
+            "SELECT session_key, message_count, unlocked, email_verified, email, \
+                    gift_credits_cents, purchased_credits_cents, monthly_gift_cents, gift_period \
+             FROM sessions",
         )
         .fetch_all(pool)
         .await
         {
             Ok(rows) => {
                 let mut w = self.sessions.write().await;
-                for (key, count, unlocked, email) in rows {
-                    w.insert(key, Session { message_count: count.max(0) as u32, unlocked, email });
+                for (key, count, unlocked, email_verified, email,
+                     gift, purchased, monthly_gift, gift_period) in rows {
+                    w.insert(key, Session {
+                        message_count: count.max(0) as u32,
+                        unlocked,
+                        email_verified,
+                        email,
+                        gift_credits_cents: gift,
+                        purchased_credits_cents: purchased,
+                        monthly_gift_cents: monthly_gift,
+                        gift_period,
+                    });
                 }
                 tracing::info!("[sessions] hydrated {} sessions from DB", w.len());
             }
@@ -96,18 +166,30 @@ impl SessionStore {
     async fn persist_session(&self, key: &str, s: &Session) {
         let Some(pool) = &self.db else { return };
         if let Err(e) = sqlx::query(
-            "INSERT INTO sessions (session_key, message_count, unlocked, email, updated_at)
-             VALUES ($1, $2, $3, $4, NOW())
+            "INSERT INTO sessions (session_key, message_count, unlocked, email_verified, email, \
+                                   gift_credits_cents, purchased_credits_cents, monthly_gift_cents, \
+                                   gift_period, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
              ON CONFLICT (session_key) DO UPDATE SET
-                 message_count = EXCLUDED.message_count,
-                 unlocked      = EXCLUDED.unlocked,
-                 email         = EXCLUDED.email,
-                 updated_at    = NOW()",
+                 message_count           = EXCLUDED.message_count,
+                 unlocked                = EXCLUDED.unlocked,
+                 email_verified          = EXCLUDED.email_verified,
+                 email                   = EXCLUDED.email,
+                 gift_credits_cents      = EXCLUDED.gift_credits_cents,
+                 purchased_credits_cents = EXCLUDED.purchased_credits_cents,
+                 monthly_gift_cents      = EXCLUDED.monthly_gift_cents,
+                 gift_period             = EXCLUDED.gift_period,
+                 updated_at              = NOW()",
         )
         .bind(key)
         .bind(s.message_count as i32)
         .bind(s.unlocked)
+        .bind(s.email_verified)
         .bind(&s.email)
+        .bind(s.gift_credits_cents)
+        .bind(s.purchased_credits_cents)
+        .bind(s.monthly_gift_cents)
+        .bind(&s.gift_period)
         .execute(pool)
         .await
         {
@@ -194,83 +276,148 @@ impl SessionStore {
         hex::encode(h.finalize())
     }
 
-    // ── Session operations ────────────────────────────────────────────────
+    // ── Credit operations ─────────────────────────────────────────────────
 
-    /// Returns `true` and increments counters if the request is allowed.
-    ///
-    /// Two independent gates:
-    /// 1. If the session is already unlocked → always allowed.
-    /// 2. Otherwise: both the UUID bucket AND the fp bucket must be under
-    ///    `FREE_MESSAGES`. Whichever is exhausted first blocks the request.
-    pub async fn check_and_increment(
-        &self,
-        session_key: &str,
-        fp_key: Option<&str>,
-    ) -> bool {
-        // Fast path: session already unlocked
-        {
-            let r = self.sessions.read().await;
-            if r.get(session_key).map(|s| s.unlocked).unwrap_or(false) {
-                drop(r);
-                let snapshot = {
-                    let mut w = self.sessions.write().await;
-                    w.get_mut(session_key).map(|s| {
-                        s.message_count += 1;
-                        s.clone()
-                    })
-                };
-                if let Some(s) = snapshot {
-                    self.persist_session(session_key, &s).await;
-                }
-                return true;
-            }
+    /// Apply a lazy monthly reset to gift credits in place: if this session has a
+    /// monthly allocation and the period rolled over, reset gift credits to the
+    /// allocation (non-cumulative). Returns true if anything changed. Caller holds
+    /// the write lock.
+    fn apply_monthly_reset(s: &mut Session) -> bool {
+        if s.monthly_gift_cents <= 0 {
+            return false;
         }
+        let now = current_period();
+        if s.gift_period.as_deref() != Some(now.as_str()) {
+            s.gift_credits_cents = s.monthly_gift_cents;
+            s.gift_period = Some(now);
+            return true;
+        }
+        false
+    }
 
-        // Check fingerprint bucket first (stronger anti-abuse signal)
+    /// Grant the one-time signup credits when a visitor captures their email.
+    /// Idempotent per session (only credits a session whose gift_period is unset
+    /// and balance is zero). The fingerprint bucket blocks re-farming the free
+    /// credits by clearing localStorage. Returns true if credits were granted.
+    pub async fn grant_signup_credits(&self, session_key: &str, fp_key: Option<&str>) -> bool {
+        // Anti-farm: a fingerprint that already claimed signup credits can't reclaim.
         if let Some(fpk) = fp_key {
-            let fp_count = {
-                let r = self.fp_limits.read().await;
-                *r.get(fpk).unwrap_or(&0)
-            };
-            if fp_count >= FREE_MESSAGES {
+            let already = { *self.fp_limits.read().await.get(fpk).unwrap_or(&0) > 0 };
+            if already {
                 return false;
             }
-            // Both buckets under limit — allow and increment both
-            let session_snapshot = {
-                let mut w = self.sessions.write().await;
-                let s = w.entry(session_key.to_string()).or_default();
-                s.message_count += 1;
-                s.clone()
-            };
-            let fp_total = {
+        }
+        let snapshot = {
+            let mut w = self.sessions.write().await;
+            let s = w.entry(session_key.to_string()).or_default();
+            // Only grant once: a session that has already been credited has a
+            // non-empty gift_period or a positive lifetime balance.
+            if s.gift_period.is_some() || s.balance_cents() > 0 {
+                return false;
+            }
+            s.gift_credits_cents = SIGNUP_CREDITS_CENTS;
+            s.gift_period = Some(current_period());
+            s.clone()
+        };
+        if let Some(fpk) = fp_key {
+            let total = {
                 let mut w = self.fp_limits.write().await;
                 let c = w.entry(fpk.to_string()).or_default();
                 *c += 1;
                 *c
             };
-            self.persist_session(session_key, &session_snapshot).await;
-            self.persist_fp(fpk, fp_total).await;
-            return true;
+            self.persist_fp(fpk, total).await;
         }
+        self.persist_session(session_key, &snapshot).await;
+        true
+    }
 
-        // No fingerprint — fall back to UUID-only gate
-        let session_snapshot = {
+    /// Charge `cost_cents` against the session, spending gift credits first then
+    /// purchased credits. Applies the lazy monthly reset before charging. Returns
+    /// true if the balance covered the cost (and was debited), false otherwise.
+    pub async fn charge(&self, session_key: &str, cost_cents: i64) -> bool {
+        let snapshot = {
             let mut w = self.sessions.write().await;
             let s = w.entry(session_key.to_string()).or_default();
-            if s.message_count < FREE_MESSAGES {
-                s.message_count += 1;
-                Some(s.clone())
-            } else {
-                None
+            Self::apply_monthly_reset(s);
+            if s.balance_cents() < cost_cents {
+                // Persist any reset that happened even when the charge fails.
+                let snap = s.clone();
+                drop(w);
+                self.persist_session(session_key, &snap).await;
+                return false;
             }
+            // Spend gift first, then purchased.
+            let from_gift = cost_cents.min(s.gift_credits_cents);
+            s.gift_credits_cents -= from_gift;
+            s.purchased_credits_cents -= cost_cents - from_gift;
+            s.message_count += 1;
+            s.clone()
         };
-        match session_snapshot {
-            Some(s) => {
-                self.persist_session(session_key, &s).await;
-                true
+        self.persist_session(session_key, &snapshot).await;
+        true
+    }
+
+    /// Add purchased (persistent) credits — called by the Stripe top-up webhook.
+    pub async fn add_purchased_credits(&self, session_key: &str, cents: i64) {
+        let snapshot = {
+            let mut w = self.sessions.write().await;
+            let s = w.entry(session_key.to_string()).or_default();
+            s.purchased_credits_cents += cents;
+            s.clone()
+        };
+        self.persist_session(session_key, &snapshot).await;
+    }
+
+    /// Activate a project subscription's monthly chat-credit allocation. Sets the
+    /// monthly amount and grants the first period immediately. Idempotent re-calls
+    /// with the same amount in the same period are harmless.
+    pub async fn set_monthly_gift(&self, session_key: &str, cents: i64) {
+        let snapshot = {
+            let mut w = self.sessions.write().await;
+            let s = w.entry(session_key.to_string()).or_default();
+            s.monthly_gift_cents = cents;
+            // Grant the allocation for the current period now.
+            s.gift_credits_cents = cents;
+            s.gift_period = Some(current_period());
+            s.clone()
+        };
+        self.persist_session(session_key, &snapshot).await;
+    }
+
+    /// Spendable balance (gift + purchased), in cents.
+    pub async fn balance_cents(&self, session_key: &str) -> i64 {
+        let mut w = self.sessions.write().await;
+        if let Some(s) = w.get_mut(session_key) {
+            // Surface the post-reset balance so the UI is accurate at month rollover.
+            if Self::apply_monthly_reset(s) {
+                let snap = s.clone();
+                drop(w);
+                self.persist_session(session_key, &snap).await;
+                return snap.balance_cents();
             }
-            None => false,
+            s.balance_cents()
+        } else {
+            0
         }
+    }
+
+    /// Mark the session's email as verified (double-opt-in link clicked).
+    pub async fn mark_email_verified(&self, session_key: &str) {
+        let snapshot = {
+            let mut w = self.sessions.write().await;
+            let s = w.entry(session_key.to_string()).or_default();
+            s.email_verified = true;
+            s.clone()
+        };
+        self.persist_session(session_key, &snapshot).await;
+    }
+
+    /// Whether the session's email has been verified via the confirmation link.
+    /// Consumed by the verify-before-payment gate (next wiring step).
+    #[allow(dead_code)]
+    pub async fn is_email_verified(&self, key: &str) -> bool {
+        self.sessions.read().await.get(key).map(|s| s.email_verified).unwrap_or(false)
     }
 
     /// Mark a session as permanently unlocked (email captured).
@@ -292,10 +439,16 @@ impl SessionStore {
             s.email = Some(email.clone());
             let session_snapshot = s.clone();
 
-            // Pre-create unlocked session for the token key
+            // Pre-create unlocked session for the token key, mirroring the credit
+            // state so the token can serve as the session key on later visits.
             let token_session = w.entry(token.to_string()).or_default();
             token_session.unlocked = true;
             token_session.email = Some(email.clone());
+            token_session.email_verified = session_snapshot.email_verified;
+            token_session.gift_credits_cents = session_snapshot.gift_credits_cents;
+            token_session.purchased_credits_cents = session_snapshot.purchased_credits_cents;
+            token_session.monthly_gift_cents = session_snapshot.monthly_gift_cents;
+            token_session.gift_period = session_snapshot.gift_period.clone();
             (session_snapshot, token_session.clone())
         };
         self.persist_session(session_key, &session_snapshot).await;
@@ -340,6 +493,17 @@ pub async fn run_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+
+    // Credit-model columns (added 2026-06; idempotent for existing deployments).
+    for ddl in [
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS gift_credits_cents BIGINT NOT NULL DEFAULT 0",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS purchased_credits_cents BIGINT NOT NULL DEFAULT 0",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS monthly_gift_cents BIGINT NOT NULL DEFAULT 0",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS gift_period TEXT",
+    ] {
+        sqlx::query(ddl).execute(pool).await?;
+    }
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS fp_limits (
@@ -498,59 +662,101 @@ mod tests {
         );
     }
 
-    // ── check_and_increment (UUID-only gate) ───────────────────────────────
+    // ── credits: signup grant + charge gate ────────────────────────────────
 
     #[tokio::test]
-    async fn free_messages_gate_uuid_only() {
+    async fn signup_grants_five_dollars_once() {
         let store = SessionStore::new();
-        for i in 0..FREE_MESSAGES {
-            assert!(
-                store.check_and_increment("sess-uuid", None).await,
-                "message {} should be allowed", i + 1
-            );
-        }
-        // 6th message must be blocked
-        assert!(!store.check_and_increment("sess-uuid", None).await);
+        assert!(store.grant_signup_credits("sess-c", None).await);
+        assert_eq!(store.balance_cents("sess-c").await, SIGNUP_CREDITS_CENTS);
+        // A second grant on the same session is a no-op (already credited).
+        assert!(!store.grant_signup_credits("sess-c", None).await);
+        assert_eq!(store.balance_cents("sess-c").await, SIGNUP_CREDITS_CENTS);
     }
 
     #[tokio::test]
-    async fn message_count_increments_correctly() {
+    async fn signup_not_regranted_for_same_fingerprint() {
         let store = SessionStore::new();
-        store.check_and_increment("s", None).await;
-        store.check_and_increment("s", None).await;
+        let fp = "fp-farm";
+        assert!(store.grant_signup_credits("sess-1", Some(fp)).await);
+        // Clearing localStorage = new session id, same fingerprint → blocked.
+        assert!(!store.grant_signup_credits("sess-2-fresh", Some(fp)).await);
+        assert_eq!(store.balance_cents("sess-2-fresh").await, 0);
+    }
+
+    #[tokio::test]
+    async fn charge_spends_gift_then_purchased() {
+        let store = SessionStore::new();
+        store.grant_signup_credits("s", None).await; // 500 gift
+        store.add_purchased_credits("s", 100).await; // +100 purchased = 600 total
+        // Spend 550: 500 from gift, 50 from purchased.
+        assert!(store.charge("s", 550).await);
+        assert_eq!(store.balance_cents("s").await, 50);
+    }
+
+    #[tokio::test]
+    async fn charge_refused_when_insufficient() {
+        let store = SessionStore::new();
+        store.grant_signup_credits("s", None).await; // 500
+        assert!(store.charge("s", 500).await); // exact spend → 0
+        assert!(!store.charge("s", MESSAGE_COST_CENTS).await); // nothing left
+        assert_eq!(store.balance_cents("s").await, 0);
+    }
+
+    #[tokio::test]
+    async fn message_count_tracks_successful_charges() {
+        let store = SessionStore::new();
+        store.grant_signup_credits("s", None).await;
+        store.charge("s", MESSAGE_COST_CENTS).await;
+        store.charge("s", MESSAGE_COST_CENTS).await;
         assert_eq!(store.message_count("s").await, 2);
     }
 
     #[tokio::test]
-    async fn unknown_session_has_zero_count() {
+    async fn unknown_session_has_zero_balance() {
         let store = SessionStore::new();
+        assert_eq!(store.balance_cents("nobody").await, 0);
         assert_eq!(store.message_count("nobody").await, 0);
     }
 
-    // ── check_and_increment (fingerprint gate) ─────────────────────────────
+    // ── credits: monthly subscription allocation ────────────────────────────
 
     #[tokio::test]
-    async fn fp_gate_blocks_when_fp_exhausted() {
+    async fn monthly_gift_resets_on_new_period() {
         let store = SessionStore::new();
-        let fp = "fp-bucket-key";
-        // exhaust with session-A
-        for _ in 0..FREE_MESSAGES {
-            store.check_and_increment("sess-A", Some(fp)).await;
+        store.set_monthly_gift("sub", 2000).await; // allocation 20 $, current month
+        assert_eq!(store.balance_cents("sub").await, 2000);
+        // Spend half, then force a stale period to simulate month rollover.
+        store.charge("sub", 1000).await;
+        {
+            let mut w = store.sessions.write().await;
+            w.get_mut("sub").unwrap().gift_period = Some("2000-01".to_string());
         }
-        // session-B with same fp must be blocked
-        assert!(!store.check_and_increment("sess-B-fresh", Some(fp)).await);
+        // Next charge applies the reset first → back to full allocation, minus cost.
+        assert!(store.charge("sub", 100).await);
+        assert_eq!(store.balance_cents("sub").await, 2000 - 100);
     }
 
     #[tokio::test]
-    async fn unlocked_session_bypasses_limit() {
+    async fn purchased_credits_never_reset_monthly() {
         let store = SessionStore::new();
-        let tok = SessionStore::sign_token("vip@example.com", SECRET);
-        // Unlock the session first
-        store.unlock_with_email("sess-vip", "vip@example.com".to_string(), &tok).await;
-        // Should allow messages beyond the free tier
-        for _ in 0..(FREE_MESSAGES + 10) {
-            assert!(store.check_and_increment("sess-vip", None).await);
+        store.set_monthly_gift("sub", 1000).await;
+        store.add_purchased_credits("sub", 700).await; // persistent
+        // Force month rollover.
+        {
+            let mut w = store.sessions.write().await;
+            w.get_mut("sub").unwrap().gift_period = Some("2000-01".to_string());
         }
+        // Reset restores gift to 1000 but leaves purchased intact → 1700.
+        assert_eq!(store.balance_cents("sub").await, 1700);
+    }
+
+    #[tokio::test]
+    async fn email_verified_flag_toggles() {
+        let store = SessionStore::new();
+        assert!(!store.is_email_verified("s").await);
+        store.mark_email_verified("s").await;
+        assert!(store.is_email_verified("s").await);
     }
 
     // ── unlock_with_email ──────────────────────────────────────────────────
@@ -612,10 +818,13 @@ mod tests {
     #[tokio::test]
     async fn with_db_none_behaves_in_memory() {
         let store = SessionStore::with_db(None).await;
-        for _ in 0..FREE_MESSAGES {
-            assert!(store.check_and_increment("k", None).await);
+        store.grant_signup_credits("k", None).await;
+        // Spend the whole 5 $ at the per-message rate, then the next charge fails.
+        let msgs = (SIGNUP_CREDITS_CENTS / MESSAGE_COST_CENTS) as usize;
+        for _ in 0..msgs {
+            assert!(store.charge("k", MESSAGE_COST_CENTS).await);
         }
-        assert!(!store.check_and_increment("k", None).await);
+        assert!(!store.charge("k", MESSAGE_COST_CENTS).await);
     }
 
     #[tokio::test]
@@ -627,12 +836,15 @@ mod tests {
             .bind(&key).execute(&pool).await.unwrap();
 
         let store = SessionStore::with_db(Some(pool.clone())).await;
-        store.check_and_increment(&key, None).await;
-        store.check_and_increment(&key, None).await;
+        store.grant_signup_credits(&key, None).await;
+        store.charge(&key, MESSAGE_COST_CENTS).await;
+        store.charge(&key, MESSAGE_COST_CENTS).await;
+        let expected = SIGNUP_CREDITS_CENTS - 2 * MESSAGE_COST_CENTS;
 
         // Simulate a restart: brand-new store, same pool — must hydrate.
         let restarted = SessionStore::with_db(Some(pool.clone())).await;
         assert_eq!(restarted.message_count(&key).await, 2);
+        assert_eq!(restarted.balance_cents(&key).await, expected, "credits must persist");
 
         sqlx::query("DELETE FROM sessions WHERE session_key = $1")
             .bind(&key).execute(&pool).await.unwrap();
@@ -666,14 +878,13 @@ mod tests {
             .bind(&fp).execute(&pool).await.unwrap();
 
         let store = SessionStore::with_db(Some(pool.clone())).await;
-        // exhaust the fp bucket across one session
-        for _ in 0..FREE_MESSAGES {
-            store.check_and_increment("sess-fp", Some(&fp)).await;
-        }
+        // Claim signup credits once with this fingerprint.
+        assert!(store.grant_signup_credits("sess-fp", Some(&fp)).await);
 
-        // After restart a fresh session sharing the fp must still be blocked.
+        // After restart, a fresh session sharing the fp must NOT get credits again.
         let restarted = SessionStore::with_db(Some(pool.clone())).await;
-        assert!(!restarted.check_and_increment("fresh-sess", Some(&fp)).await);
+        assert!(!restarted.grant_signup_credits("fresh-sess", Some(&fp)).await);
+        assert_eq!(restarted.balance_cents("fresh-sess").await, 0);
 
         sqlx::query("DELETE FROM fp_limits WHERE fp_key = $1")
             .bind(&fp).execute(&pool).await.unwrap();
