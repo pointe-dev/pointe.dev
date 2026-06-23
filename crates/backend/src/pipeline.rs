@@ -655,6 +655,31 @@ async fn notify_owner_failure(app: &AppState, id: Uuid, session_id: &str, reason
     }
 }
 
+/// Charge `cost_cents` of chat credits for a pre-payment pipeline step. On success
+/// returns true and the caller proceeds. On insufficient balance, parks the pipeline
+/// in `SavedForHuman` with a credits reason and returns false so the caller breaks
+/// out of the run loop. (The client tops up, then re-engages from the chat — a
+/// dedicated auto-resume on top-up is a follow-up.)
+async fn charge_or_park(
+    app: &Arc<AppState>,
+    store: &PipelineStore,
+    id: Uuid,
+    ctx: &PipelineContext,
+    cost_cents: i64,
+) -> bool {
+    if app.sessions.charge(&ctx.session_id, cost_cents).await {
+        return true;
+    }
+    let reason = format!(
+        "crédits insuffisants pour continuer (coût {:.2} $) — recharge requise",
+        cost_cents as f64 / 100.0
+    );
+    tracing::info!("[pipeline {id}] paused — {reason}");
+    notify_owner_failure(app, id, &ctx.session_id, &reason).await;
+    store.advance(id, PipelineStage::SavedForHuman { reason }, ctx.clone()).await;
+    false
+}
+
 async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(), String> {
     loop {
         let (stage, mut ctx) = {
@@ -682,11 +707,19 @@ async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(),
             }
 
             PipelineStage::Researching => {
+                if !charge_or_park(app, store, id, &ctx, crate::sessions::RESEARCH_COST_CENTS).await {
+                    break;
+                }
                 agents::run_research(app, &mut ctx).await.map_err(|e| e.to_string())?;
                 store.advance(id, PipelineStage::Designing, ctx).await;
             }
 
             PipelineStage::Designing => {
+                // Charge only on the first design attempt (retries are free).
+                if ctx.design_attempts == 0
+                    && !charge_or_park(app, store, id, &ctx, crate::sessions::DESIGN_COST_CENTS).await {
+                    break;
+                }
                 ctx.design_attempts += 1;
                 agents::run_designer(app, &mut ctx).await.map_err(|e| e.to_string())?;
                 store.advance(id, PipelineStage::DesignValidating, ctx).await;
@@ -773,6 +806,12 @@ async fn run(id: Uuid, store: &PipelineStore, app: &Arc<AppState>) -> Result<(),
             }
 
             PipelineStage::Pricing => {
+                // Charge the pitch cost once (first pricing attempt). This is the
+                // last pre-payment step that consumes free chat credits.
+                if ctx.pricing_attempts == 0
+                    && !charge_or_park(app, store, id, &ctx, crate::sessions::PITCH_COST_CENTS).await {
+                    break;
+                }
                 ctx.pricing_attempts += 1;
                 agents::run_pricing(app, &mut ctx).await.map_err(|e| e.to_string())?;
                 store.advance(id, PipelineStage::PricingValidating, ctx).await;
