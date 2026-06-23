@@ -70,6 +70,11 @@ COPY --from=builder /app/crates/frontend/styles.css /app/crates/frontend/styles.
 COPY --from=builder /app/crates/frontend/index.html /app/crates/frontend/index.html
 COPY --from=builder /app/crates/frontend/favicon.svg /app/crates/frontend/favicon.svg
 COPY --from=builder /app/crates/frontend/favicon.png /app/crates/frontend/favicon.png
+# SEO assets — without these the backend's static fallback 404s them in prod.
+COPY --from=builder /app/crates/frontend/logo.png /app/crates/frontend/logo.png
+COPY --from=builder /app/crates/frontend/og.png /app/crates/frontend/og.png
+COPY --from=builder /app/crates/frontend/robots.txt /app/crates/frontend/robots.txt
+COPY --from=builder /app/crates/frontend/sitemap.xml /app/crates/frontend/sitemap.xml
 
 # Expose the port the backend listens on
 EXPOSE 3001
