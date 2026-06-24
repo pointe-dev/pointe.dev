@@ -797,6 +797,13 @@ async fn main() {
         .route("/merci", get(serve_index))
         .route("/admin", get(serve_index))
         .route("/espace", get(serve_index))
+        .route("/faq", get(serve_index))
+        // Legal pages — client-side routed, so direct hits must serve the SPA shell
+        // (otherwise crawlers / footer links / sitemap URLs would 404).
+        .route("/mentions-legales", get(serve_index))
+        .route("/confidentialite", get(serve_index))
+        .route("/cgv", get(serve_index))
+        .route("/cookies", get(serve_index))
         .with_state(state)
         .nest(
             "/pkg",

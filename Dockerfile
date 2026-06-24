@@ -75,6 +75,7 @@ COPY --from=builder /app/crates/frontend/logo.png /app/crates/frontend/logo.png
 COPY --from=builder /app/crates/frontend/og.png /app/crates/frontend/og.png
 COPY --from=builder /app/crates/frontend/robots.txt /app/crates/frontend/robots.txt
 COPY --from=builder /app/crates/frontend/sitemap.xml /app/crates/frontend/sitemap.xml
+COPY --from=builder /app/crates/frontend/google305558ee3b9dbcd9.html /app/crates/frontend/google305558ee3b9dbcd9.html
 
 # Expose the port the backend listens on
 EXPOSE 3001
