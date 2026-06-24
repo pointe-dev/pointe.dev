@@ -67,7 +67,9 @@ services:
     restart: unless-stopped
 
   n8n:
-    image: n8nio/n8n:latest
+    # Pinned (not :latest) so updates are deliberate — avoids silently jumping a
+    # major. Bump this tag to update; back up the n8n_data volume first.
+    image: n8nio/n8n:2.27.4
     container_name: pointe-n8n
     environment:
       N8N_HOST: n8n.pointe.dev
