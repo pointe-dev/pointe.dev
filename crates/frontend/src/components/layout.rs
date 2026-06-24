@@ -8,6 +8,7 @@ use crate::pages::merci::Merci;
 use crate::pages::admin::Admin;
 use crate::pages::espace::Espace;
 use crate::pages::faq::Faq;
+use crate::pages::legal::{Legal, LegalDoc};
 use crate::i18n::{Lang, t};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -18,6 +19,7 @@ enum Page {
     Admin,
     Espace,
     Faq,
+    Legal(LegalDoc),
 }
 
 fn detect_initial_lang() -> Lang {
@@ -39,6 +41,10 @@ fn detect_initial_page() -> Page {
             else if p.starts_with("/admin") { Page::Admin }
             else if p.starts_with("/espace") { Page::Espace }
             else if p.starts_with("/faq") { Page::Faq }
+            else if p.starts_with("/mentions-legales") { Page::Legal(LegalDoc::Mentions) }
+            else if p.starts_with("/confidentialite") { Page::Legal(LegalDoc::Privacy) }
+            else if p.starts_with("/cgv") { Page::Legal(LegalDoc::Terms) }
+            else if p.starts_with("/cookies") { Page::Legal(LegalDoc::Cookies) }
             else { Page::Home }
         })
         .unwrap_or(Page::Home)
@@ -199,6 +205,11 @@ pub fn Layout() -> impl IntoView {
                             <Faq on_talk=move |_| active_page.set(Page::Chat) />
                         </div>
                     }.into_view(),
+                    Page::Legal(doc) => view! {
+                        <div class="page-transition">
+                            <Legal doc=doc />
+                        </div>
+                    }.into_view(),
                 }}
             </main>
 
@@ -245,13 +256,23 @@ pub fn Layout() -> impl IntoView {
                                 </h4>
                                 <ul class="space-y-2 text-sm text-secondary">
                                     <li>
-                                        <a href="#" class="hover:text-red-400 transition-colors">
+                                        <a href="/mentions-legales" class="hover:text-red-400 transition-colors">
+                                            {move || t(lang.get(), "footer.mentions")}
+                                        </a>
+                                    </li>
+                                    <li>
+                                        <a href="/confidentialite" class="hover:text-red-400 transition-colors">
                                             {move || t(lang.get(), "footer.privacy")}
                                         </a>
                                     </li>
                                     <li>
-                                        <a href="#" class="hover:text-red-400 transition-colors">
+                                        <a href="/cgv" class="hover:text-red-400 transition-colors">
                                             {move || t(lang.get(), "footer.terms")}
+                                        </a>
+                                    </li>
+                                    <li>
+                                        <a href="/cookies" class="hover:text-red-400 transition-colors">
+                                            {move || t(lang.get(), "footer.cookies")}
                                         </a>
                                     </li>
                                 </ul>
