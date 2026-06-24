@@ -4,9 +4,9 @@
 //! confidentialité (RGPD), CGV/CGU, politique cookies. The French version is the
 //! legally binding one; EN/DE are courtesy translations.
 //!
-//! ⚠️ Placeholders in SQUARE BRACKETS ([NOM], [ADRESSE], [EMAIL]) must be filled in
-//! by the owner before publication — they are legally required (LCEN) and are not
-//! invented here. The SIRET and host are real.
+//! Editor identity (LCEN-required) is filled in: Comlan Amouwotor, 47 rue Vivienne,
+//! 75002 Paris, France; contact@pointe.dev; SIRET 10666720170017; host Hetzner +
+//! Cloudflare.
 //!
 //! Copy lives inline (long-form legal text doesn't fit the flat i18n match). Each
 //! section is a (heading, body) pair; bodies may contain multiple paragraphs split
@@ -37,12 +37,12 @@ fn content(doc: LegalDoc, lang: Lang) -> (&'static str, Vec<(&'static str, Strin
         // ── Mentions légales ────────────────────────────────────────────────
         (LegalDoc::Mentions, Lang::Fr) => ("Mentions légales", vec![
             ("Éditeur du site", format!(
-                "Le présent site est édité par [NOM], entrepreneur individuel (micro-entreprise).\n\n\
+                "Le présent site est édité par Comlan Amouwotor, entrepreneur individuel (micro-entreprise).\n\n\
                  SIRET : {SIRET}\n\
-                 Adresse : [ADRESSE À COMPLÉTER]\n\
-                 Contact : [EMAIL]\n\
+                 Adresse : 47 rue Vivienne, 75002 Paris, France\n\
+                 Contact : contact@pointe.dev\n\
                  TVA non applicable, article 293 B du Code général des impôts.")),
-            ("Directeur de la publication", "[NOM], en sa qualité d'éditeur.".into()),
+            ("Directeur de la publication", "Comlan Amouwotor, en sa qualité d'éditeur.".into()),
             ("Hébergement", HOST_FR.into()),
             ("Propriété intellectuelle",
                 "L'ensemble des contenus du site (textes, marques, logo, éléments graphiques) est protégé par le droit de la propriété intellectuelle. Toute reproduction sans autorisation est interdite.".into()),
@@ -51,12 +51,12 @@ fn content(doc: LegalDoc, lang: Lang) -> (&'static str, Vec<(&'static str, Strin
         ]),
         (LegalDoc::Mentions, Lang::En) => ("Legal notice", vec![
             ("Publisher", format!(
-                "This website is published by [NAME], sole trader (French micro-entreprise).\n\n\
+                "This website is published by Comlan Amouwotor, sole trader (French micro-entreprise).\n\n\
                  SIRET: {SIRET}\n\
-                 Address: [ADDRESS TO BE COMPLETED]\n\
-                 Contact: [EMAIL]\n\
+                 Address: 47 rue Vivienne, 75002 Paris, France\n\
+                 Contact: contact@pointe.dev\n\
                  VAT not applicable, Article 293 B of the French General Tax Code.")),
-            ("Publication director", "[NAME], as publisher.".into()),
+            ("Publication director", "Comlan Amouwotor, as publisher.".into()),
             ("Hosting", HOST_EN.into()),
             ("Intellectual property",
                 "All site content (text, trademarks, logo, graphics) is protected by intellectual-property law. Reproduction without permission is prohibited.".into()),
@@ -65,12 +65,12 @@ fn content(doc: LegalDoc, lang: Lang) -> (&'static str, Vec<(&'static str, Strin
         ]),
         (LegalDoc::Mentions, Lang::De) => ("Impressum", vec![
             ("Herausgeber", format!(
-                "Diese Website wird herausgegeben von [NAME], Einzelunternehmer (französische micro-entreprise).\n\n\
+                "Diese Website wird herausgegeben von Comlan Amouwotor, Einzelunternehmer (französische micro-entreprise).\n\n\
                  SIRET: {SIRET}\n\
-                 Adresse: [ADRESSE NOCH EINZUTRAGEN]\n\
-                 Kontakt: [EMAIL]\n\
+                 Adresse: 47 rue Vivienne, 75002 Paris, Frankreich\n\
+                 Kontakt: contact@pointe.dev\n\
                  Umsatzsteuer nicht anwendbar, Artikel 293 B des französischen Steuergesetzbuchs.")),
-            ("Verantwortlich für den Inhalt", "[NAME], als Herausgeber.".into()),
+            ("Verantwortlich für den Inhalt", "Comlan Amouwotor, als Herausgeber.".into()),
             ("Hosting", HOST_DE.into()),
             ("Urheberrecht",
                 "Sämtliche Inhalte der Website (Texte, Marken, Logo, Grafiken) sind urheberrechtlich geschützt. Eine Vervielfältigung ohne Genehmigung ist untersagt.".into()),
@@ -81,7 +81,7 @@ fn content(doc: LegalDoc, lang: Lang) -> (&'static str, Vec<(&'static str, Strin
         // ── Politique de confidentialité (RGPD) ──────────────────────────────
         (LegalDoc::Privacy, Lang::Fr) => ("Politique de confidentialité", vec![
             ("Responsable du traitement", format!(
-                "[NOM], entrepreneur individuel (SIRET {SIRET}), est responsable du traitement des données collectées via ce site. Contact : [EMAIL].")),
+                "Comlan Amouwotor, entrepreneur individuel (SIRET {SIRET}), est responsable du traitement des données collectées via ce site. Contact : contact@pointe.dev.")),
             ("Données collectées",
                 "Nous collectons : votre adresse email (lorsque vous la saisissez pour accéder à l'agent), une empreinte technique de navigateur (anti-abus), le contenu de vos échanges avec l'agent, et — en cas de paiement — les données de transaction traitées par notre prestataire Stripe (nous ne stockons jamais votre numéro de carte).".into()),
             ("Finalités",
@@ -93,11 +93,11 @@ fn content(doc: LegalDoc, lang: Lang) -> (&'static str, Vec<(&'static str, Strin
             ("Durée de conservation",
                 "Les données sont conservées le temps nécessaire à la fourniture du service puis archivées ou supprimées conformément aux obligations légales.".into()),
             ("Vos droits",
-                "Vous disposez d'un droit d'accès, de rectification, d'effacement, de limitation, d'opposition et de portabilité. Pour les exercer : [EMAIL]. Vous pouvez aussi saisir la CNIL (www.cnil.fr).".into()),
+                "Vous disposez d'un droit d'accès, de rectification, d'effacement, de limitation, d'opposition et de portabilité. Pour les exercer : contact@pointe.dev. Vous pouvez aussi saisir la CNIL (www.cnil.fr).".into()),
         ]),
         (LegalDoc::Privacy, Lang::En) => ("Privacy policy", vec![
             ("Data controller", format!(
-                "[NAME], sole trader (SIRET {SIRET}), is the controller of data collected via this site. Contact: [EMAIL].")),
+                "Comlan Amouwotor, sole trader (SIRET {SIRET}), is the controller of data collected via this site. Contact: contact@pointe.dev.")),
             ("Data we collect",
                 "We collect: your email address (when you enter it to access the agent), a technical browser fingerprint (anti-abuse), the content of your exchanges with the agent, and — for payments — transaction data processed by our provider Stripe (we never store your card number).".into()),
             ("Purposes",
@@ -109,11 +109,11 @@ fn content(doc: LegalDoc, lang: Lang) -> (&'static str, Vec<(&'static str, Strin
             ("Retention",
                 "Data is kept for as long as needed to provide the service, then archived or deleted in line with legal obligations.".into()),
             ("Your rights",
-                "You have rights of access, rectification, erasure, restriction, objection and portability. To exercise them: [EMAIL]. You may also lodge a complaint with the CNIL (www.cnil.fr).".into()),
+                "You have rights of access, rectification, erasure, restriction, objection and portability. To exercise them: contact@pointe.dev. You may also lodge a complaint with the CNIL (www.cnil.fr).".into()),
         ]),
         (LegalDoc::Privacy, Lang::De) => ("Datenschutzerklärung", vec![
             ("Verantwortlicher", format!(
-                "[NAME], Einzelunternehmer (SIRET {SIRET}), ist für die über diese Website erhobenen Daten verantwortlich. Kontakt: [EMAIL].")),
+                "Comlan Amouwotor, Einzelunternehmer (SIRET {SIRET}), ist für die über diese Website erhobenen Daten verantwortlich. Kontakt: contact@pointe.dev.")),
             ("Erhobene Daten",
                 "Wir erheben: Ihre E-Mail-Adresse (bei Eingabe für den Zugang zum Agenten), einen technischen Browser-Fingerabdruck (Missbrauchsschutz), den Inhalt Ihrer Konversationen mit dem Agenten und — bei Zahlungen — von unserem Dienstleister Stripe verarbeitete Transaktionsdaten (wir speichern niemals Ihre Kartennummer).".into()),
             ("Zwecke",
@@ -125,13 +125,13 @@ fn content(doc: LegalDoc, lang: Lang) -> (&'static str, Vec<(&'static str, Strin
             ("Speicherdauer",
                 "Die Daten werden so lange gespeichert, wie es für die Erbringung des Dienstes erforderlich ist, und anschließend gemäß den gesetzlichen Pflichten archiviert oder gelöscht.".into()),
             ("Ihre Rechte",
-                "Sie haben das Recht auf Auskunft, Berichtigung, Löschung, Einschränkung, Widerspruch und Übertragbarkeit. Zur Ausübung: [EMAIL]. Sie können sich auch an die CNIL (www.cnil.fr) wenden.".into()),
+                "Sie haben das Recht auf Auskunft, Berichtigung, Löschung, Einschränkung, Widerspruch und Übertragbarkeit. Zur Ausübung: contact@pointe.dev. Sie können sich auch an die CNIL (www.cnil.fr) wenden.".into()),
         ]),
 
         // ── CGV / CGU ────────────────────────────────────────────────────────
         (LegalDoc::Terms, Lang::Fr) => ("Conditions générales de vente et d'utilisation", vec![
             ("Objet",
-                "Les présentes conditions régissent l'utilisation du service et la vente des prestations d'automatisation proposées sur ce site par [NOM] (micro-entreprise, SIRET ".to_string() + SIRET + ")."),
+                "Les présentes conditions régissent l'utilisation du service et la vente des prestations d'automatisation proposées sur ce site par Comlan Amouwotor (micro-entreprise, SIRET ".to_string() + SIRET + ")."),
             ("Service et crédits",
                 "L'accès à l'agent nécessite une adresse email. Des crédits de conversation gratuits sont offerts à l'inscription ; ils sont consommés à l'usage. Des crédits supplémentaires peuvent être achetés. Les crédits offerts mensuels d'un abonnement sont remis à zéro chaque mois ; les crédits achetés ne sont pas réinitialisés.".into()),
             ("Commande et paiement",
@@ -145,7 +145,7 @@ fn content(doc: LegalDoc, lang: Lang) -> (&'static str, Vec<(&'static str, Strin
         ]),
         (LegalDoc::Terms, Lang::En) => ("Terms of sale and use", vec![
             ("Purpose",
-                "These terms govern use of the service and the sale of the automation services offered on this site by [NAME] (micro-entreprise, SIRET ".to_string() + SIRET + ")."),
+                "These terms govern use of the service and the sale of the automation services offered on this site by Comlan Amouwotor (micro-entreprise, SIRET ".to_string() + SIRET + ")."),
             ("Service and credits",
                 "Access to the agent requires an email address. Free conversation credits are granted at sign-up and consumed with use. Additional credits may be purchased. A subscription's monthly free credits reset each month; purchased credits do not reset.".into()),
             ("Order and payment",
@@ -159,7 +159,7 @@ fn content(doc: LegalDoc, lang: Lang) -> (&'static str, Vec<(&'static str, Strin
         ]),
         (LegalDoc::Terms, Lang::De) => ("Allgemeine Geschäfts- und Nutzungsbedingungen", vec![
             ("Gegenstand",
-                "Diese Bedingungen regeln die Nutzung des Dienstes und den Verkauf der auf dieser Website angebotenen Automatisierungsleistungen durch [NAME] (micro-entreprise, SIRET ".to_string() + SIRET + ")."),
+                "Diese Bedingungen regeln die Nutzung des Dienstes und den Verkauf der auf dieser Website angebotenen Automatisierungsleistungen durch Comlan Amouwotor (micro-entreprise, SIRET ".to_string() + SIRET + ")."),
             ("Dienst und Guthaben",
                 "Der Zugang zum Agenten erfordert eine E-Mail-Adresse. Bei der Anmeldung werden kostenlose Konversationsguthaben gewährt und bei Nutzung verbraucht. Zusätzliche Guthaben können erworben werden. Die monatlichen Freiguthaben eines Abonnements werden monatlich zurückgesetzt; gekaufte Guthaben werden nicht zurückgesetzt.".into()),
             ("Bestellung und Zahlung",
