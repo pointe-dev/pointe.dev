@@ -1,6 +1,7 @@
 User-agent: *
 Allow: /
-Disallow: /admin/
-Disallow: /private/
+Disallow: /admin
+Disallow: /espace
+Disallow: /merci
 
-Sitemap: https://pointe.dev/sitemap.xml
+Sitemap: https://go.pointe.dev/sitemap.xml

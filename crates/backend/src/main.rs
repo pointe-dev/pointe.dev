@@ -41,7 +41,7 @@ use langfuse::LangfuseClient;
 use pipeline::PipelineStore;
 use pitch::{PitchResult, PitchStore};
 use qdrant::QdrantStore;
-use sessions::{SessionStore, FREE_MESSAGES};
+use sessions::SessionStore;
 use state::AppState;
 use stripe::StripeClient;
 use sqlx::postgres::PgPoolOptions;
@@ -72,8 +72,8 @@ struct ChatRequest {
 #[derive(Serialize)]
 struct ChatResponse {
     response: String,
-    messages_used: u32,
-    messages_free: u32,
+    /// Remaining spendable balance (gift + purchased), in cents.
+    balance_cents: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pipeline_id: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -83,6 +83,10 @@ struct ChatResponse {
     /// the email modal in response.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     needs_unlock: bool,
+    /// True when the credit balance is exhausted — the frontend shows the
+    /// top-up / subscription options.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    needs_credits: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -156,6 +160,9 @@ fn parse_qualify(text: &str) -> (String, Option<QualifyBlock>) {
 struct UnlockRequest {
     session_id: String,
     email: String,
+    /// Browser fingerprint (same as chat) — used to stop re-farming signup credits.
+    #[serde(default)]
+    fingerprint: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -204,6 +211,8 @@ struct AnthropicContent {
 }
 
 async fn handle_unlock(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     State(state): State<Arc<AppState>>,
     Json(payload): Json<UnlockRequest>,
 ) -> Json<UnlockResponse> {
@@ -213,6 +222,22 @@ async fn handle_unlock(
         return Json(UnlockResponse { ok: false });
     }
 
+    // Capture the email NOW (chat enabled immediately) and grant the signup
+    // credits — verification by link is deferred (required later, before payment).
+    let signed = SessionStore::sign_token(&email, &state.session_secret);
+    state.sessions.unlock_with_email(&payload.session_id, email.clone(), &signed).await;
+    let ip = real_ip(addr, &headers);
+    let fp_key = payload
+        .fingerprint
+        .as_deref()
+        .map(|fp| SessionStore::fp_bucket(&ip, fp));
+    let granted = state
+        .sessions
+        .grant_signup_credits(&payload.session_id, fp_key.as_deref())
+        .await;
+    tracing::info!("Lead captured ({email}) — signup credits granted={granted}");
+
+    // Still send the double-opt-in link so the email gets verified before payment.
     let confirm_token = SessionStore::sign_confirm_token(&email, &payload.session_id, &state.session_secret);
     let encoded_email = urlencoding::encode(&email);
     let confirm_url = format!(
@@ -224,7 +249,7 @@ async fn handle_unlock(
         Some(api_key) => {
             if let Err(e) = send_confirm_email(&state.http, api_key, &email, &confirm_url).await {
                 tracing::error!("Failed to send confirmation email to {email}: {e}");
-                return Json(UnlockResponse { ok: false });
+                // Capture + credits already done; the lead can chat. Report ok.
             }
         }
         None => {
@@ -264,8 +289,13 @@ async fn handle_confirm(
     }
 
     let signed = SessionStore::sign_token(&email, &state.session_secret);
+    // Capture may already have happened at /unlock; this is idempotent.
     let first_unlock = state.sessions.unlock_with_email(&session_id, email.clone(), &signed).await;
-    tracing::info!("Email confirmed — session unlocked for: {email}");
+    // Mark BOTH the session id and the token-keyed session as verified — the link
+    // click is the proof of email ownership required before payment.
+    state.sessions.mark_email_verified(&session_id).await;
+    state.sessions.mark_email_verified(&signed).await;
+    tracing::info!("Email verified for: {email}");
 
     // First confirmation only: spawn the pipeline that was gated behind the
     // email. `unlock_with_email` returns false on replays, so we never spawn
@@ -399,12 +429,32 @@ async fn handle_ai_chat(
     Json(payload): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, StatusCode> {
     let session_key = payload.session_id.clone();
-    let ip = real_ip(addr, &headers);
-    let fp_key = payload.fingerprint.as_deref().map(|fp| SessionStore::fp_bucket(&ip, fp));
-    if !state.sessions.check_and_increment(&session_key, fp_key.as_deref()).await {
-        return Err(StatusCode::PAYMENT_REQUIRED);
+    let _ip = real_ip(addr, &headers);
+
+    // Gate 1 — email capture is required before the first message. An uncaptured
+    // session gets no chat; the frontend opens the email prompt on `needs_unlock`.
+    if !state.sessions.is_unlocked(&session_key).await {
+        return Ok(Json(ChatResponse {
+            response: String::new(),
+            balance_cents: 0,
+            pipeline_id: None,
+            options: Vec::new(),
+            needs_unlock: true,
+            needs_credits: false,
+        }));
     }
-    let messages_used = state.sessions.message_count(&session_key).await;
+
+    // Gate 2 — charge the per-message cost. Out of credits → ask to top up.
+    if !state.sessions.charge(&session_key, sessions::MESSAGE_COST_CENTS).await {
+        return Ok(Json(ChatResponse {
+            response: String::new(),
+            balance_cents: state.sessions.balance_cents(&session_key).await,
+            pipeline_id: None,
+            options: Vec::new(),
+            needs_unlock: false,
+            needs_credits: true,
+        }));
+    }
 
     let start = Utc::now();
 
@@ -524,11 +574,11 @@ async fn handle_ai_chat(
 
     Ok(Json(ChatResponse {
         response: display_text,
-        messages_used,
-        messages_free: FREE_MESSAGES,
+        balance_cents: state.sessions.balance_cents(&session_key).await,
         pipeline_id,
         options,
         needs_unlock,
+        needs_credits: false,
     }))
 }
 
@@ -753,11 +803,19 @@ async fn main() {
         .route("/api/admin/dossiers/:id/respawn", post(handlers::admin::respawn))
         .route("/api/admin/secret-share", post(handlers::secret_share::secret_share))
         .route("/api/stripe/checkout", post(handlers::stripe::create_checkout))
+        .route("/api/credits/topup", post(handlers::stripe::create_topup))
         .route("/api/stripe/webhook", post(handlers::stripe::webhook))
         .route("/mcp", post(handlers::mcp::handle))
         .route("/merci", get(serve_index))
         .route("/admin", get(serve_index))
         .route("/espace", get(serve_index))
+        .route("/faq", get(serve_index))
+        // Legal pages — client-side routed, so direct hits must serve the SPA shell
+        // (otherwise crawlers / footer links / sitemap URLs would 404).
+        .route("/mentions-legales", get(serve_index))
+        .route("/confidentialite", get(serve_index))
+        .route("/cgv", get(serve_index))
+        .route("/cookies", get(serve_index))
         .with_state(state)
         .nest(
             "/pkg",

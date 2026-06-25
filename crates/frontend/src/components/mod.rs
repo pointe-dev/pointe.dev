@@ -5,5 +5,4 @@ pub mod theme;
 pub mod theme_toggle;
 pub mod contact_modal;
 pub mod hero;
-pub mod seo;
 pub mod consent_banner;

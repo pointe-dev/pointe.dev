@@ -10,8 +10,17 @@
          old "p" mark. Regenerate it from favicon.svg (red triangle) to restore a
          PNG fallback for browsers without SVG-favicon support. -->
     <title>pointe.dev — Automatisation pointue.</title>
-    <!-- Canonical -->
-    <link rel="canonical" href="https://pointe.dev">
+    <meta name="google-site-verification" content="_hrXuvyh2YxuAhbyxbD2-OTfIgJxivGJF64lOuBWzwA">
+    <meta name="robots" content="index, follow">
+    <!-- Canonical — this app's public home is go.pointe.dev (the apex pointe.dev is a
+         separate portal that will list projects). All SEO URLs point here. -->
+    <link rel="canonical" href="https://go.pointe.dev/">
+    <!-- Multilingual: the app serves FR/EN/DE off the same URL (client-side i18n).
+         hreflang tells Google the language variants share this canonical. -->
+    <link rel="alternate" hreflang="fr" href="https://go.pointe.dev/">
+    <link rel="alternate" hreflang="en" href="https://go.pointe.dev/">
+    <link rel="alternate" hreflang="de" href="https://go.pointe.dev/">
+    <link rel="alternate" hreflang="x-default" href="https://go.pointe.dev/">
     <!-- Social sharing (Open Graph + Twitter). Static so crawlers that don't run JS
          see them — this is a CSR/WASM app. og.png is a 1200×630 card rasterised from
          og.svg (source in this dir); crawlers ignore SVG og:image, hence the PNG. -->
@@ -20,11 +29,11 @@
     <meta property="og:locale" content="fr_FR">
     <meta property="og:locale:alternate" content="en_US">
     <meta property="og:locale:alternate" content="de_DE">
-    <meta property="og:url" content="https://pointe.dev">
+    <meta property="og:url" content="https://go.pointe.dev/">
     <meta property="og:title" content="pointe.dev — Automatisation pointue.">
     <meta property="og:description" content="Confiez vos tâches répétitives à des collaborateurs IA conçus sur mesure. Vous gardez le pilotage, ils font le reste — et vous gagnez du temps comme de l'argent.">
-    <meta property="og:image" content="https://pointe.dev/og.png">
-    <meta property="og:image:secure_url" content="https://pointe.dev/og.png">
+    <meta property="og:image" content="https://go.pointe.dev/og.png">
+    <meta property="og:image:secure_url" content="https://go.pointe.dev/og.png">
     <meta property="og:image:type" content="image/png">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
@@ -32,9 +41,49 @@
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="pointe.dev — Automatisation pointue.">
     <meta name="twitter:description" content="Confiez vos tâches répétitives à des collaborateurs IA conçus sur mesure. Vous gardez le pilotage, ils font le reste — et vous gagnez du temps comme de l'argent.">
-    <meta name="twitter:image" content="https://pointe.dev/og.png">
+    <meta name="twitter:image" content="https://go.pointe.dev/og.png">
     <meta name="twitter:image:alt" content="pointe.dev — Déléguez ce qui vous pèse. Automatisation pointue.">
     <meta name="theme-color" content="#0f0c10">
+    <!-- Structured data (static for crawlers). Organization carries the logo Google
+         shows in search; WebSite/WebApplication scopes this project to go.pointe.dev. -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "Organization",
+          "@id": "https://pointe.dev/#organization",
+          "name": "pointe.dev",
+          "url": "https://pointe.dev/",
+          "logo": {
+            "@type": "ImageObject",
+            "url": "https://go.pointe.dev/logo.png",
+            "width": 512,
+            "height": 512
+          },
+          "sameAs": []
+        },
+        {
+          "@type": "WebSite",
+          "@id": "https://go.pointe.dev/#website",
+          "url": "https://go.pointe.dev/",
+          "name": "pointe.dev — Automatisation pointue.",
+          "inLanguage": ["fr", "en", "de"],
+          "publisher": { "@id": "https://pointe.dev/#organization" }
+        },
+        {
+          "@type": "WebApplication",
+          "name": "pointe.dev",
+          "url": "https://go.pointe.dev/",
+          "applicationCategory": "BusinessApplication",
+          "operatingSystem": "Web",
+          "description": "Confiez vos tâches répétitives à des collaborateurs IA conçus sur mesure. Vous gardez le pilotage, ils font le reste.",
+          "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" },
+          "publisher": { "@id": "https://pointe.dev/#organization" }
+        }
+      ]
+    }
+    </script>
     <!-- Critical CSS and WASM preloads — start fetching before parser hits the script -->
     <link rel="preload" href="/pkg/frontend_bg.wasm" as="fetch" crossorigin>
     <link rel="modulepreload" href="/pkg/frontend.js">

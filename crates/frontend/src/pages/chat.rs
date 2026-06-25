@@ -17,7 +17,9 @@ async fn sleep_ms(ms: i32) {
     let _ = JsFuture::from(promise).await;
 }
 
-const FREE_MESSAGES: u32 = 5;
+/// Dollar amount shown on the top-up button (must match the backend's
+/// TOPUP_DEFAULT_CENTS / 100 = 10 $).
+const TOPUP_DISPLAY_DOLLARS: f64 = 10.0;
 
 /// Returns (session_id, is_token_session).
 /// Checks URL ?_sid param first (set by email confirmation redirect), then localStorage.
@@ -97,15 +99,18 @@ struct ChatRequest {
 #[derive(Deserialize)]
 struct ChatResponse {
     response: String,
-    messages_used: u32,
-    messages_free: u32,
+    /// Remaining spendable balance (gift + purchased), in cents.
+    #[serde(default)]
+    balance_cents: i64,
     pipeline_id: Option<String>,
     #[serde(default)]
     options: Vec<ChatOption>,
-    /// Set when the visitor qualified but must confirm their email before the
-    /// pipeline runs. The frontend opens the email modal in response.
+    /// Set when the visitor must capture their email before chatting.
     #[serde(default)]
     needs_unlock: bool,
+    /// Set when the credit balance is exhausted — show the top-up / subscription CTA.
+    #[serde(default)]
+    needs_credits: bool,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -117,6 +122,13 @@ struct ChatOption {
 struct UnlockRequest {
     session_id: String,
     email: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fingerprint: Option<String>,
+}
+
+#[derive(Serialize)]
+struct TopupRequest {
+    session_id: String,
 }
 
 #[derive(Deserialize)]
@@ -380,9 +392,12 @@ pub fn Chat() -> impl IntoView {
     let is_loading    = create_rw_signal(false);
     let copied_idx: RwSignal<Option<usize>> = create_rw_signal(None);
     let current_pitch: RwSignal<Option<PitchData>> = create_rw_signal(None);
-    let messages_used: RwSignal<u32> = create_rw_signal(0);
+    // Remaining credit balance in cents (gift + purchased). -1 = unknown/not yet loaded.
+    let balance_cents: RwSignal<i64> = create_rw_signal(-1);
+    // True when credits are exhausted → show the top-up / subscription CTA.
+    let needs_credits: RwSignal<bool> = create_rw_signal(false);
     let show_unlock: RwSignal<bool> = create_rw_signal(false);
-    // Why the unlock modal is open: false = free-message quota hit,
+    // Why the unlock modal is open: false = email capture required to chat,
     // true = qualified and the pipeline is gated behind email confirmation.
     let unlock_for_pipeline: RwSignal<bool> = create_rw_signal(false);
     let email_input = create_rw_signal(String::new());
@@ -620,10 +635,11 @@ pub fn Chat() -> impl IntoView {
             match result {
                 Ok(resp) => {
                     if resp.status() == 402 {
-                        // Undo optimistic update — restore text to textarea, remove from chat
+                        // Legacy guard (backend now returns 200 + needs_unlock/needs_credits).
                         messages.update(|v| { v.pop(); });
+                        let restore = msg_restore.clone();
                         batch(move || {
-                            input_text.set(msg_restore);
+                            input_text.set(restore);
                             unlock_for_pipeline.set(false);
                             show_unlock.set(true);
                             is_loading.set(false);
@@ -632,6 +648,31 @@ pub fn Chat() -> impl IntoView {
                     }
                     match resp.json::<ChatResponse>().await {
                         Ok(data) => {
+                            // Capture required before chatting: reopen the email modal,
+                            // undo the optimistic user message, and stop.
+                            if data.needs_unlock && data.response.is_empty() {
+                                messages.update(|v| { v.pop(); });
+                                let restore = msg_restore.clone();
+                                batch(move || {
+                                    input_text.set(restore);
+                                    unlock_for_pipeline.set(false);
+                                    show_unlock.set(true);
+                                    is_loading.set(false);
+                                });
+                                return;
+                            }
+                            // Out of credits: undo the optimistic message, show the CTA.
+                            if data.needs_credits {
+                                messages.update(|v| { v.pop(); });
+                                let restore = msg_restore.clone();
+                                batch(move || {
+                                    input_text.set(restore);
+                                    balance_cents.set(data.balance_cents);
+                                    needs_credits.set(true);
+                                    is_loading.set(false);
+                                });
+                                return;
+                            }
                             let (text, pitch, opts) = parse_response(&data.response);
                             // Also check for options in the dedicated field (backend-parsed)
                             let final_opts = if !data.options.is_empty() { data.options } else { opts };
@@ -643,7 +684,8 @@ pub fn Chat() -> impl IntoView {
                                     current_pitch.set(Some(p));
                                     pitch_page.set(0);
                                 }
-                                messages_used.set(data.messages_used);
+                                balance_cents.set(data.balance_cents);
+                                needs_credits.set(false);
                                 if let Some(pid) = data.pipeline_id {
                                     pipeline_id.set(Some(pid));
                                     // New qualification → drop any previously shown
@@ -690,8 +732,9 @@ pub fn Chat() -> impl IntoView {
         if email.is_empty() { return; }
         let sid = session_id_unlock.clone();
         spawn_local(async move {
+            let fp = compute_fingerprint();
             let resp = Request::post("/api/auth/unlock")
-                .json(&UnlockRequest { session_id: sid, email })
+                .json(&UnlockRequest { session_id: sid, email, fingerprint: Some(fp) })
                 .unwrap()
                 .send()
                 .await;
@@ -808,7 +851,7 @@ pub fn Chat() -> impl IntoView {
                                             }.into_view()
                                         } else {
                                             view! {
-                                                "Vous avez utilisé vos " {FREE_MESSAGES} " messages gratuits. Entrez votre email pour continuer — sans spam, promis."
+                                                "Entrez votre email pour accéder à notre agent — vous recevez 5 $ de crédits offerts pour exposer votre besoin. Sans spam, promis."
                                             }.into_view()
                                         }}
                                     </p>
@@ -956,8 +999,9 @@ pub fn Chat() -> impl IntoView {
                                                                     if email.is_empty() { return; }
                                                                     let sid = session_id_pitch_form.get_value();
                                                                     spawn_local(async move {
+                                                                        let fp = compute_fingerprint();
                                                                         let resp = Request::post("/api/auth/unlock")
-                                                                            .json(&UnlockRequest { session_id: sid, email })
+                                                                            .json(&UnlockRequest { session_id: sid, email, fingerprint: Some(fp) })
                                                                             .unwrap().send().await;
                                                                         if let Ok(r) = resp {
                                                                             if r.json::<UnlockResponse>().await.ok().map(|d| d.ok).unwrap_or(false) {
@@ -1058,24 +1102,47 @@ pub fn Chat() -> impl IntoView {
                             </p>
                         </div>
                         <div class="flex flex-col items-end gap-2 shrink-0 mt-1">
+                            {/* Credit balance pill — shown once a balance is known. */}
                             {move || {
-                                let used = messages_used.get();
-                                let remaining = FREE_MESSAGES.saturating_sub(used);
-                                (used > 0 && !is_unlocked.get()).then(|| view! {
-                                    <span class=move || format!(
-                                        "text-xs px-2.5 py-1 rounded-full border border-subtle text-muted {}",
-                                        if remaining == 0 { "chat-quota-empty" }
-                                        else if remaining > 1 { "opacity-60" }
-                                        else { "" }
-                                    )>
-                                        {if remaining == 0 {
-                                            "Quota atteint".to_string()
-                                        } else if remaining == 1 {
-                                            "Dernier message gratuit".to_string()
-                                        } else {
-                                            format!("{remaining} messages gratuits")
-                                        }}
-                                    </span>
+                                let bal = balance_cents.get();
+                                (bal >= 0).then(|| {
+                                    let empty = bal <= 0;
+                                    view! {
+                                        <span class=move || format!(
+                                            "text-xs px-2.5 py-1 rounded-full border border-subtle text-muted {}",
+                                            if empty { "chat-quota-empty" } else { "opacity-70" }
+                                        )>
+                                            {format!("{:.2} $ de crédits", bal as f64 / 100.0)}
+                                        </span>
+                                    }
+                                })
+                            }}
+                            {/* Out-of-credits CTA: buy more, or convert to a project. */}
+                            {move || {
+                                let sid = session_id.clone();
+                                needs_credits.get().then(move || {
+                                    let sid_topup = sid.clone();
+                                    view! {
+                                        <button
+                                            class="pitch-trigger-btn pitch-trigger-ready"
+                                            on:click=move |_| {
+                                                let sid = sid_topup.clone();
+                                                spawn_local(async move {
+                                                    let resp = Request::post("/api/credits/topup")
+                                                        .json(&TopupRequest { session_id: sid })
+                                                        .unwrap().send().await;
+                                                    if let Ok(r) = resp {
+                                                        if let Ok(d) = r.json::<CheckoutResponse>().await {
+                                                            let _ = web_sys::window()
+                                                                .and_then(|w| w.location().set_href(&d.checkout_url).ok());
+                                                        }
+                                                    }
+                                                });
+                                            }
+                                        >
+                                            {format!("+ {:.0} $ de crédits", TOPUP_DISPLAY_DOLLARS)}
+                                        </button>
+                                    }
                                 })
                             }}
                             {move || {

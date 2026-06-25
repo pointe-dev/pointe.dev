@@ -1,18 +1,42 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:xhtml="http://www.w3.org/1999/xhtml">
   <url>
-    <loc>https://pointe.dev/</loc>
+    <loc>https://go.pointe.dev/</loc>
+    <xhtml:link rel="alternate" hreflang="fr" href="https://go.pointe.dev/"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://go.pointe.dev/"/>
+    <xhtml:link rel="alternate" hreflang="de" href="https://go.pointe.dev/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://go.pointe.dev/"/>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
-    <loc>https://pointe.dev/gallery</loc>
-    <changefreq>monthly</changefreq>
-    <priority>0.8</priority>
-  </url>
-  <url>
-    <loc>https://pointe.dev/about</loc>
+    <loc>https://go.pointe.dev/faq</loc>
+    <xhtml:link rel="alternate" hreflang="fr" href="https://go.pointe.dev/faq"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://go.pointe.dev/faq"/>
+    <xhtml:link rel="alternate" hreflang="de" href="https://go.pointe.dev/faq"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://go.pointe.dev/faq"/>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://go.pointe.dev/mentions-legales</loc>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
+  </url>
+  <url>
+    <loc>https://go.pointe.dev/confidentialite</loc>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
+  </url>
+  <url>
+    <loc>https://go.pointe.dev/cgv</loc>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
+  </url>
+  <url>
+    <loc>https://go.pointe.dev/cookies</loc>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
   </url>
 </urlset>
