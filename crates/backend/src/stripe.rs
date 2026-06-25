@@ -176,6 +176,88 @@ impl StripeClient {
         Ok(CheckoutSession { id: data.id, url })
     }
 
+    /// Creates a Checkout Session for a project: a one-time setup fee plus a real
+    /// recurring monthly subscription (`mode=subscription`). The paid webhook reads
+    /// `metadata.kind=project_sub` + `session_id` + `monthly_gift_cents` to activate
+    /// the monthly chat-credit allocation, and `metadata.pipeline_id` to resume the
+    /// pipeline. `invoice.paid` on each renewal re-applies the allocation.
+    ///
+    /// When `price_monthly_eur` is 0 there is nothing to subscribe to — the caller
+    /// should fall back to a one-time `create_checkout` instead.
+    pub async fn create_subscription_checkout(
+        &self,
+        pipeline_id: Uuid,
+        session_key: &str,
+        price_eur: u32,
+        price_monthly_eur: u32,
+        monthly_gift_cents: i64,
+        workflow_name: &str,
+        success_url: &str,
+        cancel_url: &str,
+    ) -> Result<CheckoutSession, String> {
+        let setup_cents = (price_eur * 100).to_string();
+        let monthly_cents = (price_monthly_eur * 100).to_string();
+        let monthly_desc = format!("Maintenance & monitoring mensuel — {workflow_name}");
+        let pid = pipeline_id.to_string();
+        let gift = monthly_gift_cents.to_string();
+
+        // mode=subscription: line 0 = one-time setup, line 1 = recurring/month.
+        // Stripe bills the setup once and starts the monthly subscription.
+        let params = [
+            ("mode", "subscription"),
+            // Line 0: one-time setup fee
+            ("line_items[0][quantity]", "1"),
+            ("line_items[0][price_data][currency]", "eur"),
+            ("line_items[0][price_data][product_data][name]", workflow_name),
+            ("line_items[0][price_data][product_data][description]",
+                "Workflow d'automatisation sur mesure — pointe.dev (frais de mise en place)"),
+            ("line_items[0][price_data][unit_amount]", &setup_cents),
+            // Line 1: recurring monthly fee
+            ("line_items[1][quantity]", "1"),
+            ("line_items[1][price_data][currency]", "eur"),
+            ("line_items[1][price_data][product_data][name]", "Abonnement mensuel"),
+            ("line_items[1][price_data][product_data][description]", &monthly_desc),
+            ("line_items[1][price_data][unit_amount]", &monthly_cents),
+            ("line_items[1][price_data][recurring][interval]", "month"),
+            // Metadata on the Checkout Session (read by checkout.session.completed)…
+            ("metadata[kind]", "project_sub"),
+            ("metadata[session_id]", session_key),
+            ("metadata[monthly_gift_cents]", &gift),
+            ("metadata[pipeline_id]", &pid),
+            // …and mirrored onto the subscription + its invoices (read by invoice.paid
+            // on each renewal to re-apply the monthly allocation).
+            ("subscription_data[metadata][kind]", "project_sub"),
+            ("subscription_data[metadata][session_id]", session_key),
+            ("subscription_data[metadata][monthly_gift_cents]", &gift),
+            ("success_url", success_url),
+            ("cancel_url", cancel_url),
+            ("allow_promotion_codes", "true"),
+            ("billing_address_collection", "auto"),
+        ];
+
+        #[derive(serde::Deserialize)]
+        struct Resp { id: String, url: Option<String> }
+
+        let resp = self.http
+            .post("https://api.stripe.com/v1/checkout/sessions")
+            .basic_auth(&self.secret_key, Option::<&str>::None)
+            .header("Stripe-Version", "2024-12-18.acacia")
+            .form(&params)
+            .send()
+            .await
+            .map_err(|e| format!("Stripe subscription request: {e}"))?;
+
+        if !resp.status().is_success() {
+            let s = resp.status();
+            let b = resp.text().await.unwrap_or_default();
+            return Err(format!("Stripe subscription {s}: {b}"));
+        }
+        let data: Resp = resp.json().await
+            .map_err(|e| format!("Stripe subscription parse: {e}"))?;
+        let url = data.url.ok_or("Stripe returned no checkout URL")?;
+        Ok(CheckoutSession { id: data.id, url })
+    }
+
     /// Creates a Stripe Checkout session for a pitch quote (no pipeline needed).
     pub async fn create_direct_checkout(
         &self,

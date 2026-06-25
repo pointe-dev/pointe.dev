@@ -19,23 +19,15 @@ pub const PITCH_COST_CENTS: i64 = 50; // 0,50 $
 /// Default top-up amount offered when credits run out.
 pub const TOPUP_DEFAULT_CENTS: i64 = 1000; // 10 $
 
-/// Monthly chat-credit allocation granted by a *project subscription*, by tier.
-/// These reset to the allocation each month (non-cumulative). PLACEHOLDER values —
-/// the owner sets the real per-tier numbers here (one line each).
-pub const MONTHLY_GIFT_INSTANT_CENTS: i64 = 0; // TODO(owner): set Instant-tier monthly chat credits
-pub const MONTHLY_GIFT_ASSISTED_CENTS: i64 = 0; // TODO(owner): set Assisted-tier monthly chat credits
-pub const MONTHLY_GIFT_MANAGED_CENTS: i64 = 0; // TODO(owner): set Managed-tier monthly chat credits
-
-/// Resolve a tier slug ("instant"/"assisted"/"managed") to its monthly allocation.
-/// Used when the pitch checkout is converted to a real Stripe subscription (the
-/// `mode=subscription` wiring is the next step); kept ready for that call site.
-#[allow(dead_code)]
-pub fn monthly_gift_for_tier(tier: &str) -> i64 {
-    match tier.to_lowercase().as_str() {
-        "instant" => MONTHLY_GIFT_INSTANT_CENTS,
-        "assisted" => MONTHLY_GIFT_ASSISTED_CENTS,
-        "managed" => MONTHLY_GIFT_MANAGED_CENTS,
-        _ => 0,
+/// Monthly chat-credit allocation granted by a *project subscription*, derived from
+/// the monthly recurring fee (the pipeline carries no explicit tier). The gift pocket
+/// resets to this amount each month (non-cumulative); purchased credits persist.
+/// Thresholds and amounts are adjustable in one line each.
+pub fn monthly_gift_for_price(price_monthly_eur: u32) -> i64 {
+    match price_monthly_eur {
+        0..=49 => 1000,    // < 50 € / month → 10 $ of chat credits
+        50..=149 => 2500,  // 50–149 €      → 25 $
+        _ => 5000,         // ≥ 150 €       → 50 $
     }
 }
 
@@ -757,6 +749,17 @@ mod tests {
         assert!(!store.is_email_verified("s").await);
         store.mark_email_verified("s").await;
         assert!(store.is_email_verified("s").await);
+    }
+
+    #[test]
+    fn monthly_gift_thresholds() {
+        // < 50 € → 10 $, 50–149 € → 25 $, ≥ 150 € → 50 $ (cents).
+        assert_eq!(monthly_gift_for_price(0), 1000);
+        assert_eq!(monthly_gift_for_price(49), 1000);
+        assert_eq!(monthly_gift_for_price(50), 2500);
+        assert_eq!(monthly_gift_for_price(149), 2500);
+        assert_eq!(monthly_gift_for_price(150), 5000);
+        assert_eq!(monthly_gift_for_price(999), 5000);
     }
 
     // ── unlock_with_email ──────────────────────────────────────────────────
