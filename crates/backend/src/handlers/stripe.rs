@@ -31,7 +31,7 @@ pub async fn create_checkout(
     let stripe = state.stripe.as_ref()
         .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Stripe not configured".to_string()))?;
 
-    let (price_eur, price_monthly_eur, workflow_name) = {
+    let (price_eur, price_monthly_eur, workflow_name, session_key) = {
         let guard = state.pipelines.0.read().await;
         let record = guard.get(&payload.pipeline_id)
             .ok_or((StatusCode::NOT_FOUND, "pipeline not found".to_string()))?;
@@ -47,7 +47,7 @@ pub async fn create_checkout(
             .unwrap_or("Workflow d'automatisation")
             .to_string();
 
-        (price, monthly, name)
+        (price, monthly, name, record.ctx.session_id.clone())
     };
 
     let app_url = std::env::var("APP_URL")
@@ -59,17 +59,31 @@ pub async fn create_checkout(
     );
     let cancel_url = format!("{app_url}/#chat");
 
-    let session = stripe
-        .create_checkout(payload.pipeline_id, price_eur, price_monthly_eur, &workflow_name, &success_url, &cancel_url)
-        .await
-        .map_err(|e| {
-            tracing::error!("[stripe] checkout failed: {e}");
-            (StatusCode::BAD_GATEWAY, e)
-        })?;
+    // With a recurring fee → create a real subscription (setup one-time + monthly
+    // recurring) that also activates the project's monthly chat-credit allocation.
+    // Without one → the legacy one-time checkout.
+    let session = if price_monthly_eur > 0 {
+        let monthly_gift = crate::sessions::monthly_gift_for_price(price_monthly_eur);
+        stripe
+            .create_subscription_checkout(
+                payload.pipeline_id, &session_key, price_eur, price_monthly_eur,
+                monthly_gift, &workflow_name, &success_url, &cancel_url,
+            )
+            .await
+    } else {
+        stripe
+            .create_checkout(payload.pipeline_id, price_eur, price_monthly_eur, &workflow_name, &success_url, &cancel_url)
+            .await
+    }
+    .map_err(|e| {
+        tracing::error!("[stripe] checkout failed: {e}");
+        (StatusCode::BAD_GATEWAY, e)
+    })?;
 
     tracing::info!(
-        "[stripe] checkout created session={} pipeline={} setup={price_eur}€ monthly={price_monthly_eur}€",
-        session.id, payload.pipeline_id
+        "[stripe] checkout created session={} pipeline={} setup={price_eur}€ monthly={price_monthly_eur}€ mode={}",
+        session.id, payload.pipeline_id,
+        if price_monthly_eur > 0 { "subscription" } else { "payment" }
     );
 
     Ok(Json(CheckoutResponse {
