@@ -5,8 +5,8 @@
 //! legally binding one; EN/DE are courtesy translations.
 //!
 //! Editor identity (LCEN-required) is filled in: Comlan Amouwotor, 47 rue Vivienne,
-//! 75002 Paris, France; contact@pointe.dev; SIRET 10666720170017; host Hetzner +
-//! Cloudflare.
+//! 75002 Paris, France; contact@pointe.dev; SIREN 106672017 / SIRET 10667201700014
+//! (raison sociale AMOUWOTOR COMLAN); host Hetzner + Cloudflare.
 //!
 //! Copy lives inline (long-form legal text doesn't fit the flat i18n match). Each
 //! section is a (heading, body) pair; bodies may contain multiple paragraphs split
@@ -26,7 +26,10 @@ pub enum LegalDoc {
 }
 
 // ── Real identifiers (safe to publish) ──────────────────────────────────────────
-const SIRET: &str = "10666720170017";
+const SIREN: &str = "106672017";
+const SIRET: &str = "10667201700014";
+/// Registered business name (raison sociale) for the sole trader.
+const RAISON_SOCIALE: &str = "AMOUWOTOR COMLAN";
 const HOST_FR: &str = "Le site est hébergé par Hetzner Online GmbH (Industriestr. 25, 91710 Gunzenhausen, Allemagne) ; la distribution et la protection (CDN/proxy/DNS) sont assurées par Cloudflare, Inc. (101 Townsend Street, San Francisco, CA 94107, États-Unis).";
 const HOST_EN: &str = "The site is hosted by Hetzner Online GmbH (Industriestr. 25, 91710 Gunzenhausen, Germany); delivery and protection (CDN/proxy/DNS) are provided by Cloudflare, Inc. (101 Townsend Street, San Francisco, CA 94107, USA).";
 const HOST_DE: &str = "Die Website wird von der Hetzner Online GmbH (Industriestr. 25, 91710 Gunzenhausen, Deutschland) gehostet; Auslieferung und Schutz (CDN/Proxy/DNS) erfolgen über Cloudflare, Inc. (101 Townsend Street, San Francisco, CA 94107, USA).";
@@ -38,7 +41,8 @@ fn content(doc: LegalDoc, lang: Lang) -> (&'static str, Vec<(&'static str, Strin
         (LegalDoc::Mentions, Lang::Fr) => ("Mentions légales", vec![
             ("Éditeur du site", format!(
                 "Le présent site est édité par Comlan Amouwotor, entrepreneur individuel (micro-entreprise).\n\n\
-                 SIRET : {SIRET}\n\
+                 Raison sociale : {RAISON_SOCIALE}\n\
+                 SIREN : {SIREN} — SIRET : {SIRET}\n\
                  Adresse : 47 rue Vivienne, 75002 Paris, France\n\
                  Contact : contact@pointe.dev\n\
                  TVA non applicable, article 293 B du Code général des impôts.")),
@@ -52,7 +56,8 @@ fn content(doc: LegalDoc, lang: Lang) -> (&'static str, Vec<(&'static str, Strin
         (LegalDoc::Mentions, Lang::En) => ("Legal notice", vec![
             ("Publisher", format!(
                 "This website is published by Comlan Amouwotor, sole trader (French micro-entreprise).\n\n\
-                 SIRET: {SIRET}\n\
+                 Business name: {RAISON_SOCIALE}\n\
+                 SIREN: {SIREN} — SIRET: {SIRET}\n\
                  Address: 47 rue Vivienne, 75002 Paris, France\n\
                  Contact: contact@pointe.dev\n\
                  VAT not applicable, Article 293 B of the French General Tax Code.")),
@@ -66,7 +71,8 @@ fn content(doc: LegalDoc, lang: Lang) -> (&'static str, Vec<(&'static str, Strin
         (LegalDoc::Mentions, Lang::De) => ("Impressum", vec![
             ("Herausgeber", format!(
                 "Diese Website wird herausgegeben von Comlan Amouwotor, Einzelunternehmer (französische micro-entreprise).\n\n\
-                 SIRET: {SIRET}\n\
+                 Firmenname: {RAISON_SOCIALE}\n\
+                 SIREN: {SIREN} — SIRET: {SIRET}\n\
                  Adresse: 47 rue Vivienne, 75002 Paris, Frankreich\n\
                  Kontakt: contact@pointe.dev\n\
                  Umsatzsteuer nicht anwendbar, Artikel 293 B des französischen Steuergesetzbuchs.")),
