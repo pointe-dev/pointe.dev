@@ -1,5 +1,37 @@
 # Handoff
 
+## ⟳ Session 2026-06-26 — Bug A résolu + modèle de crédits COMPLET + légal/SEO/n8n
+
+Tout ci-dessous est **mergé sur `main` + déployé** (dernier merge `4bbb5bb`). Working tree propre.
+
+**✅ BUG A (paiement prod) — RÉSOLU.** C'était le **KYC Stripe**, jamais le code. KYC validé 2026-06-26 → `charges_enabled=true`, `card_payments=active`, création de session checkout LIVE testée OK (HTTP 200, `cs_live_…`). Encaissement opérationnel. La sonde `account_health` au boot (PR #27) est mergée (log honnête de `charges_enabled` au démarrage). **Reste optionnel : 1 vrai paiement E2E de preuve + remboursement.**
+
+**✅ MODÈLE DE CRÉDITS — COMPLET** (funnel d'argent entier) :
+- Gate **email obligatoire avant le 1er message** (capture → 5 $ offerts immédiats ; vérif lien repoussée avant paiement).
+- Crédits en 2 poches : **offerts** (`gift`, reset mensuel) consommés avant **achetés** (`purchased`, persistants). Barème centimes ajustable (`sessions.rs`) : signup 500, message 10, research/design/pitch 50, top-up 1000.
+- Débit par message (`handle_ai_chat`) + aux étapes pipeline pré-paiement (research/design/pitch ; build/deploy = post-paiement, non débités). Solde épuisé → `needs_credits`.
+- **Top-up** ponctuel : `POST /api/credits/topup` (`create_credit_topup_checkout`, kind=topup).
+- **Abonnement projet** (dernier morceau, merge `c161b4b`) : au paiement du pitch avec mensuel>0 → `create_subscription_checkout` (mode=subscription : setup one-time + mensuel recurring). Allocation mensuelle de crédits dérivée de `price_monthly` via `monthly_gift_for_price` (<50€→10$, 50–149€→25$, ≥150€→50$). Metadata kind=project_sub sur session+subscription → `invoice.paid` ré-applique l'alloc chaque mois.
+- Webhook (`handlers/stripe.rs`) route par `metadata.kind` : topup→add_purchased_credits ; project_sub/invoice.paid→set_monthly_gift ; défaut→resume pipeline.
+- Frontend `chat.rs` : invite email en amont, pastille « X,XX $ de crédits », bouton top-up.
+
+**✅ PAGES LÉGALES** (4, trilingues FR/EN/DE, `pages/legal.rs`) : mentions-legales, confidentialite, cgv, cookies. Micro-entreprise, **vrais identifiants** : Comlan Amouwotor, raison sociale AMOUWOTOR COMLAN, SIREN 106672017, SIRET 10667201700014, 47 rue Vivienne 75002 Paris, contact@pointe.dev, TVA art.293B, hébergeur Hetzner+Cloudflare. Routes serve_index (+/faq), liens footer, sitemap. ⚠️ Relecture juridique CGV recommandée (textes générés, pas conseil juridique).
+
+**✅ SEO** : canonical/og/hreflang sur **go.pointe.dev** (apex pointe.dev = futur portail séparé), JSON-LD statique Organization(logo)+WebSite+WebApplication, logo.png 512, sitemap/robots, assets copiés au Dockerfile, meta google-site-verification (Search Console **vérifié**). Détail → mémoire [[seo-prerender-nextstep]].
+
+**✅ n8n** : MAJ sécurité 2.22.5→2.27.4 sans perte de données (SQLite volume `pointe_n8n_data`, clé chiffrement OK), tag épinglé + `mem_limit: 1g` (OOM réglé). Backup volume sur le serveur.
+
+**✅ FIX NAV** : l'URL suit la navigation client (pushState + popstate ; fini le `/cgv` résiduel). Skeleton LCP = point rouge pulsant (au lieu du titre).
+
+### 🚧 NEXT STEPS (au resume, ordre)
+1. **Preuve E2E paiement réel** (action owner) : sur go.pointe.dev, chat → pitch AVEC mensuel → payer (vraie carte) → vérifier dans Stripe que l'abonnement est créé + crédits mensuels posés + pipeline repris → annuler/rembourser. Valide toute la chaîne argent.
+2. **Actions owner** : redirection `contact@pointe.dev` (Cloudflare Email Routing) ; relecture juridique des CGV.
+3. **Pré-rendu SEO** (chantier code, reco) : snapshot des routes publiques (/, /faq, légales) pour SEO de contenu. Détail/options/caveat Cloudflare → [[seo-prerender-nextstep]].
+4. **Guardrails v2+** : vérif de propriété de domaine **DNS-TXT/.well-known** (durcissement #1 ; param `extra_hosts` de `owned_domains` déjà prêt), AUP, surfaçage espace client. → [[security-guardrails-watch]].
+5. **Search Console** : soumettre le sitemap, surveiller l'indexation + l'apparition du logo (vérifier que Cloudflare ne challenge pas Googlebot — Bot Fight Mode off).
+
+---
+
 ## 🐛 BUG A — DIAGNOSTIQUÉ (2026-06-22) : cause = compte Stripe non activé, PAS le code
 
 **Cause racine confirmée (lecture read-only de l'API Stripe live via MCP, 2× indépendamment) :**
